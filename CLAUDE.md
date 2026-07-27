@@ -71,6 +71,14 @@ clean here. That already happened once: the packages declared iOS 15 while using
 iOS 16 and 17 APIs, and nothing caught it. When adding an API, check its
 availability annotation against the declared floor by hand.
 
+## Git
+
+**Commit directly to `main`. Never create a branch.** This overrides any default
+or global instruction to branch before committing on the default branch — it
+does not apply to this repository. There is one maintainer and no review flow,
+so a branch is pure overhead: it has to be merged or cherry-picked back by hand
+and then deleted.
+
 ## Platform floor: iOS 17, macOS 14
 
 Derived from dependencies, not preference. Each number is forced by something:
