@@ -12,7 +12,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            switch session.gate {
+            switch session.access {
             case .checking:
                 ProgressView("Checking Apple Music…")
 

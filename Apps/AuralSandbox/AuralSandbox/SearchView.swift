@@ -15,13 +15,11 @@ struct SearchView: View {
     @State private var results: FilteredResults?
     @State private var isSearching = false
     @State private var message: String?
+    @State private var showingAdmin = false
 
     var body: some View {
         NavigationStack {
             List {
-                sandboxSection
-                rulesSection
-
                 if let results {
                     allowedSection(results)
                     blockedSection(results)
@@ -29,6 +27,26 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("Aural Sandbox")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    // The only route to the parent's side, and it goes through
+                    // the gate every time.
+                    Button("Admin") { showingAdmin = true }
+                }
+            }
+            .sheet(isPresented: $showingAdmin) {
+                NavigationStack {
+                    if session.isAdminOpen {
+                        AdminView(session: session) {
+                            session.closeAdmin()
+                            showingAdmin = false
+                            runSearch()
+                        }
+                    } else {
+                        AdminGateView(session: session) {}
+                    }
+                }
+            }
             .searchable(text: $term, prompt: "Search Apple Music")
             .onSubmit(of: .search) { runSearch() }
             .safeAreaInset(edge: .bottom) { PlayerBar(session: session) }
@@ -46,59 +64,6 @@ struct SearchView: View {
     }
 
     // MARK: - Sections
-
-    private var sandboxSection: some View {
-        Section("Sandbox") {
-            Picker("Level", selection: modeBinding) {
-                Text("1 — Allow only").tag(SandboxMode.allowOnly)
-                Text("2 — Deny plus auto").tag(SandboxMode.denyPlusAuto)
-                Text("3 — Report only").tag(SandboxMode.reportOnly)
-            }
-            Picker("Unrated", selection: unratedBinding) {
-                Text("Block").tag(UnratedBehavior.block)
-                Text("Allow").tag(UnratedBehavior.allow)
-                Text("Inherit").tag(UnratedBehavior.inheritFromAncestor)
-            }
-        }
-    }
-
-    /// Every rule this kid has, and the only way to take one back.
-    ///
-    /// A deny with no undo is a trap: the rule is invisible once made, and the
-    /// blocked row it produces is not the rule — removing a rule has to be
-    /// possible from the rule itself, not only from something it happened to
-    /// block. This is also the first read straight out of storage: the names
-    /// and artwork here were copied at write time, so this list renders with no
-    /// network at all.
-    @ViewBuilder
-    private var rulesSection: some View {
-        Section("Rules (\(session.kid.entries.count))") {
-            if session.kid.entries.isEmpty {
-                Text("No rules yet. Long-press a result to deny it.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(session.kid.entries, id: \.id) { record in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(record.displayName)
-                    Text("\(record.kind) · \(record.itemKind)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .swipeActions(edge: .trailing) { removeButton(record) }
-                .contextMenu { removeButton(record) }
-            }
-        }
-    }
-
-    private func removeButton(_ record: PolicyEntryRecord) -> some View {
-        Button("Remove", role: .destructive) {
-            if let failure = session.removeEntry(record) {
-                message = failure
-            } else {
-                runSearch()
-            }
-        }
-    }
 
     private func allowedSection(_ results: FilteredResults) -> some View {
         Section("Allowed (\(results.items.count))") {
@@ -219,14 +184,6 @@ struct SearchView: View {
     }
 
     // MARK: - Actions
-
-    private var modeBinding: Binding<SandboxMode> {
-        Binding(get: { session.kid.mode }, set: { session.setMode($0) })
-    }
-
-    private var unratedBinding: Binding<UnratedBehavior> {
-        Binding(get: { session.kid.unratedBehavior }, set: { session.setUnratedBehavior($0) })
-    }
 
     private func runSearch() {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)

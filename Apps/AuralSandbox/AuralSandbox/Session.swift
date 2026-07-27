@@ -1,3 +1,4 @@
+import AdminGate
 import CatalogKit
 import FamilyStore
 import Foundation
@@ -5,17 +6,14 @@ import SwiftData
 
 /// Everything one run of the app needs, wired together once.
 ///
-/// This is the thin slice's stand-in for what will become the parent admin
-/// picking a kid and the player screen taking over. There is no passcode, no kid
-/// list and no real UI here — the point is to prove the seams meet: MusicKit
-/// authorizes, the catalog filters through the policy engine, playback starts,
-/// and the log records it.
+/// Holds the family, whichever kid is active, and the admin gate. The kid's
+/// screen and the parent's admin both read from here, which is what keeps a
+/// policy edit in the admin visible to the player without a reload.
 @MainActor
 @Observable
 final class Session {
-    /// What the app is allowed to do right now, before any of it is worth
-    /// showing.
-    enum Gate {
+    /// What Apple Music will allow, before any of it is worth showing.
+    enum Access {
         case checking
         case needsAuthorization(AuthorizationStatus)
         case cannotPlay(SubscriptionState)
@@ -23,71 +21,183 @@ final class Session {
         case failed(String)
     }
 
-    private(set) var gate: Gate = .checking
+    private(set) var access: Access = .checking
 
     let container: ModelContainer
     let eventLog: EventLog
     let player: MusicKitPlayer
-    let kid: Kid
+    let passcodes: any PasscodeStore
 
-    /// Rebuilt whenever the kid's policy changes — the engine indexes the lists
-    /// once, so it is per-policy rather than per-search.
+    /// Every kid in the family, in insertion order.
+    private(set) var kids: [Kid] = []
+
+    /// Whose sandbox the player is currently inside.
+    ///
+    /// Switching this happens only inside the admin — a kid cannot become
+    /// another kid, which would be the simplest possible escape.
+    private(set) var kid: Kid
+
+    /// The admin gate. A value the app advances, not a timer.
+    private(set) var gate = AdminGate()
+
+    /// Rebuilt whenever the active kid's policy changes — the engine indexes
+    /// the lists once, so it is per-policy rather than per-search.
     private(set) var catalog: FilteredCatalog
 
+    private let family: Family
     private let context: ModelContext
-    private let access = MusicKitAccess()
+    private let musicAccess = MusicKitAccess()
     private let source: any CatalogSource
 
-    init() throws {
+    init(passcodes: any PasscodeStore = KeychainPasscodeStore()) throws {
         container = try FamilyStore.container()
         context = ModelContext(container)
         eventLog = EventLog(modelContainer: container)
         player = MusicKitPlayer()
+        self.passcodes = passcodes
 
-        kid = try Self.demoKid(in: context)
+        let (family, kid) = try Self.load(from: context)
+        self.family = family
+        self.kid = kid
 
-        source = CachingCatalogSource(
+        let source = CachingCatalogSource(
             wrapping: MusicKitCatalogSource(),
             cache: InMemoryItemCache()
         )
+        self.source = source
         catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
+        kids = family.kids
     }
 
-    /// One kid, created on first launch and reused after.
+    /// The family, and one kid to start in.
     ///
-    /// Level 2 because that is the default the product recommends, and because
-    /// level 1 with an empty allow list would show nothing at all — a correct
-    /// result that makes a smoke test look broken.
-    private static func demoKid(in context: ModelContext) throws -> Kid {
-        var descriptor = FetchDescriptor<Kid>()
+    /// Level 2 for a first kid because that is the default the product
+    /// recommends, and because level 1 with an empty allow list shows nothing
+    /// at all — a correct result that reads as a broken app.
+    private static func load(from context: ModelContext) throws -> (Family, Kid) {
+        var descriptor = FetchDescriptor<Family>()
         descriptor.fetchLimit = 1
-        if let existing = try context.fetch(descriptor).first {
-            return existing
+
+        if let family = try context.fetch(descriptor).first, let kid = family.kids.first {
+            return (family, kid)
         }
 
         let family = Family()
-        let kid = Kid(name: "Demo", mode: .denyPlusAuto, unratedBehavior: .block)
+        let kid = Kid(name: "Kid", mode: .denyPlusAuto, unratedBehavior: .block)
         context.insert(family)
         context.insert(kid)
         family.addKid(kid)
         try context.save()
-        return kid
+        return (family, kid)
     }
 
-    // MARK: - Gate
+    // MARK: - The admin gate
+
+    var isPasscodeSet: Bool { passcodes.isConfigured }
+
+    var isAdminOpen: Bool { gate.isOpen(at: .now) }
+
+    /// Seconds the parent must wait before another attempt, or `nil` if none.
+    var retryDelay: TimeInterval? { gate.retryDelay(at: .now) }
+
+    /// Sets the first passcode. Only legal while none is set — otherwise this
+    /// would be the reset path that a gate must not have.
+    func setPasscode(_ passcode: String) -> String? {
+        guard !isPasscodeSet else { return "A passcode is already set." }
+        do {
+            try passcodes.save(PasscodeRecord.make(passcode))
+            gate.succeeded(at: .now)
+            return nil
+        } catch {
+            return "Couldn't save the passcode: \(error)"
+        }
+    }
+
+    /// Tries a passcode. Returns nil on success, a message otherwise.
+    func unlockAdmin(with passcode: String) -> String? {
+        guard gate.isAcceptingAttempts(at: .now) else {
+            return "Too many attempts. Try again in \(Int(retryDelay ?? 0))s."
+        }
+        guard let record = try? passcodes.record(), record.matches(passcode) else {
+            let delay = gate.failed(at: .now)
+            // No hint about length, no note of how close it was.
+            return delay.map { "Wrong passcode. Try again in \(Int($0))s." }
+                ?? "Wrong passcode."
+        }
+        gate.succeeded(at: .now)
+        return nil
+    }
+
+    func touchAdmin() { gate.touch(at: .now) }
+
+    func closeAdmin() { gate.close() }
+
+    // MARK: - Kids
+
+    func switchTo(_ kid: Kid) {
+        self.kid = kid
+        rebuildCatalog()
+    }
+
+    @discardableResult
+    func addKid(named name: String) -> String? {
+        let kid = Kid(name: name, mode: .denyPlusAuto, unratedBehavior: .block)
+        context.insert(kid)
+        family.addKid(kid)
+        let failure = saveLists()
+        kids = family.kids
+        return failure
+    }
+
+    func rename(_ kid: Kid, to name: String) -> String? {
+        kid.rename(to: name)
+        return saveLists()
+    }
+
+    /// Deleting a kid takes their lists and their history with them — the
+    /// cascade is in the schema. Refuses to remove the last one, because an
+    /// app with no kid has nowhere to go.
+    func delete(_ kid: Kid) -> String? {
+        guard family.kids.count > 1 else { return "A family needs at least one kid." }
+        let wasActive = kid.id == self.kid.id
+        family.removeKid(kid)
+        context.delete(kid)
+        let failure = saveLists()
+        kids = family.kids
+        if wasActive, let first = family.kids.first {
+            switchTo(first)
+        }
+        return failure
+    }
+
+    // MARK: - Unfiltered search, for the admin only
+
+    /// Catalog search with **no policy applied**.
+    ///
+    /// A parent choosing what to deny has to be able to see it. This is the one
+    /// place the engine is deliberately not consulted, and nothing on the kid's
+    /// side may call it.
+    func searchUnfiltered(term: String, kinds: Set<ItemKind>, limit: Int = 25) async throws
+        -> [CatalogItem]
+    {
+        let page = try await source.search(term: term, kinds: kinds, limit: limit, offset: 0)
+        return try await source.resolveAncestry(for: page.items)
+    }
+
+    // MARK: - Apple Music access
 
     func start() async {
-        let status = await access.requestAuthorization()
+        let status = await musicAccess.requestAuthorization()
         guard status == .authorized else {
-            gate = .needsAuthorization(status)
+            access = .needsAuthorization(status)
             return
         }
 
         do {
-            let subscription = try await access.subscriptionState()
-            gate = subscription.canPlayCatalogContent ? .ready : .cannotPlay(subscription)
+            let subscription = try await musicAccess.subscriptionState()
+            access = subscription.canPlayCatalogContent ? .ready : .cannotPlay(subscription)
         } catch {
-            gate = .failed(Self.message(for: error))
+            access = .failed(Self.message(for: error))
         }
     }
 
@@ -210,8 +320,17 @@ final class Session {
     /// easy half; reaching its container is the half that proves ancestry
     /// resolved, and the half a parent actually wants.
     func deny(_ id: CatalogID, displayName: String, artworkURL: URL? = nil) -> String? {
+        addEntry(kind: .deny, id: id, displayName: displayName, artworkURL: artworkURL)
+    }
+
+    func addEntry(
+        kind: PolicyEntry.Kind,
+        id: CatalogID,
+        displayName: String,
+        artworkURL: URL? = nil
+    ) -> String? {
         kid.addEntry(
-            kind: .deny,
+            kind: kind,
             id: id,
             displayName: displayName,
             artworkURL: artworkURL

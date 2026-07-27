@@ -60,6 +60,7 @@ Packages/
   PolicyEngine/   what a kid may see or play — pure logic, no MusicKit, no UI
   CatalogKit/     the only layer that imports MusicKit
   FamilyStore/    SwiftData persistence — kids, lists, activity log
+  AdminGate/      admin passcode and session backoff — Keychain, no UI
 Apps/
   AuralSandbox/  one Xcode project, iOS + Mac — currently a thin debug slice
 Tools/           spikes and throwaway probes — nothing yet
