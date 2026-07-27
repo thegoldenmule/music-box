@@ -47,11 +47,15 @@ decisions that go beyond the spec. Read those first — they are current.
 Packages/
   PolicyEngine/   what a kid may see or play — pure logic, no MusicKit, no UI
   CatalogKit/     the only layer that imports MusicKit
+  FamilyStore/    SwiftData persistence — kids, lists, activity log
 Apps/            app targets (Xcode projects) — nothing yet
 Tools/           spikes and throwaway probes — nothing yet
 ```
 
-`CatalogKit` depends on `PolicyEngine`; nothing depends on `CatalogKit` yet.
+`CatalogKit` and `FamilyStore` each depend on `PolicyEngine` and on nothing
+else. `FamilyStore` deliberately does not depend on `CatalogKit`: catalog
+metadata arrives as values a caller passes in, so storage builds and tests with
+no MusicKit and no device. Nothing depends on `CatalogKit` yet.
 Packages are plain SwiftPM, Swift 6 language mode, and build from the command
 line. Anything needing entitlements, signing, or an Info.plist goes under
 `Apps/`.
@@ -156,7 +160,11 @@ choices are expensive to reverse:
   time so lists render offline and a delisted item still reads as a name.
   Artwork bytes are never copied into our storage.
 - Event fields cost one column now and are absent forever if added later:
-  `origin`, `originTerm`, `gaveUpEarly`, `secondsPlayed`, `deniedByID`.
+  `origin`, `originTerm`, `gaveUpEarly`, `secondsPlayed`, `deniedByID`. Four
+  more are in `FamilyStore` for the same reason and are not redundant:
+  `originKind`/`originID` (a `browse` origin can be an artist *or* an album, so
+  the discriminator does not imply the kind), `itemKind` on a block, and
+  `deniedByKind` — MusicKit identifiers are only unique within a type.
 - The admin passcode lives in the **Keychain**, not the app store, so it
   survives a reinstall.
 
