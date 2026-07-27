@@ -110,6 +110,15 @@ struct SearchView: View {
             // decides the UnratedBehavior default and whether an over-fetch
             // multiplier of 3 is anywhere near right.
             LabeledContent("Unrated seen", value: "\(unratedCount(results))")
+            // Whether ancestry actually resolved. MusicKit logs "A
+            // MusicIdentifierSet with empty string … is being used" freely, and
+            // that log cannot distinguish harmless noise from lineage silently
+            // failing to arrive. These two counts can: a deny on an artist only
+            // reaches their tracks if the artist count matches the result
+            // count.
+            LabeledContent("With album", value: "\(lineageCount(results, .album))")
+            LabeledContent("With artist", value: "\(lineageCount(results, .artist))")
+            LabeledContent("Judged", value: "\(results.items.count + results.blocked.count)")
         }
     }
 
@@ -172,6 +181,15 @@ struct SearchView: View {
     private func unratedCount(_ results: FilteredResults) -> Int {
         results.items.filter { $0.rating == nil }.count
             + results.blocked.filter { $0.item.rating == nil }.count
+    }
+
+    /// How many judged items carry a non-empty ancestor of this kind.
+    private func lineageCount(_ results: FilteredResults, _ kind: ItemKind) -> Int {
+        let judged = results.items + results.blocked.map(\.item)
+        return judged.filter { item in
+            item.ancestors.contains { $0.id.kind == kind && !$0.id.rawValue.isEmpty }
+        }
+        .count
     }
 
     private func describe(_ reason: Reason) -> String {

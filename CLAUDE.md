@@ -41,6 +41,18 @@ reasoning, the invariants, and the staged plans.
 Each package also has a substantial `README.md` covering its contract and the
 decisions that go beyond the spec. Read those first — they are current.
 
+**Never edit a `README.md`. They are generated from the wiki.** An edit here is
+overwritten the next time they are generated, and worse, it puts the repo and
+the wiki into disagreement while looking authoritative. To change what a README
+says, change the wiki page it comes from and let generation carry it across.
+
+This file is the exception: `CLAUDE.md` is hand-maintained and safe to edit.
+
+The same goes for anything learned while working — a verified API fact, a
+measured number, a decision. It belongs in the wiki (`What We Know About
+MusicKit`, `Open Questions and Research Tasks`, or the relevant
+spec-restatement), not appended to a README.
+
 ## Layout
 
 ```

@@ -139,11 +139,15 @@ public struct MusicKitCatalogSource: CatalogSource {
     /// Only songs and albums need this — artists have no ancestry, and a
     /// playlist's lineage is supplied by whoever is playing it, not fetched.
     public func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
+        // Empty identifiers are filtered out rather than sent. A request built
+        // from one asks Apple Music for an item that cannot exist, and the row
+        // it would fail to match is better left with no lineage — which the
+        // policy engine already treats as provisional.
         let songIDs = items
-            .filter { $0.id.kind == .song && $0.ancestors.isEmpty }
+            .filter { $0.id.kind == .song && $0.ancestors.isEmpty && !$0.id.rawValue.isEmpty }
             .map { MusicItemID($0.id.rawValue) }
         let albumIDs = items
-            .filter { $0.id.kind == .album && $0.ancestors.isEmpty }
+            .filter { $0.id.kind == .album && $0.ancestors.isEmpty && !$0.id.rawValue.isEmpty }
             .map { MusicItemID($0.id.rawValue) }
 
         var ancestryByID: [CatalogID: [Ancestor]] = [:]
@@ -172,9 +176,20 @@ public struct MusicKitCatalogSource: CatalogSource {
         }
     }
 
+    /// An ancestor with an empty identifier is dropped, not stored.
+    ///
+    /// MusicKit will hand back a relationship item whose identifier set is
+    /// empty — it says so in the log: *"A MusicIdentifierSet with empty string
+    /// … is being used"*. Storing that as `CatalogID(.album, "")` is worse than
+    /// storing nothing. It matches no real album, so a parent's deny on that
+    /// album never fires; every such song shares one identifier, so they are
+    /// indistinguishable; and worst of all the item then *looks* like it has
+    /// lineage. The provisional-verdict rule — deny fails open, allow-only
+    /// fails closed — keys off ancestry being empty, and a bogus entry makes a
+    /// guess read as a resolved fact.
     private func ancestry(of song: Song) -> [Ancestor] {
         var ancestors: [Ancestor] = []
-        if let album = song.albums?.first {
+        if let album = song.albums?.first, !album.id.rawValue.isEmpty {
             ancestors.append(
                 Ancestor(
                     id: CatalogID(.album, album.id.rawValue),
@@ -182,14 +197,14 @@ public struct MusicKitCatalogSource: CatalogSource {
                 )
             )
         }
-        if let artist = song.artists?.first {
+        if let artist = song.artists?.first, !artist.id.rawValue.isEmpty {
             ancestors.append(Ancestor(id: CatalogID(.artist, artist.id.rawValue)))
         }
         return ancestors
     }
 
     private func ancestry(of album: Album) -> [Ancestor] {
-        guard let artist = album.artists?.first else { return [] }
+        guard let artist = album.artists?.first, !artist.id.rawValue.isEmpty else { return [] }
         return [Ancestor(id: CatalogID(.artist, artist.id.rawValue))]
     }
 
