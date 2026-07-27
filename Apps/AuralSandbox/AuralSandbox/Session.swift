@@ -225,6 +225,33 @@ final class Session {
         return nil
     }
 
+    /// Removes one rule. Awaited and surfaced, like adding one.
+    func removeEntry(_ record: PolicyEntryRecord) -> String? {
+        kid.removeEntry(record)
+        return saveLists()
+    }
+
+    /// Removes every rule pointing at this identifier.
+    ///
+    /// Every, not the first: nothing stops a list holding two rows for the same
+    /// item, and leaving one behind would look like the undo silently failed.
+    func removeEntries(matching id: CatalogID) -> String? {
+        for record in kid.entries.filter({ $0.entry?.id == id }) {
+            kid.removeEntry(record)
+        }
+        return saveLists()
+    }
+
+    private func saveLists() -> String? {
+        do {
+            try context.save()
+        } catch {
+            return error.localizedDescription
+        }
+        rebuildCatalog()
+        return nil
+    }
+
     private func rebuildCatalog() {
         catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
     }

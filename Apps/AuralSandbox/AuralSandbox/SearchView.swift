@@ -20,6 +20,7 @@ struct SearchView: View {
         NavigationStack {
             List {
                 sandboxSection
+                rulesSection
 
                 if let results {
                     allowedSection(results)
@@ -61,6 +62,44 @@ struct SearchView: View {
         }
     }
 
+    /// Every rule this kid has, and the only way to take one back.
+    ///
+    /// A deny with no undo is a trap: the rule is invisible once made, and the
+    /// blocked row it produces is not the rule — removing a rule has to be
+    /// possible from the rule itself, not only from something it happened to
+    /// block. This is also the first read straight out of storage: the names
+    /// and artwork here were copied at write time, so this list renders with no
+    /// network at all.
+    @ViewBuilder
+    private var rulesSection: some View {
+        Section("Rules (\(session.kid.entries.count))") {
+            if session.kid.entries.isEmpty {
+                Text("No rules yet. Long-press a result to deny it.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(session.kid.entries, id: \.id) { record in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.displayName)
+                    Text("\(record.kind) · \(record.itemKind)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .swipeActions(edge: .trailing) { removeButton(record) }
+                .contextMenu { removeButton(record) }
+            }
+        }
+    }
+
+    private func removeButton(_ record: PolicyEntryRecord) -> some View {
+        Button("Remove", role: .destructive) {
+            if let failure = session.removeEntry(record) {
+                message = failure
+            } else {
+                runSearch()
+            }
+        }
+    }
+
     private func allowedSection(_ results: FilteredResults) -> some View {
         Section("Allowed (\(results.items.count))") {
             if results.items.isEmpty {
@@ -96,6 +135,29 @@ struct SearchView: View {
                     Text(describe(blocked.reason))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                .swipeActions(edge: .trailing) { undoButton(blocked.reason) }
+                .contextMenu { undoButton(blocked.reason) }
+            }
+        }
+    }
+
+    /// Undo the rule that blocked this row — offered only when a rule is what
+    /// blocked it.
+    ///
+    /// A row blocked for being explicit or unrated has no rule behind it, so
+    /// there is nothing here to undo; that is a sandbox-level or unrated-
+    /// behavior change, made above. Removing the *matching* rule rather than
+    /// allowing this one item matters: the deny may sit on the artist, and the
+    /// thing the parent wants back is the artist, not one track by them.
+    @ViewBuilder
+    private func undoButton(_ reason: Reason) -> some View {
+        if case .deniedByParent(let id) = reason {
+            Button("Remove this deny", role: .destructive) {
+                if let failure = session.removeEntries(matching: id) {
+                    message = failure
+                } else {
+                    runSearch()
                 }
             }
         }
