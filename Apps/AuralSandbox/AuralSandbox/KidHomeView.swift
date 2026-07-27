@@ -84,6 +84,12 @@ struct KidHomeView: View {
         .onChange(of: term) { _, new in
             if new.isEmpty { searchResults = nil }
         }
+        // A play is written when the track ends or is stopped, since duration
+        // is the signal. So recents can only change when what is playing
+        // changes — which is exactly when to look again.
+        .onChange(of: player.current?.id) { _, _ in
+            if searchResults == nil { reload() }
+        }
     }
 
     private var emptyTitle: String {

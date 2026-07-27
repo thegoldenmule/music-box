@@ -102,6 +102,56 @@ struct Writing {
         #expect(event.origin == .search(term: "dinosaurs"))
     }
 
+    @Test("A kid's plays are findable by predicate from a context that did not write them")
+    func findableByKid() async throws {
+        let (container, kidID) = try await storeWithKid()
+        let log = EventLog(modelContainer: container)
+        try await log.record(play(seconds: 60), for: kidID)
+
+        // This is the query a recents screen runs, and both halves of it have
+        // bitten already. Reading `kid.plays` off a long-lived context misses
+        // these rows entirely — EventLog is a ModelActor with its own context,
+        // which is the point of it — so the read has to be a fetch on a fresh
+        // context. And the predicate reaches through an *optional*
+        // relationship, which is the part most likely to stop compiling or
+        // quietly match nothing.
+        let found = try await MainActor.run {
+            var descriptor = FetchDescriptor<PlayEventRecord>(
+                predicate: #Predicate { $0.kid?.id == kidID },
+                sortBy: [SortDescriptor(\.at, order: .reverse)]
+            )
+            descriptor.fetchLimit = 10
+            return try ModelContext(container).fetch(descriptor).map(\.songID)
+        }
+
+        #expect(found == [Fix.song.rawValue])
+    }
+
+    @Test("One kid's plays do not show up as another's")
+    func scopedToKid() async throws {
+        let (container, kidID) = try await storeWithKid()
+        let strangerID = try await MainActor.run { () -> UUID in
+            let context = ModelContext(container)
+            let other = Kid(name: "Sam", mode: .denyPlusAuto, at: Fix.at)
+            context.insert(other)
+            try context.save()
+            return other.id
+        }
+
+        let log = EventLog(modelContainer: container)
+        try await log.record(play(seconds: 60), for: kidID)
+
+        let found = try await MainActor.run {
+            try ModelContext(container)
+                .fetch(FetchDescriptor<PlayEventRecord>(
+                    predicate: #Predicate { $0.kid?.id == strangerID }
+                ))
+                .count
+        }
+
+        #expect(found == 0)
+    }
+
     @Test("Events for an unknown kid fail rather than landing somewhere else")
     func unknownKid() async throws {
         let (container, _) = try await storeWithKid()

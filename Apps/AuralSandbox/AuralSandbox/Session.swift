@@ -282,14 +282,30 @@ final class Session {
     }
 
     /// Distinct songs this kid played, most recent first.
+    ///
+    /// **Fetched on a fresh context, not read off `kid.plays`.** Events are
+    /// written by ``EventLog``, which is a `@ModelActor` with its own context —
+    /// that is the whole point of it, so logging never blocks playback. The
+    /// consequence is that this context's already-materialised `plays`
+    /// relationship does not see those rows, and reading it returns an empty
+    /// list forever no matter how much the kid listens to. A context created
+    /// here reads what has actually been committed.
     private func recentlyPlayed(limit: Int) -> [CatalogID] {
+        let kidID = kid.id
+        var descriptor = FetchDescriptor<PlayEventRecord>(
+            predicate: #Predicate { $0.kid?.id == kidID },
+            sortBy: [SortDescriptor(\.at, order: .reverse)]
+        )
+        // Over-fetch: the same song played five times is one tile, and the
+        // dedupe happens after the sort.
+        descriptor.fetchLimit = limit * 4
+
+        guard let rows = try? ModelContext(container).fetch(descriptor) else { return [] }
+
         var seen = Set<String>()
         return
-            kid.plays
-            .sorted { $0.at > $1.at }
-            .compactMap { record in
-                seen.insert(record.songID).inserted ? CatalogID(.song, record.songID) : nil
-            }
+            rows
+            .compactMap { seen.insert($0.songID).inserted ? CatalogID(.song, $0.songID) : nil }
             .prefix(limit)
             .map { $0 }
     }
