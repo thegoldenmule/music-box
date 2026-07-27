@@ -61,10 +61,28 @@ It reports two different kinds of "not enough":
   there may well be more. The UI should offer to keep going rather than claim an
   empty result.
 
-Defaults are an over-fetch multiplier of 3 and 3 retries, so at most four
-requests per search. The multiplier is a guess until someone measures how common
-explicit and unrated results actually are — `FilteredResults.requestCount` is
-there to make that measurable.
+Defaults are an over-fetch multiplier of 3, 3 retries, and a page ceiling of 25,
+so at most four requests per search. The multiplier is a guess until someone
+measures how common explicit and unrated results actually are —
+`FilteredResults.requestCount` is there to make that measurable.
+
+**25 is Apple Music's cap on search, not a tuning choice.** Asking for more is a
+`400 / 40005 Invalid Parameter Value — Value must be an integer less than or
+equal to 25`. The ceiling defaulted to 100 until the first device run, at which
+point every single search failed. Nothing in this package caught it: the stub
+served whatever it was asked for, and the packages build against macOS where
+nothing contacts Apple Music at all.
+
+That cap changes what over-fetching *is*. Once the caller's limit reaches 25 the
+multiplier has no room left, and the only way to compensate for filtering holes
+is to page — which is what `maxRetries` is for. The multiplier still earns its
+keep at smaller limits, where one request can cover the need.
+
+`MusicKitCatalogSource` clamps to `maxSearchLimit` as well, so a caller asking
+for too much gets a short page rather than a failed search. It judges `hasMore`
+against the clamped value: comparing against the asked-for limit would read a
+full page of 25 as "fewer than 75, so the catalog is exhausted" and stop paging
+after one request — turning a hard failure into a silently truncated one.
 
 ## Ancestry is batched on purpose
 

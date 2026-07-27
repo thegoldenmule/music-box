@@ -72,20 +72,44 @@ struct OverFetchTests {
         let config = FilteredCatalog.Configuration(overFetchMultiplier: 3)
         let sut = FilteredCatalog(source: source, engine: Fix.engine(), configuration: config)
 
-        _ = try await sut.search(term: "x", kinds: [.song], limit: 10)
+        // Five, not the old twenty-five: the multiplier only has room to work
+        // below Apple Music's cap of 25 per search request.
+        _ = try await sut.search(term: "x", kinds: [.song], limit: 5)
 
-        #expect(await source.searchCalls.first?.limit == 30)
+        #expect(await source.searchCalls.first?.limit == 15)
+    }
+
+    @Test(
+        "No search ever asks Apple Music for more than it allows",
+        arguments: [1, 5, 10, 25, 50, 100]
+    )
+    func neverExceedsAppleMusicsCap(limit: Int) async throws {
+        let source = StubCatalogSource(pages: [Fix.mixedPage(30, hasMore: false)])
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        _ = try await sut.search(term: "x", kinds: [.song], limit: limit)
+
+        // Asking for 75 is a 400 from Apple Music, not a large page. Every
+        // search failed outright until the default page ceiling came down to
+        // 25, and nothing in the package caught it — the stub happily served
+        // whatever it was asked for.
+        let asked = await source.searchCalls.map(\.limit)
+        #expect(asked.allSatisfy { $0 <= 25 })
+        #expect(!asked.isEmpty)
     }
 
     @Test("A single request never exceeds the page ceiling")
     func respectsPageCeiling() async throws {
         let source = StubCatalogSource(pages: [Fix.mixedPage(10, hasMore: false)])
-        let config = FilteredCatalog.Configuration(overFetchMultiplier: 10, maxPageSize: 50)
+        // A ceiling below the API's own cap, so this exercises the ceiling
+        // rather than implying a page of 50 is something Apple Music would
+        // serve. It would not — see `Configuration.maxPageSize`.
+        let config = FilteredCatalog.Configuration(overFetchMultiplier: 10, maxPageSize: 20)
         let sut = FilteredCatalog(source: source, engine: Fix.engine(), configuration: config)
 
         _ = try await sut.search(term: "x", kinds: [.song], limit: 25)
 
-        #expect(await source.searchCalls.first?.limit == 50)
+        #expect(await source.searchCalls.first?.limit == 20)
     }
 
     @Test("Pages again when the first page came up short")

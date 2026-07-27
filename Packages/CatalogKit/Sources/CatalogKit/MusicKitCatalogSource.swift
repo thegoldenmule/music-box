@@ -16,6 +16,14 @@ public struct MusicKitCatalogSource: CatalogSource {
     /// own storage.
     private let artworkSize: Int
 
+    /// Apple Music's hard cap on `limit` for a search request.
+    ///
+    /// Verified on device, the expensive way: asking for 75 returns
+    /// `400 / 40005 Invalid Parameter Value — Value must be an integer less
+    /// than or equal to 25`, and every search failed. Other endpoints allow
+    /// more; search does not.
+    public static let maxSearchLimit = 25
+
     public init(artworkSize: Int = 512) {
         self.artworkSize = artworkSize
     }
@@ -35,8 +43,15 @@ public struct MusicKitCatalogSource: CatalogSource {
         if kinds.contains(.playlist) { types.append(Playlist.self) }
         guard !types.isEmpty else { return .empty }
 
+        // Clamped rather than passed through: a caller asking for more than the
+        // API allows should get a short page, not a failed search. The clamped
+        // value is what `hasMore` is judged against below — comparing against
+        // the *asked-for* limit would read a full 25 as "fewer than 75, so the
+        // catalog is exhausted" and stop paging on the first request.
+        let effectiveLimit = min(limit, Self.maxSearchLimit)
+
         var request = MusicCatalogSearchRequest(term: term, types: types)
-        request.limit = limit
+        request.limit = effectiveLimit
         request.offset = offset
 
         let response = try await mapErrors { try await request.response() }
@@ -50,7 +65,7 @@ public struct MusicKitCatalogSource: CatalogSource {
         // MusicKit gives no total count, so "there may be more" is inferred from
         // getting back a full page. Overshooting by one empty request at the end
         // is cheaper than stopping early and claiming a search found nothing.
-        return CatalogPage(items: items, hasMore: items.count >= limit)
+        return CatalogPage(items: items, hasMore: items.count >= effectiveLimit)
     }
 
     // MARK: - Lookup

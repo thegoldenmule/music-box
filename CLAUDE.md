@@ -148,6 +148,14 @@ content parameter. All filtering is ours, client-side, after results return —
 hence `FilteredCatalog`'s over-fetch loop, and hence the distinction between
 `reachedEnd` (the source ran out) and `gaveUpEarly` (we stopped looking).
 
+**Apple Music caps search `limit` at 25.** Verified on device: asking for more
+is `400 / 40005 Invalid Parameter Value`. So over-fetching happens by *paging*,
+not by asking for a bigger page — the multiplier only has room below 25.
+`MusicKitCatalogSource.maxSearchLimit` holds the number and the adapter clamps
+to it. This cost a release-blocking bug: the ceiling defaulted to 100, every
+search 400'd on the first device run, and neither the tests nor the macOS build
+could have caught it.
+
 **Blocked items are kept, never dropped.** The activity report is built from them
 with their reasons, including results the kid never saw.
 

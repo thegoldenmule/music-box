@@ -72,14 +72,23 @@ public struct FilteredCatalog: Sendable {
         /// spinning. One initial request plus this many retries.
         public var maxRetries: Int
 
-        /// Upper bound on a single request, so a large limit times the
-        /// multiplier cannot ask MusicKit for something absurd.
+        /// Upper bound on a single request.
+        ///
+        /// **25 is Apple Music's hard cap on search, not a preference.** Asking
+        /// for more is a 400: `40005 Invalid Parameter Value — Value must be an
+        /// integer less than or equal to 25`. Verified on device; the default
+        /// used to be 100 and every search with a limit of 25 failed outright.
+        ///
+        /// The consequence is that over-fetching cannot happen by asking for a
+        /// bigger page once the limit reaches 25 — it happens by paging, which
+        /// is what ``maxRetries`` is for. ``overFetchMultiplier`` still earns
+        /// its keep at smaller limits, where one request can cover the need.
         public var maxPageSize: Int
 
         public init(
             overFetchMultiplier: Int = 3,
             maxRetries: Int = 3,
-            maxPageSize: Int = 100
+            maxPageSize: Int = 25
         ) {
             self.overFetchMultiplier = overFetchMultiplier
             self.maxRetries = maxRetries
