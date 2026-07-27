@@ -218,9 +218,12 @@ choices are expensive to reverse:
 Treat these as unmeasured, not settled. Do not write code that assumes an answer
 without saying so.
 
-1. How often `contentRating` is `nil` — decides the `UnratedBehavior` default and
-   whether the over-fetch multiplier of 3 is generous or nowhere near enough.
-   `Tools/RatingProbe` is meant to settle it; needs a device.
+1. ~~How often `contentRating` is `nil`~~ — **largely answered.** On device it
+   never appeared: song searches on a US storefront returned a rating on every
+   result. `UnratedBehavior.block` is a safe default and the multiplier of 3
+   looks generous. Unprobed: albums, older catalogue, international catalogue,
+   and the under-13 account. Keep the behavior configurable — one enum is
+   cheaper than a schema change if `nil` shows up in a corner.
 2. Whether ISRC and UPC are populated often enough on library items for seeding
    to be worth offering.
 3. Whether `hasMore` behaves as inferred (it is inferred from a full page —
