@@ -258,6 +258,57 @@ struct CachingTests {
         #expect(await source.itemCallCount == 1)
     }
 
+    @Test("A batch lookup keeps the caller's order, not the cache's")
+    func batchPreservesOrder() async throws {
+        let source = StubCatalogSource(items: [
+            Fix.song(0): Fix.songItem(0),
+            Fix.song(1): Fix.songItem(1),
+            Fix.song(2): Fix.songItem(2),
+        ])
+        let sut = CachingCatalogSource(wrapping: source, cache: InMemoryItemCache())
+
+        // Warm one in the middle, so serving from the cache and fetching the
+        // rest would reshuffle if the order were not restored afterwards. A
+        // recents screen is in time order and that order is the content.
+        _ = try await sut.item(for: Fix.song(1))
+
+        let ids = [Fix.song(2), Fix.song(1), Fix.song(0)]
+        let items = try await sut.items(for: ids)
+
+        #expect(items.map(\.id) == ids)
+    }
+
+    @Test("A batch lookup only asks for what is not cached")
+    func batchSkipsCached() async throws {
+        let source = StubCatalogSource(items: [
+            Fix.song(0): Fix.songItem(0),
+            Fix.song(1): Fix.songItem(1),
+        ])
+        let sut = CachingCatalogSource(wrapping: source, cache: InMemoryItemCache())
+
+        _ = try await sut.item(for: Fix.song(0))
+        let before = await source.itemCallCount
+
+        _ = try await sut.items(for: [Fix.song(0), Fix.song(1)])
+
+        // The stub has no batch of its own, so it falls back to one call per
+        // item — which is exactly what makes the count readable here. One more
+        // call, for the one that was missing.
+        #expect(await source.itemCallCount == before + 1)
+    }
+
+    @Test("A batch lookup drops identifiers that no longer resolve")
+    func batchDropsMissing() async throws {
+        let source = StubCatalogSource(items: [Fix.song(0): Fix.songItem(0)])
+        let sut = CachingCatalogSource(wrapping: source, cache: InMemoryItemCache())
+
+        let items = try await sut.items(for: [Fix.song(0), Fix.song(99)])
+
+        // Delisted items are absent rather than reported: every caller of this
+        // is rendering a list, where the right answer is not to show it.
+        #expect(items.map(\.id) == [Fix.song(0)])
+    }
+
     @Test("Only unresolved items are sent for ancestry")
     func onlyFetchesMissingAncestry() async throws {
         let source = StubCatalogSource(ancestry: [Fix.song(1): [Ancestor(id: Fix.artist)]])

@@ -282,12 +282,33 @@ final class Session {
     /// has denied since, and a stale list would leave it sitting on the home
     /// screen looking tappable.
     func homeItems(limit: Int = 24) async throws -> [CatalogItem] {
-        let ids: [CatalogID] =
-            kid.mode == .allowOnly
-            ? kid.entries.compactMap { $0.entry }.filter { $0.kind == .allow }.map(\.id)
-            : recentlyPlayed(limit: limit)
+        try await resolveAllowed(recentlyPlayed(limit: limit))
+    }
 
+    /// The allow list, resolved. What a level 1 home shows below its recents,
+    /// and the whole of the reachable catalogue at that level.
+    func allowListItems() async throws -> [CatalogItem] {
+        let ids = kid.entries.compactMap { $0.entry }.filter { $0.kind == .allow }.map(\.id)
         return try await resolveAllowed(ids)
+    }
+
+    /// One page of everything this kid has played, most recent first.
+    ///
+    /// **Filtered at render time, like recents**, which means it is a history of
+    /// what they played *and may still play*. Something denied since is absent.
+    /// The alternative — showing it greyed out — puts a thing a kid can see and
+    /// cannot touch on their own screen, which is the invitation to ask why that
+    /// the whole design avoids.
+    ///
+    /// Filtering after paging means a page can come back short. It over-fetches
+    /// for the same reason search does, and `hasMore` is about the *source*
+    /// running out, not about the page being full.
+    func playHistory(page: Int, pageSize: Int = 24) async throws
+        -> (items: [CatalogItem], hasMore: Bool)
+    {
+        let raw = recentlyPlayed(limit: pageSize * 3, offset: page * pageSize * 3)
+        let items = try await resolveAllowed(raw)
+        return (items, raw.count == pageSize * 3)
     }
 
     /// Distinct songs this kid played, most recent first.
@@ -299,7 +320,7 @@ final class Session {
     /// relationship does not see those rows, and reading it returns an empty
     /// list forever no matter how much the kid listens to. A context created
     /// here reads what has actually been committed.
-    private func recentlyPlayed(limit: Int) -> [CatalogID] {
+    private func recentlyPlayed(limit: Int, offset: Int = 0) -> [CatalogID] {
         let kidID = kid.id
         var descriptor = FetchDescriptor<PlayEventRecord>(
             predicate: #Predicate { $0.kid?.id == kidID },
@@ -308,6 +329,7 @@ final class Session {
         // Over-fetch: the same song played five times is one tile, and the
         // dedupe happens after the sort.
         descriptor.fetchLimit = limit * 4
+        descriptor.fetchOffset = offset
 
         guard let rows = try? ModelContext(container).fetch(descriptor) else { return [] }
 
@@ -325,10 +347,8 @@ final class Session {
     /// whose artist was denied is caught here rather than becoming a tile that
     /// refuses when tapped.
     func resolveAllowed(_ ids: [CatalogID]) async throws -> [CatalogItem] {
-        var items: [CatalogItem] = []
-        for id in ids {
-            if let item = try await source.item(for: id) { items.append(item) }
-        }
+        guard !ids.isEmpty else { return [] }
+        let items = try await source.items(for: ids)
         let resolved = try await source.resolveAncestry(for: items)
         let engine = kid.makeEngine()
         return resolved.filter { engine.evaluate($0.policyItem).isAllowed }

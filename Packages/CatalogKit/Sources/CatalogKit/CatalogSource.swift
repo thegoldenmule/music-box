@@ -18,6 +18,17 @@ public protocol CatalogSource: Sendable {
     /// case an allow list has to survive.
     func item(for id: CatalogID) async throws -> CatalogItem?
 
+    /// Resolve many items at once.
+    ///
+    /// A batch call for the same reason ``resolveAncestry(for:)`` is one: a
+    /// screen built from stored identifiers — recents, a play history, an allow
+    /// list — has a page of them, and one round trip per tile is thirty round
+    /// trips per screen.
+    ///
+    /// Items that no longer exist are simply absent from the result, so the
+    /// caller cannot assume the output lines up with the input by position.
+    func items(for ids: [CatalogID]) async throws -> [CatalogItem]
+
     /// What is inside a container: an artist's albums, an album's tracks, a
     /// playlist's entries.
     func children(of id: CatalogID) async throws -> [CatalogItem]
@@ -35,6 +46,16 @@ public protocol CatalogSource: Sendable {
 }
 
 extension CatalogSource {
+    /// One at a time, for sources with nothing better. Correct but slow, which
+    /// is why every real source overrides it.
+    public func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
+        var items: [CatalogItem] = []
+        for id in ids {
+            if let item = try await item(for: id) { items.append(item) }
+        }
+        return items
+    }
+
     /// Sources whose reads already include lineage can skip this.
     public func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
         items

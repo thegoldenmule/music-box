@@ -13,7 +13,8 @@ struct KidHomeView: View {
     @Bindable var session: Session
     @State private var player: KidPlayerModel
 
-    @State private var items: [CatalogItem] = []
+    @State private var recents: [CatalogItem] = []
+    @State private var mine: [CatalogItem] = []
     @State private var term = ""
     @State private var searchResults: [CatalogItem]?
     @State private var isLoading = false
@@ -29,29 +30,37 @@ struct KidHomeView: View {
 
     private var canSearch: Bool { session.kid.mode != .allowOnly }
 
-    private var shown: [CatalogItem] { searchResults ?? items }
+    /// Everything currently tappable, which is what a play queues from.
+    private var shown: [CatalogItem] { searchResults ?? (recents + mine) }
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if isLoading && shown.isEmpty {
-                    // A loading state, never an empty one. "Nothing here" and
-                    // "not loaded yet" look identical to a child and mean
-                    // opposite things.
-                    ProgressView()
-                } else if shown.isEmpty {
-                    ContentUnavailableView {
-                        Label(emptyTitle, systemImage: "music.note.list")
+                if let searchResults {
+                    if isLoading && searchResults.isEmpty {
+                        ProgressView()
+                    } else if searchResults.isEmpty {
+                        ContentUnavailableView {
+                            Label("Nothing to play", systemImage: "magnifyingglass")
+                        }
+                    } else {
+                        TileGrid(items: searchResults) { item in
+                            Task { await playSong(item) }
+                        }
                     }
                 } else {
-                    TileGrid(items: shown) { item in
-                        Task { await playSong(item) }
-                    }
+                    home
                 }
             }
             .navigationTitle(session.kid.name)
             .navigationDestination(for: CatalogItem.self) { container in
                 BrowseView(session: session, player: player, container: container)
+            }
+            .navigationDestination(for: HomeRoute.self) { route in
+                switch route {
+                case .history:
+                    HistoryView(session: session, player: player)
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -103,11 +112,60 @@ struct KidHomeView: View {
         }
     }
 
-    private var emptyTitle: String {
-        if searchResults != nil { return "Nothing to play" }
-        return session.kid.mode == .allowOnly
-            ? "Nothing here yet"
-            : "Pick something to listen to"
+    /// Recents first at every level, then whatever else this level offers.
+    ///
+    /// Recents on top even in level 1, where home used to be the allow list
+    /// alone. It is safe there precisely because it is filtered at render time:
+    /// a level 1 recent is something that was on the allow list when it played
+    /// and still is now, so this is a shortcut into the allow list rather than a
+    /// way around it.
+    @ViewBuilder
+    private var home: some View {
+        if isLoading && recents.isEmpty && mine.isEmpty {
+            ProgressView()
+        } else if recents.isEmpty && mine.isEmpty {
+            ContentUnavailableView {
+                Label(
+                    session.kid.mode == .allowOnly
+                        ? "Nothing here yet"
+                        : "Pick something to listen to",
+                    systemImage: "music.note.list"
+                )
+            }
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if !recents.isEmpty {
+                        Section {
+                            RecentRow(items: recents) { item in
+                                Task { await playSong(item) }
+                            }
+                        } header: {
+                            NavigationLink(value: HomeRoute.history) {
+                                HStack {
+                                    Text("Recent").font(.title2.bold())
+                                    Image(systemName: "chevron.right")
+                                        .font(.headline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if !mine.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Yours").font(.title2.bold()).padding(.horizontal)
+                            TileWrap(items: mine) { item in
+                                Task { await playSong(item) }
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical)
+            }
+        }
     }
 
     // MARK: - Loading
@@ -117,7 +175,10 @@ struct KidHomeView: View {
             isLoading = true
             defer { isLoading = false }
             do {
-                items = try await session.homeItems()
+                recents = try await session.homeItems()
+                mine = session.kid.mode == .allowOnly
+                    ? try await session.allowListItems()
+                    : []
             } catch {
                 trouble = Session.message(for: error)
             }
@@ -165,6 +226,58 @@ private struct SearchIfAllowed: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Where the home screen can go. A `CatalogItem` push is browsing; this is not.
+enum HomeRoute: Hashable {
+    case history
+}
+
+/// Recents, sideways. One row, scrolled horizontally, so it never pushes the
+/// rest of the home screen off the bottom no matter how much a kid listens to.
+struct RecentRow: View {
+    let items: [CatalogItem]
+    let onPlay: (CatalogItem) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(items, id: \.id) { item in
+                    if item.id.kind == .song {
+                        Button { onPlay(item) } label: { Tile(item: item) }
+                            .buttonStyle(.plain)
+                    } else {
+                        NavigationLink(value: item) { Tile(item: item) }
+                            .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal)
+        }
+        .frame(height: 210)
+    }
+}
+
+/// A wrapping grid that does not scroll — for use inside a page that already
+/// does. Nesting two scroll views breaks the outer one's gestures.
+struct TileWrap: View {
+    let items: [CatalogItem]
+    let onPlay: (CatalogItem) -> Void
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
+            ForEach(items, id: \.id) { item in
+                if item.id.kind == .song {
+                    Button { onPlay(item) } label: { Tile(item: item) }
+                        .buttonStyle(.plain)
+                } else {
+                    NavigationLink(value: item) { Tile(item: item) }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal)
     }
 }
 

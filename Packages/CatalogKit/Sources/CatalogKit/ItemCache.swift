@@ -96,6 +96,29 @@ public struct CachingCatalogSource: CatalogSource {
         return fetched
     }
 
+    /// Serves what it can from the cache and asks for only the rest.
+    ///
+    /// Ordering follows the caller's, not the cache's: a recents screen is in
+    /// time order, and splitting into hits and misses must not reshuffle it.
+    public func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
+        var cached: [CatalogItem] = []
+        var missing: [CatalogID] = []
+
+        for id in ids {
+            if let hit = await cache.item(for: id) {
+                cached.append(hit)
+            } else {
+                missing.append(id)
+            }
+        }
+
+        guard !missing.isEmpty else { return reorder(cached, like: ids) }
+
+        let fetched = try await wrapped.items(for: missing)
+        await cache.store(fetched)
+        return reorder(cached + fetched, like: ids)
+    }
+
     public func children(of id: CatalogID) async throws -> [CatalogItem] {
         let children = try await wrapped.children(of: id)
         await cache.store(children)
@@ -129,7 +152,11 @@ public struct CachingCatalogSource: CatalogSource {
     /// Keep the caller's ordering — search relevance is the ordering, and
     /// splitting into cached and uncached must not scramble it.
     private func reorder(_ items: [CatalogItem], like original: [CatalogItem]) -> [CatalogItem] {
+        reorder(items, like: original.map(\.id))
+    }
+
+    private func reorder(_ items: [CatalogItem], like ids: [CatalogID]) -> [CatalogItem] {
         let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-        return original.compactMap { byID[$0.id] }
+        return ids.compactMap { byID[$0] }
     }
 }

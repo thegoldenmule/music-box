@@ -105,6 +105,51 @@ public struct MusicKitCatalogSource: CatalogSource {
         return try await mapErrors { try await request.response() }.items.first
     }
 
+    /// One request per kind, rather than one per item.
+    ///
+    /// Grouped by kind because `MusicCatalogResourceRequest` is typed: songs,
+    /// albums, artists and playlists cannot travel in one request. Four
+    /// requests for a screen of thirty tiles instead of thirty.
+    ///
+    /// Missing items are dropped rather than reported. An identifier that no
+    /// longer resolves is a delisting, and every caller of this is rendering a
+    /// list where the right answer is simply not to show it.
+    public func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
+        var found: [CatalogID: CatalogItem] = [:]
+
+        for kind in ItemKind.allCases {
+            let musicIDs = ids.filter { $0.kind == kind && !$0.rawValue.isEmpty }
+                .map { MusicItemID($0.rawValue) }
+            guard !musicIDs.isEmpty else { continue }
+
+            for item in try await items(ofKind: kind, ids: musicIDs) {
+                found[item.id] = item
+            }
+        }
+
+        // The caller's order is the meaningful one — recents are in time order.
+        return ids.compactMap { found[$0] }
+    }
+
+    private func items(ofKind kind: ItemKind, ids: [MusicItemID]) async throws -> [CatalogItem] {
+        switch kind {
+        case .song:
+            var request = MusicCatalogResourceRequest<Song>(matching: \.id, memberOf: ids)
+            request.properties = [.albums, .artists]
+            return try await mapErrors { try await request.response() }.items.map(item(from:))
+        case .album:
+            var request = MusicCatalogResourceRequest<Album>(matching: \.id, memberOf: ids)
+            request.properties = [.artists]
+            return try await mapErrors { try await request.response() }.items.map(item(from:))
+        case .artist:
+            let request = MusicCatalogResourceRequest<Artist>(matching: \.id, memberOf: ids)
+            return try await mapErrors { try await request.response() }.items.map(item(from:))
+        case .playlist:
+            let request = MusicCatalogResourceRequest<Playlist>(matching: \.id, memberOf: ids)
+            return try await mapErrors { try await request.response() }.items.map(item(from:))
+        }
+    }
+
     // MARK: - Children
 
     public func children(of id: CatalogID) async throws -> [CatalogItem] {
