@@ -20,7 +20,11 @@ struct KidHomeView: View {
     @State private var isLoading = false
     @State private var trouble: String?
     @State private var showingAdmin = false
-    @State private var path: [CatalogItem] = []
+    /// Type-erased, because this stack pushes two unrelated things: a
+    /// `CatalogItem` when browsing into a container, and a ``HomeRoute`` for the
+    /// history. A `[CatalogItem]` path accepts only the former and refuses the
+    /// latter at runtime — it compiles, and the link simply does not work.
+    @State private var path = NavigationPath()
     @Environment(\.scenePhase) private var scenePhase
 
     init(session: Session) {
