@@ -50,13 +50,20 @@ xcodebuild build -scheme AuralSandbox -destination 'platform=macOS'
 xcodebuild build -scheme AuralSandbox -sdk iphonesimulator
 ```
 
-Both are verified. **Building to a device is not**, and cannot be on this
-machine yet: `generic/platform=iOS` fails with *iOS 26.5 is not installed*. The
-iOS platform component needs installing from Xcode → Settings → Components.
-Until then nothing here has run against MusicKit at all.
+```sh
+# device, signed
+xcodebuild build -scheme AuralSandbox -destination 'generic/platform=iOS'
+```
 
-`DEVELOPMENT_TEAM` is deliberately empty. Set it once in Xcode; automatic
-signing does the rest.
+All three build clean. The device build signs against *iOS Team Provisioning
+Profile: com.thegoldenmule.auralsanbox* with team `QKMK66X2FU`.
+
+**Nothing here has run yet.** A signed build proves the bundle identifier
+matches the registered App ID and that signing works. It does **not** prove
+MusicKit is enabled on that App ID: MusicKit is an App Service, not an
+entitlement, so it never appears in the provisioning profile. The only proof is
+a device run reaching `MusicAuthorization.request()` and a catalog request that
+returns something.
 
 ## Two build-setting traps, both silent
 
