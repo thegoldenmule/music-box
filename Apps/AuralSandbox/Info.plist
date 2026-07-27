@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- A partial Info.plist. GENERATE_INFOPLIST_FILE stays on, so everything
+	     expressible as an INFOPLIST_KEY_* build setting still merges in here at
+	     build time and is not duplicated below.
+
+	     UIBackgroundModes is not one of those keys. Xcode accepts
+	     INFOPLIST_KEY_UIBackgroundModes as a setting and then silently drops it
+	     from the generated plist — background audio normally arrives via the
+	     capability editor writing a file exactly like this one. Verified by
+	     reading the key back out of the built app, which is the only way to
+	     catch it: nothing fails to compile. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+</dict>
+</plist>

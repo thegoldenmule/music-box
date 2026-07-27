@@ -48,7 +48,8 @@ Packages/
   PolicyEngine/   what a kid may see or play — pure logic, no MusicKit, no UI
   CatalogKit/     the only layer that imports MusicKit
   FamilyStore/    SwiftData persistence — kids, lists, activity log
-Apps/            app targets (Xcode projects) — nothing yet
+Apps/
+  AuralSandbox/  one Xcode project, iOS + Mac — currently a thin debug slice
 Tools/           spikes and throwaway probes — nothing yet
 ```
 
@@ -64,12 +65,28 @@ line. Anything needing entitlements, signing, or an Info.plist goes under
 
 ```sh
 for p in Packages/*/; do swift test --package-path "$p"; done
+
+cd Apps/AuralSandbox
+xcodebuild build -scheme AuralSandbox -destination 'platform=macOS'
+xcodebuild build -scheme AuralSandbox -sdk iphonesimulator   # checks the iOS floor
 ```
 
 `swift build` targets **macOS**, so an iOS-only availability mistake compiles
 clean here. That already happened once: the packages declared iOS 15 while using
 iOS 16 and 17 APIs, and nothing caught it. When adding an API, check its
-availability annotation against the declared floor by hand.
+availability annotation against the declared floor by hand. Building the app
+against `iphonesimulator` is the closest thing to a real check.
+
+Building to a **device** does not work on this machine yet —
+`generic/platform=iOS` reports *iOS 26.5 is not installed*, and the iOS platform
+component needs installing from Xcode → Settings → Components.
+
+**Build settings can be accepted and then ignored.** Two have bitten already,
+neither failing to compile: `IPHONEOS_DEPLOYMENT_TARGET[sdk=iphone*]` silently
+resolves to the SDK default, and `INFOPLIST_KEY_UIBackgroundModes` never reaches
+the generated plist. Verify anything load-bearing by reading it back out of the
+built app with `plutil -p` — never `plutil -extract KEY raw FILE`, which
+rewrites the file in place unless given `-o -`.
 
 ## Git
 

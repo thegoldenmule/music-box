@@ -24,6 +24,27 @@ results.blocked   // what was filtered, with reasons, for the report
 | `CachingCatalogSource` | Decorator that caches lookups and ancestry. |
 | `CatalogAccess` | Authorization and subscription state, asked once and observed. |
 | `LibrarySource` | Reads the account's library and matches it to the catalog. |
+| `CatalogPlayer` | Plays one item. `MusicKitPlayer` in production. |
+
+## The player is deliberately narrow
+
+`CatalogPlayer` has `play`, `pause` and `stop`, and no `next`. It is here rather
+than in the app for the same reason `CatalogSource` is: nothing above this layer
+sees a MusicKit type.
+
+`MusicKitPlayer` drives `ApplicationMusicPlayer` — the application queue, not the
+system one, so a kid's listening never reorders a parent's Up Next in the Music
+app and nothing queued there arrives here unvetted. It is also the reason the
+macOS floor is 14.0.
+
+It does not judge anything. The caller asks `FilteredCatalog.verdict(for:)`
+immediately beforehand; this is the mechanism, not the authority.
+
+One thing in it is unresolved: **which error MusicKit throws when Screen Time or
+Apple Music's parental controls refuse playback.** The spec requires that case be
+logged as `restrictedOutsideApp` and never attributed to a parent's own rule.
+Until someone measures it on a device, those land in `CatalogError.underlying`,
+which is wrong but is not a confident lie about which rule fired.
 
 ## Why the over-fetch loop exists
 

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS only. iOS has no entitlements file: app-sandbox is not a valid
+	     iOS entitlement and would fail provisioning. See the project's
+	     CODE_SIGN_ENTITLEMENTS[sdk=macosx*] setting. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- MusicKit is entirely network-backed. There is no download story under
+	     the MusicKit terms, so without this the app does not work at all. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

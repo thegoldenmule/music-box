@@ -7,3 +7,5 @@ xcuserdata/
 Packages/*/Package.resolved
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+build/
+*.xcodeproj/project.xcworkspace/
