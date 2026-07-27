@@ -80,9 +80,10 @@ struct SearchView: View {
                 } label: {
                     row(item)
                 }
-                .swipeActions {
-                    Button("Deny", role: .destructive) { deny(item) }
-                }
+                // Both gestures, because a swipe is not discoverable and this
+                // is the control that tests the safety-critical case.
+                .swipeActions(edge: .trailing) { denyButtons(for: item) }
+                .contextMenu { denyButtons(for: item) }
             }
         }
     }
@@ -119,6 +120,30 @@ struct SearchView: View {
             LabeledContent("With album", value: "\(lineageCount(results, .album))")
             LabeledContent("With artist", value: "\(lineageCount(results, .artist))")
             LabeledContent("Judged", value: "\(results.items.count + results.blocked.count)")
+        }
+    }
+
+    /// Deny this song, or the artist behind it.
+    ///
+    /// **The artist button only appears when the item carries an artist
+    /// ancestor.** That is deliberate and diagnostic: if it never appears,
+    /// ancestry is not resolving, and artist-level denies cannot work at all —
+    /// which is open question 13, answered by looking rather than by reading a
+    /// log.
+    ///
+    /// There is no album button. A song's `CatalogItem` carries the artist name
+    /// as its subtitle but never the album's title, and `displayName` is copied
+    /// at write time and never refreshed — so an album deny here would store a
+    /// permanently wrong name. The real admin resolves the album first.
+    @ViewBuilder
+    private func denyButtons(for item: CatalogItem) -> some View {
+        if let artist = item.ancestors.first(where: { $0.id.kind == .artist }) {
+            Button("Deny artist", role: .destructive) {
+                deny(artist.id, name: item.subtitle ?? "Artist")
+            }
+        }
+        Button("Deny song", role: .destructive) {
+            deny(item.id, name: item.title, artwork: item.artworkURL)
         }
     }
 
@@ -168,12 +193,14 @@ struct SearchView: View {
         }
     }
 
-    private func deny(_ item: CatalogItem) {
+    private func deny(_ id: CatalogID, name: String, artwork: URL? = nil) {
         // Awaited, and a failure is shown. A parent who denies something and
         // gets silence must not be left believing it landed.
-        if let failure = session.deny(item) {
+        if let failure = session.deny(id, displayName: name, artworkURL: artwork) {
             message = failure
         } else {
+            // Re-run so the effect is visible immediately: denying an artist
+            // should move every other track by them into Blocked.
             runSearch()
         }
     }

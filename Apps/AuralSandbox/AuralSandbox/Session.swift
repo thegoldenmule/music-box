@@ -205,12 +205,16 @@ final class Session {
     ///
     /// The opposite contract to event logging: a parent who denies something and
     /// gets silence must not be left believing it landed.
-    func deny(_ item: CatalogItem) -> String? {
+    /// Takes an identifier rather than an item so a song's *artist* can be
+    /// denied from a list of songs. Denying the thing in front of you is the
+    /// easy half; reaching its container is the half that proves ancestry
+    /// resolved, and the half a parent actually wants.
+    func deny(_ id: CatalogID, displayName: String, artworkURL: URL? = nil) -> String? {
         kid.addEntry(
             kind: .deny,
-            id: item.id,
-            displayName: item.title,
-            artworkURL: item.artworkURL
+            id: id,
+            displayName: displayName,
+            artworkURL: artworkURL
         )
         do {
             try context.save()
