@@ -237,6 +237,14 @@ final class Session {
 
     private var playingOrigin: PlaybackOrigin?
 
+    /// Guards against writing the same play twice.
+    ///
+    /// A play is flushed from several places now — the track ending, a skip,
+    /// starting something else, the app going to the background — because the
+    /// kid's controls are play, pause and skip, and none of those is a "stop"
+    /// that could own the job alone.
+    private var currentPlayLogged = true
+
     /// Plays one item, **asking the policy engine again first**.
     ///
     /// It asks again rather than trusting that the UI only offered allowed
@@ -256,6 +264,7 @@ final class Session {
 
         try await player.play(item)
         playingOrigin = origin
+        currentPlayLogged = false
     }
 
     func resume() async throws {
@@ -340,8 +349,19 @@ final class Session {
     ///
     /// Duration is the signal, so this happens on stop rather than on start.
     /// `EventLog` drops anything under five seconds — a mis-tap is not a listen.
+    /// Writes the play for whatever is loaded, if it has not been written yet.
+    ///
+    /// Safe to call from anywhere and as often as you like — the flag is what
+    /// makes it idempotent, and every caller would otherwise have to know
+    /// whether one of the others got there first.
+    func flushCurrentPlay() {
+        logCurrentPlay()
+    }
+
     private func logCurrentPlay() {
-        guard let item = player.nowPlaying, let origin = playingOrigin else { return }
+        guard !currentPlayLogged, let item = player.nowPlaying, let origin = playingOrigin
+        else { return }
+        currentPlayLogged = true
 
         eventLog.log(
             PlayEvent(

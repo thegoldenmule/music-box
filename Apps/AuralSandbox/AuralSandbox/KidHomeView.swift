@@ -20,6 +20,7 @@ struct KidHomeView: View {
     @State private var trouble: String?
     @State private var showingAdmin = false
     @State private var path: [CatalogItem] = []
+    @Environment(\.scenePhase) private var scenePhase
 
     init(session: Session) {
         self.session = session
@@ -84,11 +85,21 @@ struct KidHomeView: View {
         .onChange(of: term) { _, new in
             if new.isEmpty { searchResults = nil }
         }
-        // A play is written when the track ends or is stopped, since duration
-        // is the signal. So recents can only change when what is playing
-        // changes — which is exactly when to look again.
+        // A play is written when the track ends, is skipped, or the app goes
+        // away — duration is the signal, and there is no stop control. So
+        // recents changes when what is playing changes, which is when to look
+        // again.
         .onChange(of: player.current?.id) { _, _ in
             if searchResults == nil { reload() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Otherwise a kid who plays one song and puts the phone down never
+            // produces a play event at all.
+            if phase != .active {
+                player.flush()
+            } else if searchResults == nil {
+                reload()
+            }
         }
     }
 
