@@ -21,8 +21,16 @@ public final class MusicKitPlayer: CatalogPlayer {
 
     public init() {}
 
-    public var isPlaying: Bool {
-        player.state.playbackStatus == .playing
+    public var status: PlaybackStatus {
+        switch player.state.playbackStatus {
+        case .playing: .playing
+        case .paused: .paused
+        case .interrupted: .interrupted
+        case .stopped: .stopped
+        // seekingForward and seekingBackward are transient and only reachable
+        // through controls this app does not offer.
+        default: .playing
+        }
     }
 
     public var playbackSeconds: Int {
@@ -75,6 +83,14 @@ public final class MusicKitPlayer: CatalogPlayer {
 
     public func pause() async throws {
         player.pause()
+    }
+
+    public func resume() async throws {
+        try await mapErrors { try await Self.resumePlayback() }
+    }
+
+    private nonisolated static func resumePlayback() async throws {
+        try await ApplicationMusicPlayer.shared.play()
     }
 
     public func stop() async throws {

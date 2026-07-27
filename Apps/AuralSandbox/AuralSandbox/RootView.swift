@@ -37,7 +37,7 @@ struct RootView: View {
                 }
 
             case .ready:
-                SearchView(session: session)
+                KidHomeView(session: session)
 
             case .failed(let message):
                 ContentUnavailableView {

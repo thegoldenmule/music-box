@@ -2,12 +2,16 @@ import CatalogKit
 import FamilyStore
 import SwiftUI
 
-/// The slice's one screen: search, see what the policy let through, see what it
-/// did not and why, and play something.
+/// The diagnostics screen, reached only from the admin.
 ///
-/// This is **not** the kid player. It shows the blocked list, the reasons, and
-/// the sandbox controls, all of which are parent-side or debug-side. It exists
-/// to prove the seams meet.
+/// This was the app's one screen before the kid player existed. It stays
+/// because the numbers on it are how the remaining research questions get
+/// answered — unrated frequency, whether ancestry resolves, how hard the
+/// over-fetch loop is working.
+///
+/// It shows blocked items, their reasons, and the rule that fired. **None of
+/// that may ever appear on the kid's side**, which is exactly why it now lives
+/// behind the passcode.
 struct SearchView: View {
     @Bindable var session: Session
 
@@ -15,38 +19,16 @@ struct SearchView: View {
     @State private var results: FilteredResults?
     @State private var isSearching = false
     @State private var message: String?
-    @State private var showingAdmin = false
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
                 if let results {
                     allowedSection(results)
                     blockedSection(results)
                     diagnosticsSection(results)
                 }
             }
-            .navigationTitle("Aural Sandbox")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    // The only route to the parent's side, and it goes through
-                    // the gate every time.
-                    Button("Admin") { showingAdmin = true }
-                }
-            }
-            .sheet(isPresented: $showingAdmin) {
-                NavigationStack {
-                    if session.isAdminOpen {
-                        AdminView(session: session) {
-                            session.closeAdmin()
-                            showingAdmin = false
-                            runSearch()
-                        }
-                    } else {
-                        AdminGateView(session: session) {}
-                    }
-                }
-            }
+            .navigationTitle("Diagnostics")
             .searchable(text: $term, prompt: "Search Apple Music")
             .onSubmit(of: .search) { runSearch() }
             .safeAreaInset(edge: .bottom) { PlayerBar(session: session) }
@@ -60,7 +42,6 @@ struct SearchView: View {
                 actions: { Button("OK") { message = nil } },
                 message: { Text(message ?? "") }
             )
-        }
     }
 
     // MARK: - Sections

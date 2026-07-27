@@ -24,6 +24,13 @@ public protocol CatalogPlayer: AnyObject {
 
     func pause() async throws
 
+    /// Resumes a paused item.
+    ///
+    /// Deliberately does **not** re-judge. The verdict that started this track
+    /// still stands, and a policy change mid-song lands on the next evaluation
+    /// — cutting out halfway through reads as a fault rather than a rule.
+    func resume() async throws
+
     /// Stops and clears the queue. Nothing plays after this until something is
     /// asked for by name.
     func stop() async throws
@@ -34,5 +41,25 @@ public protocol CatalogPlayer: AnyObject {
     /// What is loaded, or `nil` when nothing is.
     var nowPlaying: CatalogItem? { get }
 
-    var isPlaying: Bool { get }
+    var status: PlaybackStatus { get }
+}
+
+/// What the player is doing.
+///
+/// `stopped` while something is still loaded is how a caller learns a track
+/// ended on its own. The difference between that and `paused` is the difference
+/// between advancing a queue and leaving it where it is — which is why this is
+/// a status rather than the `isPlaying` boolean it replaces.
+public enum PlaybackStatus: String, Sendable, Hashable, CaseIterable {
+    case stopped
+    case playing
+    case paused
+
+    /// Something outside took the audio session — a call, another app. Not a
+    /// policy decision and not the end of a track, so the queue stays put.
+    case interrupted
+}
+
+extension CatalogPlayer {
+    public var isPlaying: Bool { status == .playing }
 }

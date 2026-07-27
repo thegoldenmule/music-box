@@ -258,6 +258,62 @@ final class Session {
         playingOrigin = origin
     }
 
+    func resume() async throws {
+        try await player.resume()
+    }
+
+    // MARK: - The kid's surfaces
+
+    /// What the home screen shows.
+    ///
+    /// Level 1 is the allow list itself — that *is* the reachable catalogue.
+    /// Levels 2 and 3 show what was played recently, which is only useful
+    /// because it is **filtered at render time** rather than kept as a stored
+    /// list of allowed things: a kid's recents can contain something a parent
+    /// has denied since, and a stale list would leave it sitting on the home
+    /// screen looking tappable.
+    func homeItems(limit: Int = 24) async throws -> [CatalogItem] {
+        let ids: [CatalogID] =
+            kid.mode == .allowOnly
+            ? kid.entries.compactMap { $0.entry }.filter { $0.kind == .allow }.map(\.id)
+            : recentlyPlayed(limit: limit)
+
+        return try await resolveAllowed(ids)
+    }
+
+    /// Distinct songs this kid played, most recent first.
+    private func recentlyPlayed(limit: Int) -> [CatalogID] {
+        var seen = Set<String>()
+        return
+            kid.plays
+            .sorted { $0.at > $1.at }
+            .compactMap { record in
+                seen.insert(record.songID).inserted ? CatalogID(.song, record.songID) : nil
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Resolves identifiers to items and drops everything this kid may not see.
+    ///
+    /// Ancestry is resolved in one batch before anything is judged, so a song
+    /// whose artist was denied is caught here rather than becoming a tile that
+    /// refuses when tapped.
+    func resolveAllowed(_ ids: [CatalogID]) async throws -> [CatalogItem] {
+        var items: [CatalogItem] = []
+        for id in ids {
+            if let item = try await source.item(for: id) { items.append(item) }
+        }
+        let resolved = try await source.resolveAncestry(for: items)
+        let engine = kid.makeEngine()
+        return resolved.filter { engine.evaluate($0.policyItem).isAllowed }
+    }
+
+    /// What is inside an artist or album, filtered.
+    func children(of id: CatalogID) async throws -> FilteredResults {
+        try await catalog.children(of: id)
+    }
+
     func stop() async {
         logCurrentPlay()
         try? await player.stop()
@@ -282,6 +338,17 @@ final class Session {
             ),
             for: kid.id
         )
+    }
+
+    /// Logs a whole filtered-out batch.
+    ///
+    /// Every block is recorded, including ones the kid never saw. They are the
+    /// most useful line in a parent's report: they are how a parent finds out
+    /// what their kid went looking for.
+    func logBlocked(_ blocked: [BlockedItem], origin: PlaybackOrigin) {
+        for item in blocked {
+            log(item.item, blockedFor: BlockReason(item.reason), origin: origin)
+        }
     }
 
     private func log(_ item: CatalogItem, blockedFor reason: BlockReason, origin: PlaybackOrigin) {

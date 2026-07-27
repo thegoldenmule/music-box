@@ -21,6 +21,14 @@ struct AdminView: View {
             sandboxSection
             listSection(.allow)
             listSection(.deny)
+
+            Section {
+                NavigationLink("Diagnostics") { SearchView(session: session) }
+            } footer: {
+                Text(
+                    "Unfiltered counts and reasons, for answering the questions the specs still list as open. Nothing here belongs on the kid's side."
+                )
+            }
         }
         .navigationTitle("Admin")
         .toolbar {
