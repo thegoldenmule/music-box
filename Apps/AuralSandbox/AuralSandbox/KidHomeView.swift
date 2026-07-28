@@ -21,7 +21,10 @@ struct KidHomeView: View {
     /// round trips wins whichever order they were asked for in, and the kid ends
     /// up looking at results for a term they have already replaced.
     @State private var searchTask: Task<Void, Never>?
-    @State private var filter: SearchFilter = .all
+    /// Artists, because it is the kind a search is most often for and the one
+    /// that lands first — nothing is filtered out of an artist page, so it
+    /// settles in a single request while songs are still paging.
+    @State private var filter: SearchFilter = .artists
     @State private var isLoading = false
     @State private var trouble: String?
     @State private var showingAdmin = false
@@ -57,8 +60,7 @@ struct KidHomeView: View {
     /// What the results grid is showing, once the filter has had its say.
     private var visible: [CatalogItem]? {
         guard case .results(let results) = search else { return nil }
-        guard let kind = filter.kind else { return results.items }
-        return results.items(of: kind)
+        return results.items(of: filter.kind)
     }
 
     var body: some View {
@@ -121,7 +123,7 @@ struct KidHomeView: View {
             if new.isEmpty {
                 searchTask?.cancel()
                 searchTask = nil
-                filter = .all
+                filter = .artists
                 withAnimation(.easeInOut(duration: 0.2)) { search = .home }
             }
         }
@@ -143,35 +145,35 @@ struct KidHomeView: View {
         }
     }
 
-    /// Search results: one list, with a filter across the top.
+    /// Search results: one kind at a time, with the tabs across the top.
     ///
-    /// One list rather than a section per kind, because sections make the answer
-    /// depend on how far a kid scrolls — songs below two rows of albums are
-    /// off-screen on a phone. The filter is the whole control surface, and it
-    /// costs nothing to use: every kind was fetched by the one search, so
-    /// switching is a redraw rather than a round trip.
+    /// The tabs are fixed — always all three, in the same order, whatever came
+    /// back. Hiding the ones that found nothing sounds kinder and is not: the
+    /// kinds land at different times, so a tab would appear mid-search and shove
+    /// the ones beside it out from under a finger already on the way down. Three
+    /// tabs that never move, one of which may say "nothing to play", is the
+    /// steadier thing to aim at.
     @ViewBuilder
     private func results(_ results: KindedResults) -> some View {
         let items = visible ?? []
 
         VStack(spacing: 0) {
-            // Only kinds that found something. Four tabs where three lead to an
-            // empty screen is three dead ends a kid has no way to interpret —
-            // and for a narrow term that is the common case, not the edge one.
-            let filters = SearchFilter.available(for: results)
-            if filters.count > 2 {
-                Picker("Show", selection: $filter) {
-                    ForEach(filters) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+            Picker("Show", selection: $filter) {
+                ForEach(SearchFilter.allCases) { Text($0.label).tag($0) }
             }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
 
-            // No loading branch here: a search in flight is its own screen now,
-            // so anything reaching this view has already come back. Empty means
-            // empty.
-            if items.isEmpty {
+            // Still coming is a different screen from came back empty, and the
+            // two are only distinguishable because `KindedResults` keeps them
+            // apart. Guessing here would show "nothing to play" over a search
+            // that was about to find twenty-four things.
+            if results.isPending(filter.kind) {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else if items.isEmpty {
                 Spacer()
                 ContentUnavailableView {
                     Label("Nothing to play", systemImage: "magnifyingglass")
@@ -285,10 +287,10 @@ struct KidHomeView: View {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSearch, !term.isEmpty else { return }
 
-        // Back to All on every new search. A filter left on Albums from the last
-        // term would meet a new one that has none, leaving a segmented control
-        // with nothing selected above an empty grid.
-        filter = .all
+        // Back to Artists on every new search, so two terms in a row start the
+        // same way rather than the second landing on whichever tab the first
+        // was left on.
+        filter = .artists
         withAnimation(.easeInOut(duration: 0.2)) { search = .running(term) }
 
         searchTask?.cancel()
@@ -296,17 +298,47 @@ struct KidHomeView: View {
             do {
                 // Filtered, and the blocked half still reaches the parent's
                 // report even though the kid never sees it.
-                let found = try await session.search(term: term)
-                // A cancelled search has already been replaced on screen by the
-                // one that cancelled it. Its results are stale by definition.
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.2)) { search = .results(found) }
+                for try await found in session.searchIncrementally(term: term) {
+                    // A cancelled search has already been replaced on screen by
+                    // the one that cancelled it. Its results are stale by
+                    // definition.
+                    guard !Task.isCancelled else { return }
+                    // The opening snapshot carries nothing but the list of kinds
+                    // still coming. Leaving the searching screen on it would
+                    // trade one honest wait for a bar of three tabs and a
+                    // spinner, so hold until a kind has actually landed.
+                    guard !found.byKind.isEmpty else { continue }
+
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        search = .results(found)
+                        retargetFilter(found)
+                    }
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 trouble = Session.message(for: error)
                 withAnimation(.easeInOut(duration: 0.2)) { search = .trouble }
             }
         }
+    }
+
+    /// Move off a tab that has settled and has nothing on it.
+    ///
+    /// Artists is the right thing to open on and the wrong thing to be stuck on:
+    /// plenty of terms match a song and no artist, and leaving the kid staring
+    /// at "nothing to play" while twenty-four songs sit one tab over reads as
+    /// the search having failed.
+    ///
+    /// Only once the tab in question has come back — moving off a kind that is
+    /// merely still loading would jump away from results that are on their way.
+    private func retargetFilter(_ results: KindedResults) {
+        guard !results.isPending(filter.kind), results.items(of: filter.kind).isEmpty else {
+            return
+        }
+        guard let populated = results.populatedKinds.first,
+              let replacement = SearchFilter(kind: populated)
+        else { return }
+        filter = replacement
     }
 
     /// Songs play. Containers navigate, which ``TileGrid`` handles itself.
@@ -354,50 +386,47 @@ private struct SearchIfAllowed: ViewModifier {
 
 /// Which kind of result the search screen is showing.
 ///
-/// A filter over results already in hand, **not a new search**. Every kind comes
-/// back in one round trip, so switching costs nothing and the parent's report
+/// One kind at a time, always. There is no "all" — mixing them meant inventing a
+/// cross-kind ranking out of nothing, because Apple ranks within a type and
+/// hands back no score that compares one type to another. A tab per kind asks no
+/// such question.
+///
+/// A filter over results already in hand, **not a new search**. One search
+/// fetches every kind, so switching costs nothing and the parent's report
 /// records one search rather than one per tap.
 ///
-/// This is a separate type from `ItemKind` rather than an optional one because
-/// `all` is a real choice here and not the absence of a choice — and because
-/// `ItemKind` has a `playlist` case that the kid's search deliberately does not
-/// ask for.
+/// A separate type from `ItemKind` because `ItemKind` has a `playlist` case the
+/// kid's search deliberately never asks for, and because the order of these
+/// cases is the order of the tabs.
 enum SearchFilter: Hashable, Identifiable, CaseIterable {
-    case all
-    case songs
     case artists
+    case songs
     case albums
 
     var id: Self { self }
 
     var label: String {
         switch self {
-        case .all: "All"
-        case .songs: "Songs"
         case .artists: "Artists"
+        case .songs: "Songs"
         case .albums: "Albums"
         }
     }
 
-    /// `nil` for ``all`` — everything, in `KindedResults.displayOrder`.
-    var kind: ItemKind? {
+    var kind: ItemKind {
         switch self {
-        case .all: nil
-        case .songs: .song
         case .artists: .artist
+        case .songs: .song
         case .albums: .album
         }
     }
 
-    /// The filters worth offering for one set of results.
-    ///
-    /// Built from what came back, not from what was asked for. A kind that
-    /// matched nothing is left out rather than offered as a tab onto an empty
-    /// screen.
-    static func available(for results: KindedResults) -> [SearchFilter] {
-        allCases.filter { filter in
-            guard let kind = filter.kind else { return true }
-            return results.populatedKinds.contains(kind)
+    init?(kind: ItemKind) {
+        switch kind {
+        case .artist: self = .artists
+        case .song: self = .songs
+        case .album: self = .albums
+        case .playlist: return nil
         }
     }
 }

@@ -228,8 +228,63 @@ final class Session {
         term: String,
         budgets: [ItemKind: Int] = Session.searchBudgets
     ) async throws -> KindedResults {
-        let results = try await catalog.search(term: term, budgets: budgets)
+        var latest = KindedResults(byKind: [:])
+        for try await snapshot in searchIncrementally(term: term, budgets: budgets) {
+            latest = snapshot
+        }
+        return latest
+    }
 
+    /// The same search, delivered a kind at a time.
+    ///
+    /// What the kid's screen uses. The kinds do not cost the same — artists
+    /// settle in one request because nothing is filtered out of them, songs page
+    /// several times to fill their budget — so awaiting all three makes the tab
+    /// the screen opens on wait for the two it is not showing.
+    ///
+    /// Logging still happens exactly once, at the end. See ``logSearch``.
+    func searchIncrementally(
+        term: String,
+        budgets: [ItemKind: Int] = Session.searchBudgets
+    ) -> AsyncThrowingStream<KindedResults, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                var latest = KindedResults(byKind: [:])
+                do {
+                    for try await snapshot in catalog.searchIncrementally(
+                        term: term, budgets: budgets
+                    ) {
+                        latest = snapshot
+                        continuation.yield(snapshot)
+                    }
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
+                }
+                logSearch(term: term, results: latest)
+                continuation.finish()
+            }
+            // A kid typing a second term over the first drops this stream, and
+            // dropping it has to stop the requests behind it rather than leave
+            // them running to log a term nobody is waiting on any more.
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Writes the search and everything it filtered out.
+    ///
+    /// Blocked results are logged even though the kid never saw them. They are
+    /// the most useful line in a parent's report: they are how a parent finds
+    /// out what their kid is curious about.
+    ///
+    /// **Once, when every kind is in** — not once per kind, which would make one
+    /// thing a kid did read as three searches in the report, and not on a search
+    /// that threw or was cancelled, where the counts would be of a page that was
+    /// never finished. The cost is that a kid who retypes fast enough to cancel
+    /// leaves no record of the first term. That is the right trade: the report is
+    /// read as a record of what a kid looked for, and a half-typed term they
+    /// replaced themselves is noise in it.
+    private func logSearch(term: String, results: KindedResults) {
         eventLog.log(
             SearchEvent(
                 term: term,
@@ -243,8 +298,6 @@ final class Session {
         for blocked in results.blocked {
             log(blocked.item, blockedFor: BlockReason(blocked.reason), origin: .search(term: term))
         }
-
-        return results
     }
 
     // MARK: - Playing

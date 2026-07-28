@@ -309,15 +309,17 @@ struct KindedSearchTests {
         #expect(results.blocked.first?.reason == .deniedByParent(Fix.artist))
     }
 
-    @Test("Allowed items are ordered containers first, then songs")
-    func displayOrderPutsContainersFirst() async throws {
+    @Test("Allowed items follow the order the kid's filter offers them in")
+    func followsDisplayOrder() async throws {
         let sut = FilteredCatalog(source: source(), engine: Fix.engine())
 
         let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
 
+        // Artists, then songs, then albums — the tab order, so the two cannot
+        // disagree about what "first" means.
         #expect(results.items.prefix(3).allSatisfy { $0.id.kind == .artist })
-        #expect(results.items.dropFirst(3).prefix(4).allSatisfy { $0.id.kind == .album })
-        #expect(results.items.dropFirst(7).allSatisfy { $0.id.kind == .song })
+        #expect(results.items.dropFirst(3).prefix(24).allSatisfy { $0.id.kind == .song })
+        #expect(results.items.dropFirst(27).allSatisfy { $0.id.kind == .album })
     }
 
     @Test("Only kinds that found something are offered as filters")
@@ -373,6 +375,106 @@ struct KindedSearchTests {
         let results = try await sut.search(term: input.term, budgets: input.budgets)
 
         #expect(results.items.isEmpty)
+        #expect(await source.searchCalls.isEmpty)
+    }
+}
+
+@Suite("Incremental search")
+struct IncrementalSearchTests {
+    private func source() -> StubCatalogSource {
+        StubCatalogSource(pagesByKind: [
+            .artist: [Fix.page((0..<3).map(Fix.artistItem), hasMore: false)],
+            .album: [Fix.page((0..<4).map { Fix.albumItem($0) }, hasMore: false)],
+            .song: [Fix.page((0..<30).map { Fix.songItem($0) }, hasMore: false)],
+        ])
+    }
+
+    private func snapshots(
+        _ sut: FilteredCatalog,
+        budgets: [ItemKind: Int] = [.artist: 6, .album: 6, .song: 24]
+    ) async throws -> [KindedResults] {
+        var all: [KindedResults] = []
+        for try await snapshot in sut.searchIncrementally(term: "x", budgets: budgets) {
+            all.append(snapshot)
+        }
+        return all
+    }
+
+    @Test("An opening snapshot names what is coming before any of it arrives")
+    func opensWithEverythingPending() async throws {
+        let sut = FilteredCatalog(source: source(), engine: Fix.engine())
+
+        let all = try await snapshots(sut)
+
+        // The empty opener, then one snapshot per kind as it lands.
+        #expect(all.count == 4)
+        #expect(all.first?.byKind.isEmpty == true)
+        #expect(all.first?.pending == [.artist, .album, .song])
+        #expect(all.first?.isComplete == false)
+    }
+
+    @Test("Every snapshot is a whole picture, and pending only shrinks")
+    func snapshotsAreCumulative() async throws {
+        let sut = FilteredCatalog(source: source(), engine: Fix.engine())
+
+        let all = try await snapshots(sut)
+
+        // Completion order is a race, so what is asserted is the shape rather
+        // than which kind won: nothing is ever lost between snapshots, and a
+        // caller can replace its state with each one instead of accumulating.
+        var arrived = 0
+        var outstanding = 3
+        for snapshot in all {
+            #expect(snapshot.byKind.count >= arrived)
+            #expect(snapshot.pending.count <= outstanding)
+            #expect(snapshot.byKind.count + snapshot.pending.count == 3)
+            arrived = snapshot.byKind.count
+            outstanding = snapshot.pending.count
+        }
+        #expect(all.last?.isComplete == true)
+    }
+
+    @Test("A kind that came back empty is not the same as one still coming")
+    func pendingIsDistinctFromEmpty() async throws {
+        let source = StubCatalogSource(pagesByKind: [
+            .artist: [Fix.page([], hasMore: false)],
+            .song: [Fix.page((0..<5).map { Fix.songItem($0) }, hasMore: false)],
+        ])
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let all = try await snapshots(sut, budgets: [.artist: 6, .song: 24])
+
+        // Both read as "no items", and the screen has to tell them apart to
+        // choose between a spinner and "nothing matched".
+        #expect(all.first?.isPending(.artist) == true)
+        #expect(all.last?.isPending(.artist) == false)
+        #expect(all.last?.items(of: .artist).isEmpty == true)
+        #expect(all.last?.results(for: .artist) != nil)
+    }
+
+    @Test("The awaited search ends where the incremental one does")
+    func awaitedMatchesFinalSnapshot() async throws {
+        let streamed = try await snapshots(
+            FilteredCatalog(source: source(), engine: Fix.engine())
+        ).last
+        let awaited = try await FilteredCatalog(source: source(), engine: Fix.engine())
+            .search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
+
+        // One is implemented in terms of the other, and this is the test that
+        // notices if that stops being true.
+        #expect(awaited.items.map(\.id) == streamed?.items.map(\.id))
+        #expect(awaited.isComplete)
+        #expect(awaited.pending.isEmpty)
+    }
+
+    @Test("A degenerate incremental search yields nothing and asks for nothing")
+    func degenerateYieldsNothing() async throws {
+        let source = source()
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let all = try await snapshots(sut, budgets: [:])
+
+        #expect(all.isEmpty)
         #expect(await source.searchCalls.isEmpty)
     }
 }

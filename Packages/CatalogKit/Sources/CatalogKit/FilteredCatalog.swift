@@ -73,33 +73,49 @@ public struct FilteredResults: Sendable, Hashable {
 /// request. Running one loop per kind keeps every one of those assumptions true
 /// rather than patching around them.
 public struct KindedResults: Sendable, Hashable {
-    /// Results for each kind that was asked for.
+    /// Results for each kind whose loop has finished.
     ///
-    /// A kind that was never requested is absent. A kind that was requested and
-    /// matched nothing is present and empty — the caller needs to tell those
-    /// apart to know whether a filter is worth offering.
+    /// Three states, not two, and they are worth keeping apart: a kind absent
+    /// from both this and ``pending`` was never asked for; a kind in ``pending``
+    /// is still on its way; a kind here with no items was asked for and matched
+    /// nothing.
     public let byKind: [ItemKind: FilteredResults]
 
-    /// Containers first, then songs.
+    /// Kinds that were asked for and have not come back yet.
     ///
-    /// An artist or an album is a way *further in*: tapping one pushes a browse
-    /// screen, which is how a kid reaches a whole record rather than the single
-    /// track that happened to match their spelling. Songs are the long tail, and
-    /// a page of them above the artist buries the thing most searches are
-    /// actually for.
-    public static let displayOrder: [ItemKind] = [.artist, .album, .song, .playlist]
+    /// Non-empty only on a snapshot from ``FilteredCatalog/searchIncrementally(term:budgets:)``.
+    /// The awaited search never returns one of these.
+    public let pending: Set<ItemKind>
 
-    public init(byKind: [ItemKind: FilteredResults]) {
+    /// The order the kid's filter offers them in.
+    ///
+    /// Artists first because it is the kind a search is most often *for* — and,
+    /// usefully, the cheapest to fetch: artists carry no rating so nothing is
+    /// filtered out, which means one request and no paging. It is reliably the
+    /// first kind on screen.
+    ///
+    /// Songs before albums because a kid looking for a particular song is the
+    /// commoner case than one looking for the record it came off.
+    public static let displayOrder: [ItemKind] = [.artist, .song, .album, .playlist]
+
+    public init(byKind: [ItemKind: FilteredResults], pending: Set<ItemKind> = []) {
         self.byKind = byKind
+        self.pending = pending
     }
 
     public func results(for kind: ItemKind) -> FilteredResults? { byKind[kind] }
 
     public func items(of kind: ItemKind) -> [CatalogItem] { byKind[kind]?.items ?? [] }
 
-    /// Which kinds actually returned something, in ``displayOrder``. What a
-    /// filter control should offer: a filter leading to an empty screen is a
-    /// dead end a kid has no way to interpret.
+    /// Whether this kind is still being fetched. Distinct from having come back
+    /// empty, which is what makes a spinner and "nothing matched" different
+    /// screens instead of the same guess.
+    public func isPending(_ kind: ItemKind) -> Bool { pending.contains(kind) }
+
+    /// Every kind has reported in.
+    public var isComplete: Bool { pending.isEmpty }
+
+    /// Which kinds actually returned something, in ``displayOrder``.
     public var populatedKinds: [ItemKind] {
         Self.displayOrder.filter { !items(of: $0).isEmpty }
     }
@@ -277,23 +293,79 @@ public struct FilteredCatalog: Sendable {
     /// - Parameter budgets: how many allowed items to aim for, per kind. A kind
     ///   mapped to zero or less is skipped entirely and makes no request.
     public func search(term: String, budgets: [ItemKind: Int]) async throws -> KindedResults {
-        let wanted = budgets.filter { $0.value > 0 }
-        guard !term.isEmpty, !wanted.isEmpty else { return KindedResults(byKind: [:]) }
+        // Built on the incremental search rather than beside it, so the two
+        // cannot drift. This one simply keeps the last snapshot.
+        var latest = KindedResults(byKind: [:])
+        for try await snapshot in searchIncrementally(term: term, budgets: budgets) {
+            latest = snapshot
+        }
+        return latest
+    }
 
-        return try await withThrowingTaskGroup(of: (ItemKind, FilteredResults).self) { group in
-            for (kind, limit) in wanted {
-                group.addTask {
-                    (kind, try await self.search(term: term, kinds: [kind], limit: limit))
+    /// The same search, delivered a kind at a time as each one lands.
+    ///
+    /// Every element is a **complete snapshot**, not a delta: the kinds that
+    /// have arrived so far, plus ``KindedResults/pending`` naming the ones still
+    /// out. A caller replaces its state with each element and never accumulates.
+    ///
+    /// This exists because the kinds do not cost the same. Artists carry no
+    /// rating, so nothing is filtered out of that page and it settles in a
+    /// single request; songs lose results to the rating check and page two,
+    /// three or four times to fill their budget. Awaiting all three means the
+    /// screen waits on the slowest, showing nothing, when the kind it opens on
+    /// has been ready most of that time.
+    ///
+    /// The first element is always the empty snapshot with everything pending,
+    /// so a caller knows which kinds are coming before any of them arrive.
+    ///
+    /// Cancellation propagates: dropping the stream cancels the searches behind
+    /// it, which matters because a kid types a second term over the first.
+    public func searchIncrementally(
+        term: String,
+        budgets: [ItemKind: Int]
+    ) -> AsyncThrowingStream<KindedResults, any Error> {
+        let wanted = budgets.filter { $0.value > 0 }
+        guard !term.isEmpty, !wanted.isEmpty else {
+            return AsyncThrowingStream { $0.finish() }
+        }
+
+        // Started in display order so the kind the screen opens on has its
+        // request away first. It is a head start, not a guarantee — the group
+        // still yields in completion order.
+        let ordered = wanted.keys.sorted { a, b in
+            let order = KindedResults.displayOrder
+            return (order.firstIndex(of: a) ?? .max) < (order.firstIndex(of: b) ?? .max)
+        }
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                var byKind: [ItemKind: FilteredResults] = [:]
+                var pending = Set(wanted.keys)
+                continuation.yield(KindedResults(byKind: byKind, pending: pending))
+
+                do {
+                    try await withThrowingTaskGroup(of: (ItemKind, FilteredResults).self) { group in
+                        for kind in ordered {
+                            guard let limit = wanted[kind] else { continue }
+                            group.addTask {
+                                (kind, try await self.search(term: term, kinds: [kind], limit: limit))
+                            }
+                        }
+                        for try await (kind, results) in group {
+                            byKind[kind] = results
+                            pending.remove(kind)
+                            continuation.yield(KindedResults(byKind: byKind, pending: pending))
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    // One kind failing aborts the search, which is the existing
+                    // rule: the loop retries to fill a page, never to recover
+                    // from a failure.
+                    continuation.finish(throwing: error)
                 }
             }
-
-            var byKind: [ItemKind: FilteredResults] = [:]
-            for try await (kind, results) in group {
-                byKind[kind] = results
-            }
-            // Completion order is a race; the dictionary is not, and everything
-            // downstream reads it through `KindedResults.displayOrder`.
-            return KindedResults(byKind: byKind)
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
