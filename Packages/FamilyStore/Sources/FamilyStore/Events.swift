@@ -49,6 +49,19 @@ public struct PlayEvent: Hashable, Sendable {
 
     /// Captured at play time, so a delisted song still reads as a name.
     public let displayName: String
+
+    /// What the catalog said about this song when it played.
+    ///
+    /// Recorded because the parent's report re-judges old rows against today's
+    /// policy, and **the rating is the input that decides most of them.** A row
+    /// without it, handed to a `denyPlusAuto` engine, comes back
+    /// `blocked(.unrated)` for everything — a report claiming a kid can no
+    /// longer play the whole of last week.
+    ///
+    /// A ``StoredRating`` rather than a bare optional so that "the catalog gave
+    /// no rating" stays distinguishable from "nobody wrote it down". `nil` here
+    /// is not `.clean` and is not `.unknown` either.
+    public let rating: StoredRating
     public let at: Date
     public let secondsPlayed: Int
     public let origin: PlaybackOrigin
@@ -58,6 +71,7 @@ public struct PlayEvent: Hashable, Sendable {
         albumID: CatalogID? = nil,
         artistID: CatalogID? = nil,
         displayName: String,
+        rating: StoredRating = .unknown,
         at: Date = .now,
         secondsPlayed: Int,
         origin: PlaybackOrigin
@@ -66,6 +80,7 @@ public struct PlayEvent: Hashable, Sendable {
         self.albumID = albumID
         self.artistID = artistID
         self.displayName = displayName
+        self.rating = rating
         self.at = at
         self.secondsPlayed = secondsPlayed
         self.origin = origin
@@ -82,7 +97,17 @@ public struct BlockEvent: Hashable, Sendable {
 
     /// `nil` when lineage never resolved.
     public let artistID: CatalogID?
+
+    /// What the catalog said about this item when it was judged. See
+    /// ``PlayEvent/rating`` — same field, same reason, and here it also lets a
+    /// report say whether a block a parent has since allowed was about a rating
+    /// or about one of their own rules.
+    public let rating: StoredRating
     public let at: Date
+
+    /// Whether the kid ever saw this. The one field on a block that is about
+    /// them rather than about the item.
+    public let reach: BlockReach
 
     /// Captured at judgement time, because the policy that produced it may have
     /// changed by the time anyone reads the report.
@@ -93,14 +118,18 @@ public struct BlockEvent: Hashable, Sendable {
         itemID: CatalogID,
         displayName: String,
         artistID: CatalogID? = nil,
+        rating: StoredRating = .unknown,
         at: Date = .now,
+        reach: BlockReach,
         reason: BlockReason,
         origin: PlaybackOrigin
     ) {
         self.itemID = itemID
         self.displayName = displayName
         self.artistID = artistID
+        self.rating = rating
         self.at = at
+        self.reach = reach
         self.reason = reason
         self.origin = origin
     }

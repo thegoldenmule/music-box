@@ -40,8 +40,26 @@ final class KidPlayerModel {
     /// filtered out of something they were already allowed to play.
     private(set) var message: String?
 
+    /// Where the playhead is, mirrored here for the same reason ``status`` is:
+    /// nothing about `MusicKitPlayer` is observable, so a scrubber reading it
+    /// directly would draw once and then sit still. Kept current by the poll
+    /// below, which already runs whenever anything is loaded — the full-screen
+    /// player costs no extra timer, and the bar keeps working when it is closed.
+    private(set) var playbackTime: TimeInterval = 0
+
     var current: Entry? {
         queue.indices.contains(index) ? queue[index] : nil
+    }
+
+    /// How long the current track is, or `nil` when the catalog did not say.
+    ///
+    /// It comes back with the song itself from every path that builds a
+    /// `CatalogItem`, so in practice this is populated — but a scrubber with no
+    /// end to scrub to is meaningless, and the full-screen player draws elapsed
+    /// time alone rather than guessing at a length.
+    var duration: TimeInterval? {
+        guard let seconds = current?.item.duration, seconds > 0 else { return nil }
+        return seconds
     }
 
     var isPlaying: Bool { status == .playing }
@@ -99,6 +117,23 @@ final class KidPlayerModel {
         }
     }
 
+    /// Moves the playhead inside the track already playing.
+    ///
+    /// The fourth control, and the only one that has ever been added to the
+    /// three above. It is not a door — it reaches nowhere the verdict that
+    /// started this track did not already allow — which is the test every
+    /// control on this screen has to pass.
+    ///
+    /// ``playbackTime`` is set here rather than left to the next poll: half a
+    /// second of the thumb springing back to where it was is the whole
+    /// difference between a scrubber that works and one that fights.
+    func seek(to seconds: TimeInterval) async {
+        guard current != nil else { return }
+        let target = min(max(0, seconds), duration ?? seconds)
+        await session.player.seek(to: target)
+        playbackTime = target
+    }
+
     /// Skip forward. Stops at the end rather than wandering into anything.
     func skip() async {
         guard !queue.isEmpty else { return }
@@ -118,6 +153,7 @@ final class KidPlayerModel {
         queue = []
         index = 0
         status = .stopped
+        playbackTime = 0
     }
 
     /// Writes the play in progress without disturbing playback.
@@ -138,6 +174,7 @@ final class KidPlayerModel {
         isBusy = true
         defer { isBusy = false }
         hasStartedCurrent = false
+        playbackTime = 0
 
         do {
             try await session.play(entry.item, origin: entry.origin)
@@ -171,6 +208,7 @@ final class KidPlayerModel {
 
     private func syncStatus() {
         status = session.player.status
+        playbackTime = session.player.playbackTime
         if status == .playing { hasStartedCurrent = true }
     }
 

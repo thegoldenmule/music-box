@@ -259,6 +259,7 @@ struct Deletion {
                 displayName: "A Rude Song",
                 artistID: Fix.artist,
                 at: Fix.t0,
+                reach: .unseen,
                 reason: .explicitContent,
                 origin: .home
             )

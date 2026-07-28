@@ -26,6 +26,16 @@ final class Session {
 
     let container: ModelContainer
     let eventLog: EventLog
+
+    /// Reads a kid's whole history, unfiltered.
+    ///
+    /// A third context: the admin writes policy on `context`, the kid's session
+    /// writes events through ``EventLog``, and this only ever reads — reading a
+    /// report must never appear in the report. Held for the life of the session
+    /// because it is stateless: which kid it is asked about is a parameter and
+    /// not a property, so a parent can review one child while another is
+    /// mid-song.
+    let review: ReviewReader
     let player: MusicKitPlayer
     let passcodes: any PasscodeStore
 
@@ -85,6 +95,7 @@ final class Session {
         container = try FamilyStore.container()
         context = ModelContext(container)
         eventLog = EventLog(modelContainer: container)
+        review = ReviewReader(modelContainer: container)
         player = MusicKitPlayer()
         self.passcodes = passcodes
 
@@ -211,9 +222,93 @@ final class Session {
         return failure
     }
 
-    // MARK: - Unfiltered search, for the admin only
+    // MARK: - The parent's review
 
-    /// Catalog search with **no policy applied**.
+    /// A library reader for **any** kid, not just the active one.
+    ///
+    /// Built per call rather than held: the active kid's ``library`` is a
+    /// long-lived object the kid's screens draw from, and handing the admin the
+    /// same one would tie a parent's reading to whoever is playing.
+    func reviewLibrary(for kid: Kid) -> MergedLibrary {
+        MergedLibrary(
+            providers: [CloudKitLibraryProvider(kid: kid, context: context)],
+            catalog: source,
+            engine: kid.makeEngine(),
+            device: deviceLibraryStore
+        )
+    }
+
+    /// Names for identifiers a report holds and does not store.
+    ///
+    /// Block rows keep an artist *identifier* and their own title, so a group of
+    /// one artist's tracks would otherwise be labelled with whichever song was
+    /// blocked most recently. Best-effort and never awaited before the screen
+    /// draws: a name that does not arrive leaves the row reading as what it is.
+    func names(for ids: [CatalogID]) async -> [CatalogID: String] {
+        guard !ids.isEmpty, let items = try? await source.items(for: ids) else { return [:] }
+        return Dictionary(items.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Approve-from-report, or deny-from-report, on any kid.
+    ///
+    /// Goes through the same ``addEntry(kind:id:displayName:artworkURL:)`` the
+    /// list editor uses — awaited, with its failure surfaced. Nothing about a
+    /// report row is a permission on its own; this is a parent tapping.
+    ///
+    /// Past events are **not** rewritten. A block keeps the reason that produced
+    /// it; only the annotation changes on the next read.
+    func addEntry(
+        for kid: Kid,
+        kind: PolicyEntry.Kind,
+        id: CatalogID,
+        displayName: String
+    ) -> String? {
+        kid.addEntry(kind: kind, id: id, displayName: displayName)
+        do {
+            try context.save()
+        } catch {
+            return error.localizedDescription
+        }
+        // Only the active kid has live screens to rebuild.
+        if kid.id == self.kid.id { rebuildCatalog() }
+        return nil
+    }
+
+    /// Clears a kid's logs. Summaries go with them.
+    ///
+    /// On the admin's own context, not the reader's, so the copy the admin holds
+    /// does not keep rows the store no longer has.
+    func deleteHistory(for kid: Kid) -> String? {
+        kid.deleteHistory()
+        return saveLists()
+    }
+
+    /// Clears the logs **and** the kid's favorites and playlists.
+    ///
+    /// The only thing in the app that removes a child's own work, and it happens
+    /// only when a parent asks for it by name.
+    func deleteEverything(for kid: Kid) async -> String? {
+        kid.deleteEverything()
+        let failure = saveLists()
+        if kid.id == self.kid.id { await refreshLibrary() }
+        return failure
+    }
+
+    // MARK: - The admin's own way in
+    //
+    // **Nothing a parent does writes to the kid's log.** The activity report is
+    // read as a record of what one child did; a parent checking a rule, hearing
+    // a track before denying it, or looking at what a search returns is not
+    // that, and a report that mixes the two is worse than no report — it puts
+    // words in a child's mouth and the parent has no way to tell which rows are
+    // theirs.
+    //
+    // Every admin screen goes through one of the methods below. They are the
+    // only ones on this type that reach the catalog or the player without
+    // touching ``EventLog``, and any new admin surface belongs here rather than
+    // reusing a kid path.
+
+    /// Catalog search with **no policy applied** and nothing logged.
     ///
     /// A parent choosing what to deny has to be able to see it. This is the one
     /// place the engine is deliberately not consulted, and nothing on the kid's
@@ -223,6 +318,50 @@ final class Session {
     {
         let page = try await source.search(term: term, kinds: kinds, limit: limit, offset: 0)
         return try await source.resolveAncestry(for: page.items)
+    }
+
+    /// The kid's search, run by the parent, **not logged**.
+    ///
+    /// Filtered by the kid's real policy and by the real engine, because the
+    /// whole point is showing a parent what their child would get. It goes
+    /// straight to the catalog rather than through
+    /// ``searchIncrementally(term:budgets:)``, which is where the logging lives:
+    /// a parent typing terms into the admin must not turn up in their child's
+    /// report as things the child looked for.
+    func previewSearch(
+        term: String,
+        budgets: [ItemKind: Int] = Session.searchBudgets
+    ) async throws -> KindedResults {
+        var latest = KindedResults(byKind: [:])
+        for try await snapshot in catalog.searchIncrementally(term: term, budgets: budgets) {
+            latest = snapshot
+        }
+        return latest
+    }
+
+    /// Plays something for the parent, **not logged**.
+    ///
+    /// Still asks the engine, and still refuses what the kid could not play —
+    /// the admin's job here is to show what the kid's walls actually do, so
+    /// bypassing them would make the screen lie. What changes is that no block
+    /// is recorded on refusal and no play is recorded on stop.
+    ///
+    /// The two lines at the end are what make the second half true: with no
+    /// origin and the play already marked written, ``logCurrentPlay()`` has
+    /// nothing to do whenever this track ends, however it ends.
+    func previewPlay(_ item: CatalogItem) async throws {
+        let verdict = try await catalog.verdict(for: item)
+        if case .blocked(let reason) = verdict {
+            throw Refused(reason: BlockReason(reason))
+        }
+
+        // Whatever the kid was playing still gets its duration written; that one
+        // is theirs.
+        logCurrentPlay()
+
+        try await player.play(item)
+        playingOrigin = nil
+        currentPlayLogged = true
     }
 
     // MARK: - Apple Music access
@@ -255,35 +394,24 @@ final class Session {
     /// are the long tail where a kid is scanning for the one they meant.
     static let searchBudgets: [ItemKind: Int] = [.artist: 6, .album: 12, .song: 24]
 
-    /// Searches, and logs what came back — including everything filtered out.
-    ///
-    /// Blocked results are logged even though the kid never saw them. They are
-    /// the most useful line in a parent's report: they are how a parent finds
-    /// out what their kid is curious about.
-    ///
-    /// Every kind is fetched in one go, so the filter on the results screen is a
-    /// view onto what is already here rather than a new search. That keeps
-    /// switching instant, and it keeps the parent's report honest: one search is
-    /// one logged event, not one per time a kid taps a tab.
-    func search(
-        term: String,
-        budgets: [ItemKind: Int] = Session.searchBudgets
-    ) async throws -> KindedResults {
-        var latest = KindedResults(byKind: [:])
-        for try await snapshot in searchIncrementally(term: term, budgets: budgets) {
-            latest = snapshot
-        }
-        return latest
-    }
+    // There is deliberately no awaited, logging `search(term:)`. Every kind is
+    // fetched in one go and delivered incrementally, so the filter on the
+    // results screen is a view onto what is already here rather than a new
+    // search — and one search is one logged event, not one per time a kid taps
+    // a tab. An awaited convenience wrapper existed and had exactly one caller,
+    // the admin's diagnostics screen, which is the one place that must not log
+    // at all. Leaving it there was leaving the trap loaded for the next admin
+    // screen; ``previewSearch(term:budgets:)`` is what that caller wants.
 
-    /// The same search, delivered a kind at a time.
+    /// The kid's search, delivered a kind at a time.
     ///
     /// What the kid's screen uses. The kinds do not cost the same — artists
     /// settle in one request because nothing is filtered out of them, songs page
     /// several times to fill their budget — so awaiting all three makes the tab
     /// the screen opens on wait for the two it is not showing.
     ///
-    /// Logging still happens exactly once, at the end. See ``logSearch``.
+    /// Logging happens exactly once, and **survives the stream being dropped.**
+    /// See ``logSearch``.
     func searchIncrementally(
         term: String,
         budgets: [ItemKind: Int] = Session.searchBudgets
@@ -291,6 +419,15 @@ final class Session {
         AsyncThrowingStream { continuation in
             let task = Task {
                 var latest = KindedResults(byKind: [:])
+
+                // `byKind` non-empty is what "the kid settled on this term"
+                // actually means, and it is the test both exits below apply. A
+                // term replaced by more typing before any kind landed was never
+                // a search from the kid's point of view and stays out of the
+                // report, which is the trade this file always intended. A term
+                // whose results reached the screen is a search they made,
+                // whether or not the remaining kinds ever arrived.
+
                 do {
                     for try await snapshot in catalog.searchIncrementally(
                         term: term, budgets: budgets
@@ -299,15 +436,30 @@ final class Session {
                         continuation.yield(snapshot)
                     }
                 } catch {
-                    continuation.finish(throwing: error)
+                    // Cancellation is not a failure, it is a teardown, and it is
+                    // the common case: artists land first and the screen shows
+                    // results while songs are still paging, so anything that
+                    // ends the search — tapping into a result, the field
+                    // clearing, a parent opening the admin to go and read the
+                    // report — arrives mid-flight. Logging only on a clean run
+                    // meant those searches were never recorded at all, which is
+                    // the one thing the report cannot afford to be missing.
+                    if Task.isCancelled {
+                        if !latest.byKind.isEmpty { logSearch(term: term, results: latest) }
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                     return
                 }
-                logSearch(term: term, results: latest)
+
+                // Cancellation can also end the inner stream without throwing.
+                if !latest.byKind.isEmpty { logSearch(term: term, results: latest) }
                 continuation.finish()
             }
             // A kid typing a second term over the first drops this stream, and
             // dropping it has to stop the requests behind it rather than leave
-            // them running to log a term nobody is waiting on any more.
+            // them running to fill a page nobody is waiting on any more.
             continuation.onTermination = { _ in task.cancel() }
         }
     }
@@ -318,13 +470,21 @@ final class Session {
     /// the most useful line in a parent's report: they are how a parent finds
     /// out what their kid is curious about.
     ///
-    /// **Once, when every kind is in** — not once per kind, which would make one
-    /// thing a kid did read as three searches in the report, and not on a search
-    /// that threw or was cancelled, where the counts would be of a page that was
-    /// never finished. The cost is that a kid who retypes fast enough to cancel
-    /// leaves no record of the first term. That is the right trade: the report is
-    /// read as a record of what a kid looked for, and a half-typed term they
-    /// replaced themselves is noise in it.
+    /// **Once per term the kid settled on** — not once per kind, which would
+    /// make one thing a kid did read as three searches in the report.
+    ///
+    /// "Settled on" means results for it reached the screen, not that every kind
+    /// finished. A kid who retypes fast enough that nothing landed leaves no
+    /// record of the first term, which is the right trade: a half-typed term
+    /// they replaced themselves is noise. But a term whose results they *saw* is
+    /// a search they made, and it is recorded even though the stream was torn
+    /// down before the slower kinds arrived — which is what happens every time
+    /// someone taps into a result, or opens the admin to go and read the report.
+    ///
+    /// The cost, stated because it is real: a torn-down search logs the counts of
+    /// the kinds that had landed, so `resultCount` and `blockedCount` understate
+    /// a search nobody waited out. A row with slightly low counts is worth far
+    /// more to a parent than no row at all.
     private func logSearch(term: String, results: KindedResults) {
         eventLog.log(
             SearchEvent(
@@ -337,7 +497,14 @@ final class Session {
         )
 
         for blocked in results.blocked {
-            log(blocked.item, blockedFor: BlockReason(blocked.reason), origin: .search(term: term))
+            // Filtered out before the page was drawn: the kid never saw these
+            // and did nothing. Most of the block table is this.
+            log(
+                blocked.item,
+                blockedFor: BlockReason(blocked.reason),
+                reach: .unseen,
+                origin: .search(term: term)
+            )
         }
     }
 
@@ -368,7 +535,9 @@ final class Session {
 
         if case .blocked(let reason) = verdict {
             let blockReason = BlockReason(reason)
-            log(item, blockedFor: blockReason, origin: origin)
+            // They pressed play. One of the few block rows that describes
+            // something the child actually did.
+            log(item, blockedFor: blockReason, reach: .reached, origin: origin)
             throw Refused(reason: blockReason)
         }
 
@@ -536,7 +705,13 @@ final class Session {
                 try await library.addFavorite(item)
             }
         } catch let refusal as LibraryRefused {
-            log(refusal.item, blockedFor: BlockReason(refusal.reason), origin: origin)
+            // They tapped the heart.
+            log(
+                refusal.item,
+                blockedFor: BlockReason(refusal.reason),
+                reach: .reached,
+                origin: origin
+            )
             await refreshLibrary()
             return nil
         } catch {
@@ -590,7 +765,13 @@ final class Session {
         do {
             try await library.addToPlaylist(handle, song: song)
         } catch let refusal as LibraryRefused {
-            log(refusal.item, blockedFor: BlockReason(refusal.reason), origin: origin)
+            // They added it to a playlist.
+            log(
+                refusal.item,
+                blockedFor: BlockReason(refusal.reason),
+                reach: .reached,
+                origin: origin
+            )
             return nil
         } catch {
             return Self.message(for: error)
@@ -656,6 +837,10 @@ final class Session {
                 albumID: item.ancestors.first { $0.id.kind == .album }?.id,
                 artistID: item.ancestors.first { $0.id.kind == .artist }?.id,
                 displayName: item.title,
+                // Recorded so the parent's report can re-judge this row offline.
+                // Without it every play of a level 2 kid's week reads back as
+                // unrated-and-therefore-blocked.
+                rating: StoredRating(item.rating),
                 secondsPlayed: player.playbackSeconds,
                 origin: origin
             ),
@@ -670,16 +855,32 @@ final class Session {
     /// what their kid went looking for.
     func logBlocked(_ blocked: [BlockedItem], origin: PlaybackOrigin) {
         for item in blocked {
-            log(item.item, blockedFor: BlockReason(item.reason), origin: origin)
+            log(item.item, blockedFor: BlockReason(item.reason), reach: .unseen, origin: origin)
         }
     }
 
-    private func log(_ item: CatalogItem, blockedFor reason: BlockReason, origin: PlaybackOrigin) {
+    /// Writes one block.
+    ///
+    /// **`reach` has no default**, deliberately. It is the one field on a block
+    /// that describes the child rather than the item, and the two paths into
+    /// here are otherwise indistinguishable: a result filtered out of a page the
+    /// kid never saw carries the same identifier, reason and origin as a song
+    /// they pressed play on. A default would let a call site forget which of
+    /// those it is, and the parent's report would read intent into our own
+    /// filter. See ``BlockReach``.
+    private func log(
+        _ item: CatalogItem,
+        blockedFor reason: BlockReason,
+        reach: BlockReach,
+        origin: PlaybackOrigin
+    ) {
         eventLog.log(
             BlockEvent(
                 itemID: item.id,
                 displayName: item.title,
                 artistID: item.ancestors.first { $0.id.kind == .artist }?.id,
+                rating: StoredRating(item.rating),
+                reach: reach,
                 reason: reason,
                 origin: origin
             ),

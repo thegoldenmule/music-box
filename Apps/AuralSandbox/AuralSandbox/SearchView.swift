@@ -12,6 +12,12 @@ import SwiftUI
 /// It shows blocked items, their reasons, and the rule that fired. **None of
 /// that may ever appear on the kid's side**, which is exactly why it now lives
 /// behind the passcode.
+///
+/// **Nothing on this screen is written to the kid's log.** It searches and plays
+/// through the admin's own methods, `previewSearch` and `previewPlay`, so a
+/// parent poking at diagnostics does not turn up in their child's activity
+/// report as terms the child searched for and tracks the child played. It used
+/// to, and the report is the screen that made it obvious.
 struct SearchView: View {
     @Bindable var session: Session
 
@@ -203,7 +209,7 @@ struct SearchView: View {
             isSearching = true
             defer { isSearching = false }
             do {
-                results = try await session.search(term: term)
+                results = try await session.previewSearch(term: term)
             } catch {
                 message = Session.message(for: error)
             }
@@ -213,7 +219,7 @@ struct SearchView: View {
     private func play(_ item: CatalogItem) {
         Task {
             do {
-                try await session.play(item, origin: .search(term: term))
+                try await session.previewPlay(item)
             } catch let refused as Session.Refused {
                 message = describe(refused.reason)
             } catch {

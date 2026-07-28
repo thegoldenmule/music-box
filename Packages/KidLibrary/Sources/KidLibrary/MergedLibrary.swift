@@ -223,6 +223,131 @@ public final class MergedLibrary {
         )
     }
 
+    // MARK: - Reading, for the admin
+
+    /// The whole shelf, unfiltered, with today's verdict on every row.
+    ///
+    /// **The one read on this type that keeps what the engine turns down.**
+    /// Everywhere else in this file a blocked row is separated out so a screen
+    /// can drop it; here it stays in place with its verdict attached, because
+    /// the parent's report is the surface that exists to show it. There is no
+    /// variant of this method that filters.
+    ///
+    /// Resolution is best-effort and never a precondition for drawing. Offline,
+    /// every row still renders from the copies made at write time — and every
+    /// verdict that would have turned on a rating we do not hold comes back as
+    /// ``AncestryConfidence/unknown`` rather than as a confident block, because
+    /// a report full of "they can't play this any more" that is really "we did
+    /// not ask" is worse than a report that says less.
+    ///
+    /// Never reachable from a kid screen: see ``ProviderHealth``, which is
+    /// admin-facing by construction.
+    public func reviewed() async -> ReviewedLibrary {
+        var health: [LibraryProviderID: ProviderHealth] = [:]
+        let live = Set(liveProviders.map(\.id))
+        let readable = Set(readableProviders.map(\.id))
+        for provider in providers {
+            if !live.contains(provider.id) {
+                health[provider.id] = .notConfigured(.sharedDevice)
+            } else if !readable.contains(provider.id) {
+                health[provider.id] = .notConfigured(.notYetAsked)
+            } else {
+                health[provider.id] = .live
+            }
+        }
+
+        var favoriteRows: [CatalogID: FavoriteRow] = [:]
+        var playlistRows: [UUID: PlaylistRow] = [:]
+        for provider in readableProviders {
+            do {
+                for row in try await provider.favorites() where favoriteRows[row.catalogID] == nil {
+                    favoriteRows[row.catalogID] = row
+                }
+                for row in try await provider.playlists() where playlistRows[row.handle.local] == nil
+                {
+                    playlistRows[row.handle.local] = row
+                }
+            } catch {
+                // The kid's side swallows this; the admin is told. A short shelf
+                // and a broken read look identical and only one is about the
+                // child.
+                health[provider.id] = .failed(String(describing: error))
+            }
+        }
+
+        let favorites = favoriteRows.values.sorted { $0.favoritedAt > $1.favoritedAt }
+        let playlists = playlistRows.values.sorted { $0.modifiedAt > $1.modifiedAt }
+
+        // One batch for everything on the screen, favorites and playlist entries
+        // together — lineage before judgement, as everywhere else.
+        var wanted: [CatalogID] = favorites.map(\.catalogID)
+        var seen = Set(wanted)
+        for playlist in playlists {
+            for entry in playlist.entries where seen.insert(entry.catalogID).inserted {
+                wanted.append(entry.catalogID)
+            }
+        }
+
+        var resolved: [CatalogID: CatalogItem] = [:]
+        var isResolved = true
+        if !wanted.isEmpty {
+            do {
+                let items = try await catalog.items(for: wanted)
+                for item in try await catalog.resolveAncestry(for: items) {
+                    resolved[item.id] = item
+                }
+            } catch {
+                isResolved = false
+            }
+        }
+
+        return ReviewedLibrary(
+            favorites: favorites.map { annotate($0, $0.catalogID, resolved) },
+            playlists: playlists.map { row in
+                ReviewedPlaylist(
+                    row: row,
+                    entries: row.entries.map { annotate($0, $0.catalogID, resolved) }
+                )
+            },
+            providers: health,
+            unresolved: wanted.count { resolved[$0] == nil },
+            isResolved: isResolved
+        )
+    }
+
+    /// Judges one stored row on whatever the catalog gave back for it.
+    ///
+    /// A row that resolved carries a real rating and real lineage, so its
+    /// verdict is exact. One that did not carries neither — and a library row,
+    /// unlike an event row, has no rating column to fall back on, which is the
+    /// whole reason ``AncestryConfidence/unknown`` exists.
+    private func annotate<Row: Sendable>(
+        _ row: Row,
+        _ id: CatalogID,
+        _ resolved: [CatalogID: CatalogItem]
+    ) -> Annotated<Row> {
+        guard let item = resolved[id] else {
+            return ReviewAnnotator.annotate(
+                row,
+                knowing: ReviewAnnotator.Knowledge(
+                    item: Item(id: id),
+                    ancestryIsComplete: false,
+                    ratingIsRecorded: false
+                ),
+                with: engine
+            )
+        }
+        return ReviewAnnotator.annotate(
+            row,
+            knowing: ReviewAnnotator.Knowledge(
+                item: item.policyItem,
+                ancestryIsComplete: true,
+                ratingIsRecorded: true
+            ),
+            with: engine
+        )
+    }
+
     // MARK: - Writing
 
     /// Marks one item, in every live provider that has a primitive for its kind.

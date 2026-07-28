@@ -272,4 +272,20 @@ public final class Kid {
         summaries.removeAll()
         modifiedAt = at
     }
+
+    /// Everything this kid did: their history **and** their library.
+    ///
+    /// The deliberate ask, offered from the screen that shows a parent what we
+    /// hold — because the honest place to offer removing it is the place that
+    /// shows it. Distinct from ``deleteHistory(at:)`` precisely so that a
+    /// playlist a child made is never taken by a sweep, a retention window, or a
+    /// parent who meant "clear the logs".
+    ///
+    /// Lists, mode and unrated behavior stay. A parent erasing what their child
+    /// did is not asking to rebuild their allow list.
+    public func deleteEverything(at: Date = .now) {
+        deleteHistory(at: at)
+        favorites.removeAll()
+        playlists.removeAll()
+    }
 }

@@ -86,6 +86,7 @@ struct Writing {
                 displayName: "A Rude Song",
                 artistID: Fix.artist,
                 at: Fix.at,
+                reach: .unseen,
                 reason: .deniedByParent(Fix.artist),
                 origin: .search(term: "dinosaurs")
             ),
@@ -267,6 +268,7 @@ struct Reasons {
                 itemID: Fix.song,
                 displayName: "A Song",
                 at: Fix.at,
+                reach: .unseen,
                 reason: reason,
                 origin: .home
             )
@@ -304,6 +306,7 @@ struct BlockedItemKinds {
                 itemID: id,
                 displayName: "Something",
                 at: Fix.at,
+                reach: .unseen,
                 reason: .notOnAllowList,
                 origin: .home
             )

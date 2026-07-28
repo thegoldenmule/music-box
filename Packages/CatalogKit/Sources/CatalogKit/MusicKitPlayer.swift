@@ -33,8 +33,28 @@ public final class MusicKitPlayer: CatalogPlayer {
         }
     }
 
+    public var playbackTime: TimeInterval {
+        max(0, player.playbackTime)
+    }
+
+    /// Heard before the current stretch began. Everything since is `playbackTime
+    /// - stretchStart`, so nothing has to be sampled on a timer: a seek is the
+    /// only event that breaks the correspondence between position and listening,
+    /// and a seek is something this type is told about.
+    private var heardBeforeStretch: TimeInterval = 0
+    private var stretchStart: TimeInterval = 0
+
     public var playbackSeconds: Int {
-        max(0, Int(player.playbackTime))
+        max(0, Int(heardBeforeStretch + max(0, playbackTime - stretchStart)))
+    }
+
+    public func seek(to seconds: TimeInterval) async {
+        // Bank the stretch that ends here before moving, or a kid who drags back
+        // to the start erases the minute they just listened to.
+        heardBeforeStretch += max(0, playbackTime - stretchStart)
+        let target = max(0, seconds)
+        stretchStart = target
+        player.playbackTime = target
     }
 
     public func play(_ item: CatalogItem) async throws {
@@ -65,6 +85,8 @@ public final class MusicKitPlayer: CatalogPlayer {
 
         try await mapErrors { try await Self.start(song) }
         nowPlaying = item
+        heardBeforeStretch = 0
+        stretchStart = 0
     }
 
     /// Queues and starts, off any actor.
@@ -97,6 +119,8 @@ public final class MusicKitPlayer: CatalogPlayer {
         player.stop()
         player.queue = ApplicationMusicPlayer.Queue()
         nowPlaying = nil
+        heardBeforeStretch = 0
+        stretchStart = 0
     }
 
     /// Turns MusicKit's errors into ones the UI can write a sentence about.

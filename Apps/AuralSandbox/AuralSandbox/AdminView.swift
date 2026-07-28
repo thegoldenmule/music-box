@@ -18,6 +18,7 @@ struct AdminView: View {
     var body: some View {
         Form {
             kidsSection
+            reviewSection
             sandboxSection
             listSection(.allow)
             listSection(.deny)
@@ -81,6 +82,23 @@ struct AdminView: View {
                     newKidName = ""
                 }
                 .disabled(newKidName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    // MARK: - Review
+
+    /// The one screen in the app that shows everything.
+    ///
+    /// Above the lists rather than below them, because reading what happened is
+    /// what tells a parent whether the lists are in the right place — and
+    /// because approve-from-report is how a level 1 list is meant to be built.
+    private var reviewSection: some View {
+        Section {
+            NavigationLink {
+                ReviewView(session: session, kid: session.kid)
+            } label: {
+                Label("Review Activity", systemImage: "list.bullet.rectangle")
             }
         }
     }

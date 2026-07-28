@@ -240,6 +240,20 @@ choices are expensive to reverse:
   `originKind`/`originID` (a `browse` origin can be an artist *or* an album, so
   the discriminator does not imply the kind), `itemKind` on a block, and
   `deniedByKind` — MusicKit identifiers are only unique within a type.
+- Two more were added when the parent's review section was built, both for the
+  same reason and both free only because nothing has shipped. **`reach`** on a
+  block says whether the kid saw it: a result filtered out of a page and a song
+  they pressed play on are otherwise identical rows, and only one of them is
+  about the child. **`rating`** on plays and blocks records what the catalog
+  said, because the report re-judges old rows against today's policy and the
+  rating is what decides most of them — without it every play of a level 2
+  kid's week reads back as blocked-as-unrated. It is a `StoredRating`, not a
+  `ContentRating?`: writing a three-state value down makes it four, and
+  `unrated` (the catalog answered, no rating) must stay distinct from `unknown`
+  (nobody wrote one down). The second is not a fact about the item, and a
+  report that treats it as one is showing a parent our gaps as their child's
+  music. It also turns research question 1 into something the log measures
+  continuously rather than something a hand-run probe answered once.
 - The admin passcode lives in the **Keychain**, not the app store, so it
   survives a reinstall.
 - **Favorites and playlists are not events and must be exempt from whatever

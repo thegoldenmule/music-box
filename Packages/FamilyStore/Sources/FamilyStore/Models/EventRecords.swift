@@ -61,6 +61,14 @@ public final class PlayEventRecord {
     /// Captured at play time; survives delisting.
     public private(set) var displayName: String = ""
 
+    /// What the catalog said when this played. See ``PlayEvent/rating`` — the
+    /// parent's report re-judges these rows and cannot do it without this.
+    ///
+    /// The schema default is ``StoredRating/unknown``, which is the honest one:
+    /// a row that somehow fell back to it is a row nobody rated, and that is
+    /// exactly what `unknown` means.
+    public private(set) var rating: String = StoredRating.Name.unknown
+
     /// Never below ``EventLog/minimumPlaySeconds``. A mis-tap is not a listen,
     /// and the filter is applied before the row is made.
     public private(set) var secondsPlayed: Int = 0
@@ -80,11 +88,34 @@ public final class PlayEventRecord {
         self.albumID = event.albumID?.rawValue
         self.artistID = event.artistID?.rawValue
         self.displayName = event.displayName
+        self.rating = event.rating.stored
         self.secondsPlayed = event.secondsPlayed
         self.origin = origin.name
         self.originTerm = origin.term
         self.originKind = origin.kind
         self.originID = origin.id
+    }
+
+    /// Builds a row straight from stored strings, bypassing the typed enums.
+    ///
+    /// Internal, and the only way to produce a row this version cannot read —
+    /// which is what the `unreadable` count in ``ReviewWindow`` has to be tested
+    /// against. Until the parent's report existed, nothing had ever exercised
+    /// the `nil` return below.
+    init(
+        id: UUID = UUID(),
+        songID: String,
+        rawOrigin: String,
+        originTerm: String? = nil,
+        at: Date = .now
+    ) {
+        self.id = id
+        self.at = at
+        self.songID = songID
+        self.displayName = "A Song"
+        self.secondsPlayed = 30
+        self.origin = rawOrigin
+        self.originTerm = originTerm
     }
 
     /// The typed event, or `nil` if the origin columns do not read back.
@@ -104,6 +135,7 @@ public final class PlayEventRecord {
             albumID: albumID.map { CatalogID(.album, $0) },
             artistID: artistID.map { CatalogID(.artist, $0) },
             displayName: displayName,
+            rating: StoredRating(stored: rating),
             at: at,
             secondsPlayed: secondsPlayed,
             origin: origin
@@ -130,6 +162,20 @@ public final class BlockEventRecord {
     /// own name rather than dropping it.
     public private(set) var artistID: String?
 
+    /// What the catalog said when this was judged. See ``PlayEvent/rating``.
+    public private(set) var rating: String = StoredRating.Name.unknown
+
+    /// Whether the kid saw this or whether we filtered it before they could.
+    ///
+    /// Not in the spec's original schema, which stored neither — and the two
+    /// paths that write these rows are otherwise indistinguishable. See
+    /// ``BlockReach``, which is also the one column here that is about the child
+    /// rather than about the item or the rule.
+    ///
+    /// The schema default is `unseen`, the overwhelmingly more common case; no
+    /// real row falls back to it, because the initializer always supplies one.
+    public private(set) var reach: String = BlockReach.unseen.rawValue
+
     /// Includes `restrictedOutsideApp`, which is *not* one of our rules. See
     /// ``BlockReason``.
     public private(set) var reason: String = BlockReason.Name.notOnAllowList
@@ -155,6 +201,8 @@ public final class BlockEventRecord {
         self.itemKind = event.itemID.kind.rawValue
         self.displayName = event.displayName
         self.artistID = event.artistID?.rawValue
+        self.rating = event.rating.stored
+        self.reach = event.reach.rawValue
         self.reason = reason.name
         self.deniedByKind = reason.deniedByKind
         self.deniedByID = reason.deniedByID
@@ -164,11 +212,33 @@ public final class BlockEventRecord {
         self.originID = origin.id
     }
 
+    /// Builds a row straight from stored strings. See
+    /// ``PlayEventRecord/init(id:songID:rawOrigin:originTerm:at:)``.
+    init(
+        id: UUID = UUID(),
+        itemID: String,
+        rawItemKind: String = ItemKind.song.rawValue,
+        rawReach: String = BlockReach.unseen.rawValue,
+        rawReason: String = BlockReason.Name.notOnAllowList,
+        rawOrigin: String = PlaybackOrigin.Name.home,
+        at: Date = .now
+    ) {
+        self.id = id
+        self.at = at
+        self.itemID = itemID
+        self.itemKind = rawItemKind
+        self.displayName = "Something"
+        self.reach = rawReach
+        self.reason = rawReason
+        self.origin = rawOrigin
+    }
+
     /// The typed event, or `nil` if the reason or origin columns do not read
     /// back.
     public var event: BlockEvent? {
         guard
             let itemKind = ItemKind(rawValue: itemKind),
+            let reach = BlockReach(rawValue: reach),
             let reason = BlockReason(
                 stored: StoredReason(
                     name: reason,
@@ -189,7 +259,9 @@ public final class BlockEventRecord {
             itemID: CatalogID(itemKind, itemID),
             displayName: displayName,
             artistID: artistID.map { CatalogID(.artist, $0) },
+            rating: StoredRating(stored: rating),
             at: at,
+            reach: reach,
             reason: reason,
             origin: origin
         )

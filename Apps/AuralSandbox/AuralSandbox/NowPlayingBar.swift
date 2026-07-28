@@ -2,11 +2,13 @@ import CatalogKit
 import FamilyStore
 import SwiftUI
 
-/// What is playing, and the only three controls there are.
+/// What is playing, and the controls that go with it.
 ///
-/// Play, pause, skip. No scrubber, no shuffle, no repeat, no next-up list, no
-/// "go to artist" — every one of those is a door, and this app's whole promise
-/// is that there are none.
+/// Play, pause, skip. No shuffle, no repeat, no next-up list, no "go to artist"
+/// — every one of those is a door, and this app's whole promise is that there
+/// are none. Tapping the song opens ``NowPlayingView``, which is the same three
+/// controls at a bigger size plus a scrubber; that is not a door either, since
+/// dragging the playhead reaches nothing outside the track already allowed.
 ///
 /// Skip stops at the end of the queue rather than finding something else to
 /// play. Autoplay past the end is the fourth MusicKit affordance this app never
@@ -15,6 +17,8 @@ import SwiftUI
 struct NowPlayingBar: View {
     @Bindable var session: Session
     @Bindable var player: KidPlayerModel
+
+    @State private var isExpanded = false
 
     var body: some View {
         if let entry = player.current {
@@ -32,25 +36,45 @@ struct NowPlayingBar: View {
                 }
 
                 HStack(spacing: 16) {
-                    AsyncImage(url: entry.item.artworkURL) { image in
-                        image.resizable()
-                    } placeholder: {
-                        RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                    }
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    // The song is a **sibling** of the controls, not a wrapper
+                    // around them: nesting a button inside another's label
+                    // leaves the inner one dead, and a play button that does
+                    // nothing is worse than no bar at all. So the whole left
+                    // side opens the full-screen player and the glyphs to its
+                    // right keep their own taps.
+                    Button { isExpanded = true } label: {
+                        HStack(spacing: 16) {
+                            AsyncImage(url: entry.item.artworkURL) { image in
+                                image.resizable()
+                            } placeholder: {
+                                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+                            }
+                            .frame(width: 56, height: 56)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                    VStack(alignment: .leading) {
-                        Text(entry.item.title).font(.headline).lineLimit(1)
-                        if let subtitle = entry.item.subtitle {
-                            Text(subtitle)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                            VStack(alignment: .leading) {
+                                Text(entry.item.title).font(.headline).lineLimit(1)
+                                if let subtitle = entry.item.subtitle {
+                                    Text(subtitle)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            Spacer()
+
+                            // The only cue that the bar opens. A kid does not
+                            // discover a gesture nothing points at.
+                            Image(systemName: "chevron.up")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
+                        .contentShape(Rectangle())
                     }
-
-                    Spacer()
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open the player")
+                    .accessibilityHint(entry.item.title)
 
                     // Keeping what is playing, and putting it on a playlist.
                     // Not doors: both act on the song already in the bar rather
@@ -84,6 +108,17 @@ struct NowPlayingBar: View {
                 .padding()
             }
             .background(.bar)
+            // `fullScreenCover` is iOS-only, and on the Mac a sheet is what
+            // "the whole window" means. Same view either way.
+            #if os(iOS)
+            .fullScreenCover(isPresented: $isExpanded) {
+                NowPlayingView(session: session, player: player)
+            }
+            #else
+            .sheet(isPresented: $isExpanded) {
+                NowPlayingView(session: session, player: player)
+            }
+            #endif
         }
     }
 }
