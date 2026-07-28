@@ -244,22 +244,31 @@ struct RecentRow: View {
     let items: [CatalogItem]
     let onPlay: (CatalogItem) -> Void
 
+    /// A grid column has a width and hands it to the tile. An `HStack` does
+    /// not: the tile sizes to its content, so a long song title stretches the
+    /// tile instead of wrapping inside it, and one tile fills the screen.
+    private let tileWidth: CGFloat = 150
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(items, id: \.id) { item in
-                    if item.id.kind == .song {
-                        Button { onPlay(item) } label: { Tile(item: item) }
-                            .buttonStyle(.plain)
-                    } else {
-                        NavigationLink(value: item) { Tile(item: item) }
-                            .buttonStyle(.plain)
+                    Group {
+                        if item.id.kind == .song {
+                            Button { onPlay(item) } label: { Tile(item: item) }
+                        } else {
+                            NavigationLink(value: item) { Tile(item: item) }
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .frame(width: tileWidth)
                 }
             }
             .padding(.horizontal)
         }
-        .frame(height: 210)
+        // Tall enough for artwork at this width plus two lines of title and one
+        // of subtitle, so a long name does not crop the artwork above it.
+        .frame(height: tileWidth + 76)
     }
 }
 
