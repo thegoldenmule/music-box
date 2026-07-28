@@ -223,7 +223,7 @@ struct TileCell: View {
                 if item.id.kind == .song {
                     Button { onPlay(item) } label: { Tile(item: item, hasHeart: true) }
                 } else {
-                    NavigationLink(value: item) { Tile(item: item, hasHeart: true) }
+                    NavigationLink(value: KidRoute.container(item)) { Tile(item: item, hasHeart: true) }
                 }
             }
             .buttonStyle(.plain)

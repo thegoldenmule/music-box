@@ -31,15 +31,19 @@ struct KidHomeView: View {
     @State private var isLoading = false
     @State private var trouble: String?
     @State private var showingAdmin = false
-    /// The path lives in a ``KidRouter`` rather than in a plain `@State` so that
-    /// ``NowPlayingView`` — presented modally, and therefore outside this stack
-    /// — can push onto it. Everything drawn *inside* the stack still uses an
-    /// ordinary `NavigationLink` and never touches this.
+    /// The path lives in a ``KidRouter`` rather than in a plain `@State` for two
+    /// reasons. ``NowPlayingView`` is presented modally, and therefore outside
+    /// this stack, so it needs a way to push onto it. And the router's setter is
+    /// where a repeat push is collapsed — see ``KidRouter/collapsed(_:)``, which
+    /// is why the same album cannot end up on the stack twice.
     ///
-    /// It is type-erased because this stack pushes two unrelated things: a
-    /// `CatalogItem` when browsing into a container, and a ``HomeRoute`` for the
-    /// history. A `[CatalogItem]` path accepts only the former and refuses the
-    /// latter at runtime — it compiles, and the link simply does not work.
+    /// It is an array of ``KidRoute`` and not a `NavigationPath`. The stack
+    /// pushes two unrelated things — a container the kid browsed into and a
+    /// screen that is not browsing — and a path holding one concrete type
+    /// refuses the other at runtime, which compiles and simply does not work.
+    /// One enum carries both *and* stays readable, which a `NavigationPath` is
+    /// not: it can be counted and popped, never inspected, so a stack built on
+    /// one cannot be asked what is already open.
     @State private var router = KidRouter()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -89,45 +93,18 @@ struct KidHomeView: View {
                 }
             }
             .navigationTitle(session.kid.name)
-            // Every container push in the app lands here — from search, from a
-            // shelf, from a playlist, from an artist's page — because they all
-            // sit inside this stack. An album and an artist each get a screen
-            // shaped like what they are; a playlist is a grid of pictures, which
-            // is what browsing was before either of them existed.
-            .navigationDestination(for: CatalogItem.self) { container in
-                Group {
-                    switch container.id.kind {
-                    case .album:
-                        AlbumView(session: session, player: player, album: container)
-                    case .artist:
-                        ArtistView(session: session, player: player, artist: container)
-                    default:
-                        BrowseView(session: session, player: player, container: container)
-                    }
-                }
-                // The one place a container open is recorded, for the same
-                // reason this is the one place a container is opened. It catches
-                // a tile from a shelf, a search result, an artist's album, and
-                // the chips on the now-playing screen — which reach the path
-                // through ``KidRouter`` and would each need their own hook
-                // otherwise.
-                //
-                // Here rather than inside the destination's own `load()`,
-                // because a kid reached this screen whether or not the track
-                // list came back, and because "Try again" re-runs `load()` and
-                // is not a second arrival. A `.task` that fires twice is
-                // harmless: the walk collapses a repeat and the projector
-                // coalesces the row.
-                .task { await session.noteVisit(container, manner: .opened) }
-            }
-            .navigationDestination(for: HomeRoute.self) { route in
+            // Every push in the app lands here — from search, from a shelf, from
+            // a playlist, from an artist's page — because they all sit inside
+            // this stack. One destination rather than two, because the path is
+            // one array of ``KidRoute`` rather than a type-erased
+            // `NavigationPath`; that is what lets ``KidRouter`` see what is
+            // already open and refuse to open it twice.
+            .navigationDestination(for: KidRoute.self) { route in
                 switch route {
-                case .history:
-                    HistoryView(session: session, player: player)
-                case .library:
-                    LibraryView(session: session, player: player)
-                case .playlist(let handle):
-                    PlaylistView(session: session, player: player, handle: handle)
+                case .container(let container):
+                    browse(container)
+                case .home(let destination):
+                    screen(for: destination)
                 }
             }
             .toolbar {
@@ -194,6 +171,50 @@ struct KidHomeView: View {
             } else if isHome {
                 reload()
             }
+        }
+    }
+
+    // MARK: - Destinations
+
+    /// An album and an artist each get a screen shaped like what they are; a
+    /// playlist is a grid of pictures, which is what browsing was before either
+    /// of them existed.
+    @ViewBuilder
+    private func browse(_ container: CatalogItem) -> some View {
+        Group {
+            switch container.id.kind {
+            case .album:
+                AlbumView(session: session, player: player, album: container)
+            case .artist:
+                ArtistView(session: session, player: player, artist: container)
+            default:
+                BrowseView(session: session, player: player, container: container)
+            }
+        }
+        // The one place a container open is recorded, for the same reason this is
+        // the one place a container is opened. It catches a tile from a shelf, a
+        // search result, an artist's album, and the cover on the now-playing
+        // screen — which reaches the path through ``KidRouter`` and would need
+        // its own hook otherwise.
+        //
+        // Here rather than inside the destination's own `load()`, because a kid
+        // reached this screen whether or not the track list came back, and
+        // because "Try again" re-runs `load()` and is not a second arrival. A
+        // `.task` that fires twice is harmless: the walk collapses a repeat and
+        // the projector coalesces the row.
+        .task { await session.noteVisit(container, manner: .opened) }
+    }
+
+    /// The screens that are not browsing.
+    @ViewBuilder
+    private func screen(for route: HomeRoute) -> some View {
+        switch route {
+        case .history:
+            HistoryView(session: session, player: player)
+        case .library:
+            LibraryView(session: session, player: player)
+        case .playlist(let handle):
+            PlaylistView(session: session, player: player, handle: handle)
         }
     }
 
@@ -543,7 +564,7 @@ struct ShelfHeader: View {
     let route: HomeRoute
 
     var body: some View {
-        NavigationLink(value: route) {
+        NavigationLink(value: KidRoute.home(route)) {
             HStack {
                 Text(title).font(.title2.bold())
                 Image(systemName: "chevron.right")
@@ -567,7 +588,7 @@ struct PlaylistShelf: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(playlists) { playlist in
-                    NavigationLink(value: HomeRoute.playlist(playlist.handle)) {
+                    NavigationLink(value: KidRoute.home(.playlist(playlist.handle))) {
                         PlaylistCard(playlist: playlist)
                     }
                     .buttonStyle(.plain)

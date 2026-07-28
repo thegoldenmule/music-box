@@ -75,8 +75,10 @@ struct Recording {
         }
     }
 
-    @Test("A descent through artist and album leaves one row")
-    func supersessionReachesTheStore() async throws {
+    /// Opening the record and playing from it is one run, so the shelf is the
+    /// record — and the artist loses their tile because their work is on it.
+    @Test("An evening on one record leaves one row")
+    func aggregationReachesTheStore() async throws {
         let (container, kidID) = try await storeWithKid()
         let projector = RecentsProjector(modelContainer: container)
 
@@ -87,7 +89,7 @@ struct Recording {
             for: kidID
         )
 
-        #expect(trail.map(\.catalogID) == [Fix.track])
+        #expect(trail.map(\.catalogID) == [Fix.record])
         try await MainActor.run {
             let context = ModelContext(container)
             // Three visits happened and are all recorded; the shelf is one row.

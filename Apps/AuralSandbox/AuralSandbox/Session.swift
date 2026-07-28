@@ -654,60 +654,40 @@ final class Session {
         return try await resolveAllowed(ids)
     }
 
-    /// One page of everything this kid has played, most recent first.
+    // There is deliberately no kid-facing play history any more. It read
+    // `PlayEventRecord` — written on stop, five-second floor, songs only —
+    // while the shelf above it read arrivals, so the screen behind the "Recent"
+    // chevron showed a different list from the shelf that led to it. One of the
+    // two had to go, and the one a kid means by "recent" is where they have
+    // been. Play events are untouched and still carry the report: duration,
+    // listening time, top songs. They are a parent's question, not a shelf.
+
+    /// Every arrival, newest first, a page at a time.
     ///
-    /// **Filtered at render time, like recents**, which means it is a history of
-    /// what they played *and may still play*. Something denied since is absent.
-    /// The alternative — showing it greyed out — puts a thing a kid can see and
-    /// cannot touch on their own screen, which is the invitation to ask why that
-    /// the whole design avoids.
+    /// **What the Recent shelf is a summary of.** The shelf collapses a run
+    /// through one record into the record and drops an artist whose work is
+    /// already on it; this is the same stream with none of that applied, which
+    /// is what makes the shelf and the screen behind it agree — one is the other
+    /// with the grouping taken off, rather than a different list built from a
+    /// different table.
     ///
-    /// Filtering after paging means a page can come back short. It over-fetches
-    /// for the same reason search does, and `hasMore` is about the *source*
-    /// running out, not about the page being full.
-    func playHistory(page: Int, pageSize: Int = 24) async throws
+    /// Filtered at render time like everything else, so something denied since
+    /// is absent. Duplicates are kept: the same record opened on Monday and
+    /// again on Friday is two arrivals, and this is the ungrouped view.
+    func recentEvents(page: Int, pageSize: Int = 48) async throws
         -> (items: [CatalogItem], hasMore: Bool)
     {
-        let raw = recentlyPlayed(limit: pageSize * 3, offset: page * pageSize * 3)
-        let items = try await resolveAllowed(raw)
-        return (items, raw.count == pageSize * 3)
-    }
-
-    /// Distinct songs this kid played, most recent first.
-    ///
-    /// **Only the history screen reads this now.** Recent and History have
-    /// different sources on purpose: Recent is where the kid *went*, written on
-    /// arrival, so it moves the moment they tap; History is what they *played*,
-    /// written on stop with the five-second floor, so a mis-tap stays out of it.
-    /// Unifying them would either put mis-taps in the history or make the shelf
-    /// wait for a track to end.
-    ///
-    /// **Fetched on a fresh context, not read off `kid.plays`.** Events are
-    /// written by ``EventLog``, which is a `@ModelActor` with its own context —
-    /// that is the whole point of it, so logging never blocks playback. The
-    /// consequence is that this context's already-materialised `plays`
-    /// relationship does not see those rows, and reading it returns an empty
-    /// list forever no matter how much the kid listens to. A context created
-    /// here reads what has actually been committed.
-    private func recentlyPlayed(limit: Int, offset: Int = 0) -> [CatalogID] {
         let kidID = kid.id
-        var descriptor = FetchDescriptor<PlayEventRecord>(
+        var descriptor = FetchDescriptor<VisitEventRecord>(
             predicate: #Predicate { $0.kid?.id == kidID },
             sortBy: [SortDescriptor(\.at, order: .reverse)]
         )
-        // Over-fetch: the same song played five times is one tile, and the
-        // dedupe happens after the sort.
-        descriptor.fetchLimit = limit * 4
-        descriptor.fetchOffset = offset
+        descriptor.fetchLimit = pageSize
+        descriptor.fetchOffset = page * pageSize
 
-        guard let rows = try? ModelContext(container).fetch(descriptor) else { return [] }
-
-        var seen = Set<String>()
-        return
-            rows
-            .compactMap { seen.insert($0.songID).inserted ? CatalogID(.song, $0.songID) : nil }
-            .prefix(limit)
-            .map { $0 }
+        guard let rows = try? ModelContext(container).fetch(descriptor) else { return ([], false) }
+        let ids = rows.compactMap(\.event).map(\.itemID)
+        return (try await resolveAllowed(ids), rows.count == pageSize)
     }
 
     /// Resolves identifiers to items and drops everything this kid may not see.

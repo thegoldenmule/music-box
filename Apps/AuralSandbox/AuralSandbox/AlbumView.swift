@@ -133,7 +133,7 @@ struct AlbumView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(credits, id: \.id) { artist in
-                        NavigationLink(value: artist) { ArtistChip(artist: artist) }
+                        NavigationLink(value: KidRoute.container(artist)) { ArtistChip(artist: artist) }
                             .buttonStyle(.plain)
                     }
                 }

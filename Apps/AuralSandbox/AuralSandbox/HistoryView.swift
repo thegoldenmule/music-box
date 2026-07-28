@@ -2,15 +2,25 @@ import CatalogKit
 import FamilyStore
 import SwiftUI
 
-/// Everything this kid has played, most recent first, a page at a time.
+/// Everywhere this kid has been, most recent first, a page at a time.
 ///
-/// **A history of what they played and may still play.** Anything denied since
-/// is absent, for the same reason it vanishes from recents: a tile a kid can see
-/// and cannot play is an invitation to ask why, and every other surface in the
-/// app already refuses to show one.
+/// A flat list rather than the shelf's tiles: the shelf is a handful of things
+/// picked between by sight, this is the long form, and reading a long list is
+/// reading titles.
 ///
-/// So this is honestly not a complete record, and the complete record is the
-/// parent's report — which keeps the blocks too, with their reasons.
+/// **The Recent shelf with the grouping taken off.** The shelf collapses a run
+/// through one record into the record, hides an artist whose work is already on
+/// it, and hides a track whose record is. All of that is a reading of this list,
+/// and this is the list. They used to come from different tables — the shelf
+/// from arrivals and this from plays — which meant the screen behind a "more of
+/// this" chevron showed something else, and a header that lies is worse than a
+/// screen that is merely long.
+///
+/// **What they reached and may still reach.** Anything denied since is absent,
+/// for the same reason it vanishes from the shelf: a tile a kid can see and
+/// cannot play is an invitation to ask why. So this is honestly not a complete
+/// record, and the complete record is the parent's report — which keeps the
+/// blocks too, with their reasons.
 struct HistoryView: View {
     @Bindable var session: Session
     @Bindable var player: KidPlayerModel
@@ -26,16 +36,19 @@ struct HistoryView: View {
                 ProgressView()
             } else if items.isEmpty {
                 ContentUnavailableView {
-                    Label("Nothing played yet", systemImage: "clock")
+                    Label("Nothing here yet", systemImage: "clock")
                 }
             } else {
-                // A list, not a grid: everything here is a song, and a song is a
-                // line of text with a picture beside it. Twice as many fit the
-                // screen, which is what a history is for — the same reasoning as
-                // the Songs tab in search, and the same rows.
-                SongList(session: session, items: items, origin: .home) { item in
-                    Task { await play(item) }
-                } footer: {
+                // A flat list, not the shelf's tiles. The shelf is a few things
+                // picked between by sight; this is the long form, and reading a
+                // long list is reading titles — the same trade ``SongList``
+                // already makes. What changed is only that the rows now have to
+                // draw records and artists as well as songs.
+                ScrollView {
+                    RecentRows(session: session, items: items) { item in
+                        Task { await play(item) }
+                    }
+
                     if hasMore {
                         // Paged on appearance rather than by a button: a child
                         // should not have to know what a page is.
@@ -60,9 +73,10 @@ struct HistoryView: View {
         defer { isLoading = false }
 
         do {
-            let result = try await session.playHistory(page: page)
-            // De-duplicated across pages as well as within one: over-fetching
-            // to survive filtering means page boundaries can overlap.
+            let result = try await session.recentEvents(page: page)
+            // De-duplicated across pages as well as within one. The same record
+            // opened twice is two arrivals and two rows in the store; on screen
+            // it is one tile, in the place it was last reached.
             let known = Set(items.map(\.id))
             items += result.items.filter { !known.contains($0.id) }
             hasMore = result.hasMore
@@ -72,7 +86,9 @@ struct HistoryView: View {
         }
     }
 
+    /// Only songs play from here; a record or an artist opens, which `TileWrap`
+    /// already decides for itself.
     private func play(_ item: CatalogItem) async {
-        await player.play(item, from: items, origin: .home)
+        await player.play(item, from: items.filter { $0.id.kind == .song }, origin: .home)
     }
 }

@@ -10,12 +10,14 @@ private enum Fix {
     static let other = CatalogID(.artist, "artist-other")
     static let record = CatalogID(.album, "album-record")
     static let second = CatalogID(.album, "album-second")
-    static let track = CatalogID(.song, "song-track")
     static let list = CatalogID(.playlist, "playlist-list")
     static let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+
+    static func song(_ n: Int) -> CatalogID { CatalogID(.song, "song-\(n)") }
 }
 
-/// One arrival. `minutes` keeps the ordering readable.
+/// One arrival. `minutes` keeps the ordering readable and is the only thing
+/// "contiguous" is decided from.
 private func visit(
     _ id: CatalogID,
     album: CatalogID? = nil,
@@ -33,191 +35,240 @@ private func visit(
     )
 }
 
-private func trail(_ visits: [VisitEvent]) -> [CatalogID] {
-    RecentTrail.folding(visits).map(\.catalogID)
+private func track(_ n: Int, on album: CatalogID, by artist: CatalogID, minutes: Double)
+    -> VisitEvent
+{
+    visit(Fix.song(n), album: album, artist: artist, manner: .played, minutes: minutes)
+}
+
+private func shelf(_ visits: [VisitEvent]) -> [CatalogID] {
+    RecentTrail.shelf(from: visits).map(\.catalogID)
 }
 
 // MARK: -
 
-@Suite("Walking a trail")
-struct Walking {
-    /// The rule, in one line: only the deepest thing reached in an excursion
-    /// survives it.
-    @Test("Artist, then their album, then a track from it leaves only the track")
-    func fullDescent() {
-        let result = trail([
-            visit(Fix.band, minutes: 1),
-            visit(Fix.record, artist: Fix.band, minutes: 2),
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 3),
-        ])
-        #expect(result == [Fix.track])
-    }
-
-    @Test("An artist opened and left behind is what shows")
-    func artistDeadEnd() {
-        #expect(trail([visit(Fix.band, minutes: 1)]) == [Fix.band])
-    }
-
-    @Test("An album no track was played from is what shows")
-    func albumDeadEnd() {
-        let result = trail([
-            visit(Fix.band, minutes: 1),
-            visit(Fix.record, artist: Fix.band, minutes: 2),
+@Suite("Collapsing a run into its album")
+struct Runs {
+    @Test("Several tracks off one record become the record")
+    func contiguousRunCollapses() {
+        let result = shelf([
+            track(1, on: Fix.record, by: Fix.band, minutes: 1),
+            track(2, on: Fix.record, by: Fix.band, minutes: 2),
+            track(3, on: Fix.record, by: Fix.band, minutes: 3),
         ])
         #expect(result == [Fix.record])
     }
 
-    /// Each excursion that dead-ends contributes its deepest item. They looked
-    /// at the first album and never played from it, so it stays.
-    @Test("Two albums by one artist both show, and the artist does not")
-    func twoAlbumsOneArtist() {
-        let result = trail([
-            visit(Fix.band, minutes: 1),
-            visit(Fix.record, artist: Fix.band, minutes: 2),
-            visit(Fix.second, artist: Fix.band, minutes: 3),
+    @Test("Opening a record and then playing from it is one run")
+    func openThenPlay() {
+        let result = shelf([
+            visit(Fix.record, artist: Fix.band, minutes: 1),
+            track(1, on: Fix.record, by: Fix.band, minutes: 2),
+        ])
+        #expect(result == [Fix.record])
+    }
+
+    /// One track is a track. Calling it the record would claim more than
+    /// happened.
+    @Test("A single track stays a track")
+    func loneTrack() {
+        let result = shelf([track(1, on: Fix.record, by: Fix.band, minutes: 1)])
+        #expect(result == [Fix.song(1)])
+    }
+
+    @Test("A record opened and left alone stays the record")
+    func loneAlbumView() {
+        let result = shelf([visit(Fix.record, artist: Fix.band, minutes: 1)])
+        #expect(result == [Fix.record])
+    }
+
+    /// Contiguous means contiguous. Hopping between two records is two visits
+    /// to two records, not two runs of one.
+    @Test("Tracks from two records interleaved do not collapse")
+    func interleavedDoesNotCollapse() {
+        let result = shelf([
+            track(1, on: Fix.record, by: Fix.band, minutes: 1),
+            track(2, on: Fix.second, by: Fix.band, minutes: 2),
+            track(3, on: Fix.record, by: Fix.band, minutes: 3),
+        ])
+        #expect(Set(result) == [Fix.song(1), Fix.song(2), Fix.song(3)])
+    }
+
+    @Test("Two runs through two records give two records")
+    func twoRuns() {
+        let result = shelf([
+            track(1, on: Fix.record, by: Fix.band, minutes: 1),
+            track(2, on: Fix.record, by: Fix.band, minutes: 2),
+            track(3, on: Fix.second, by: Fix.band, minutes: 3),
+            track(4, on: Fix.second, by: Fix.band, minutes: 4),
         ])
         #expect(result == [Fix.second, Fix.record])
     }
 
-    @Test("A song played straight from search stands on its own")
-    func songWithNoExcursion() {
-        let result = trail([
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 1)
-        ])
-        #expect(result == [Fix.track])
-    }
-
-    /// A song has no descendants, so going back to the album is a new arrival
-    /// rather than a supersession — and they *are* on the album now.
-    @Test("Back to the album after playing a track keeps both")
-    func backToTheAlbum() {
-        let result = trail([
-            visit(Fix.record, artist: Fix.band, minutes: 1),
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 2),
-            visit(Fix.record, artist: Fix.band, minutes: 3),
-        ])
-        #expect(result == [Fix.record, Fix.track])
-    }
-
-    @Test("An unrelated artist opens a new excursion and leaves the old one alone")
-    func unrelatedExcursion() {
-        let result = trail([
-            visit(Fix.record, artist: Fix.band, minutes: 1),
+    /// An artist has no album key, so it can never join a run — which is what
+    /// stops a whole evening collapsing into one tile.
+    @Test("An artist between two runs keeps them apart")
+    func artistBreaksARun() {
+        let result = shelf([
+            track(1, on: Fix.record, by: Fix.band, minutes: 1),
             visit(Fix.other, minutes: 2),
+            track(2, on: Fix.record, by: Fix.band, minutes: 3),
         ])
-        #expect(result == [Fix.other, Fix.record])
+        #expect(Set(result) == [Fix.song(1), Fix.song(2), Fix.other])
     }
 }
 
 // MARK: -
 
-@Suite("Where the walk deliberately does nothing")
-struct Limits {
-    /// Guessing would be the alternative, and the cost of guessing wrong is a
-    /// wrong shelf rather than one extra tile.
-    @Test("An album whose artist never resolved does not supersede that artist")
-    func missingLineage() {
-        let result = trail([
+@Suite("When an artist earns a tile")
+struct Artists {
+    /// The only thing an artist tile is for.
+    @Test("An artist opened and left behind shows")
+    func viewedOnly() {
+        #expect(shelf([visit(Fix.band, minutes: 1)]) == [Fix.band])
+    }
+
+    @Test("An artist whose record is on the shelf does not")
+    func supersededByAlbum() {
+        let result = shelf([
             visit(Fix.band, minutes: 1),
-            visit(Fix.record, artist: nil, minutes: 2),
-        ])
-        #expect(result == [Fix.record, Fix.band])
-    }
-
-    /// Nothing carries the playlist a song was played from, so the walk cannot
-    /// know — and says so by leaving both.
-    @Test("A playlist is never an ancestor")
-    func playlistIsNotAContainer() {
-        let result = trail([
-            visit(Fix.list, minutes: 1),
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 2),
-        ])
-        #expect(result == [Fix.track, Fix.list])
-    }
-}
-
-// MARK: -
-
-@Suite("Staying idempotent")
-struct Idempotency {
-    /// A `.task` firing twice, a screen reappearing under a dismissed sheet, a
-    /// "Try again" button — all of them land here and none of them should show
-    /// twice.
-    @Test("The same album twice is one entry")
-    func sameThingTwice() {
-        let result = trail([
-            visit(Fix.record, artist: Fix.band, minutes: 1),
             visit(Fix.record, artist: Fix.band, minutes: 2),
         ])
         #expect(result == [Fix.record])
     }
 
-    @Test("Revisiting something older moves it to the front")
-    func revisitMovesForward() {
-        let result = trail([
-            visit(Fix.record, artist: Fix.band, minutes: 1),
-            visit(Fix.other, minutes: 2),
-            visit(Fix.record, artist: Fix.band, minutes: 3),
+    @Test("An artist whose track is on the shelf does not")
+    func supersededBySong() {
+        let result = shelf([
+            visit(Fix.band, minutes: 1),
+            track(1, on: Fix.record, by: Fix.band, minutes: 2),
         ])
-        #expect(result == [Fix.record, Fix.other])
+        #expect(result == [Fix.song(1)])
     }
 
-    @Test("A revisit carries the newer timestamp")
-    func revisitRefreshesTime() {
-        let entries = RecentTrail.folding([
-            visit(Fix.record, artist: Fix.band, minutes: 1),
-            visit(Fix.record, artist: Fix.band, minutes: 9),
+    /// The artist whose work is present loses their tile; the one who was only
+    /// looked at keeps theirs.
+    @Test("Two artists, only one of them played")
+    func oneOfTwoArtists() {
+        let result = shelf([
+            visit(Fix.band, minutes: 1),
+            track(1, on: Fix.record, by: Fix.band, minutes: 2),
+            visit(Fix.other, minutes: 3),
         ])
-        #expect(entries.first?.at == Fix.t0.addingTimeInterval(9 * 60))
+        #expect(result == [Fix.other, Fix.song(1)])
     }
 
-    @Test("A song played twice appears once")
-    func songTwice() {
-        let result = trail([
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 1),
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 2),
+    /// Rule 2 is applied after rule 3, so a track dropped in favour of its
+    /// record still counts as that artist's work being present.
+    @Test("An artist is covered by a record that replaced their track")
+    func coveredThroughACollapsedRun() {
+        let result = shelf([
+            visit(Fix.band, minutes: 1),
+            track(1, on: Fix.record, by: Fix.band, minutes: 2),
+            track(2, on: Fix.record, by: Fix.band, minutes: 3),
         ])
-        #expect(result == [Fix.track])
+        #expect(result == [Fix.record])
     }
 }
 
 // MARK: -
 
-@Suite("Bounds")
-struct Bounds {
-    @Test("The trail trims to its cap, keeping the newest")
+@Suite("When a song earns a tile")
+struct Songs {
+    @Test("A track whose record is shown is dropped")
+    func droppedForItsAlbum() {
+        let result = shelf([
+            visit(Fix.record, artist: Fix.band, minutes: 1),
+            visit(Fix.other, minutes: 2),
+            track(1, on: Fix.record, by: Fix.band, minutes: 3),
+        ])
+        // The album was opened earlier and the track later; the album is the way
+        // back to both.
+        #expect(result == [Fix.other, Fix.record])
+    }
+
+    @Test("A track whose record is not shown survives")
+    func keptWhenAlbumAbsent() {
+        let result = shelf([
+            visit(Fix.other, minutes: 1),
+            track(1, on: Fix.record, by: Fix.band, minutes: 2),
+        ])
+        #expect(result == [Fix.song(1), Fix.other])
+    }
+
+    @Test("A track whose album never resolved survives")
+    func missingLineage() {
+        let result = shelf([
+            visit(Fix.record, artist: Fix.band, minutes: 1),
+            visit(Fix.other, minutes: 2),
+            visit(Fix.song(1), album: nil, artist: nil, manner: .played, minutes: 3),
+        ])
+        #expect(result.contains(Fix.song(1)))
+    }
+}
+
+// MARK: -
+
+@Suite("Shape and bounds")
+struct Shape {
+    @Test("Newest first")
+    func ordering() {
+        let result = shelf([
+            visit(Fix.band, minutes: 1),
+            visit(Fix.other, minutes: 2),
+            visit(Fix.list, minutes: 3),
+        ])
+        #expect(result == [Fix.list, Fix.other, Fix.band])
+    }
+
+    /// A `.task` firing twice, a screen reappearing under a dismissed sheet, a
+    /// "Try again" — none of them should show twice.
+    @Test("The same thing twice is one tile, at the later time")
+    func idempotent() {
+        let entries = RecentTrail.shelf(from: [
+            visit(Fix.other, minutes: 1),
+            visit(Fix.other, minutes: 9),
+        ])
+        #expect(entries.map(\.catalogID) == [Fix.other])
+        #expect(entries.first?.at == Fix.t0.addingTimeInterval(9 * 60))
+    }
+
+    /// A run of tracks produces a nameless album tile; an earlier visit to that
+    /// album has the name, and throwing it away would leave the shelf unable to
+    /// draw offline.
+    @Test("A name from an earlier visit survives a later nameless one")
+    func nameSurvives() {
+        let entries = RecentTrail.shelf(from: [
+            visit(Fix.record, artist: Fix.band, minutes: 1),
+            visit(Fix.other, minutes: 2),
+            track(1, on: Fix.record, by: Fix.band, minutes: 3),
+            track(2, on: Fix.record, by: Fix.band, minutes: 4),
+        ])
+        let album = entries.first { $0.catalogID == Fix.record }
+        #expect(album?.displayName == Fix.record.rawValue)
+    }
+
+    @Test("A playlist is its own tile and joins no run")
+    func playlists() {
+        let result = shelf([
+            visit(Fix.list, minutes: 1),
+            track(1, on: Fix.record, by: Fix.band, minutes: 2),
+        ])
+        #expect(result == [Fix.song(1), Fix.list])
+    }
+
+    @Test("The shelf trims to its cap, keeping the newest")
     func capped() {
         let visits = (0..<(RecentTrail.cap + 10)).map {
             visit(CatalogID(.artist, "artist-\($0)"), minutes: Double($0))
         }
-        let result = RecentTrail.folding(visits)
+        let result = RecentTrail.shelf(from: visits)
         #expect(result.count == RecentTrail.cap)
         #expect(result.first?.catalogID == CatalogID(.artist, "artist-\(RecentTrail.cap + 9)"))
     }
 
     @Test("Nothing in, nothing out")
     func empty() {
-        #expect(RecentTrail.folding([]).isEmpty)
-    }
-
-    /// The property the whole design rests on: replaying a stream and folding it
-    /// one arrival at a time are the same operation, so a rebuilt shelf and a
-    /// maintained shelf cannot disagree.
-    @Test("Folding a stream equals applying it one at a time")
-    func foldMatchesIncremental() {
-        let visits = [
-            visit(Fix.band, minutes: 1),
-            visit(Fix.record, artist: Fix.band, minutes: 2),
-            visit(Fix.other, minutes: 3),
-            visit(Fix.track, album: Fix.record, artist: Fix.band, manner: .played, minutes: 4),
-            visit(Fix.second, artist: Fix.band, minutes: 5),
-        ]
-
-        var incremental: [RecentEntry] = []
-        for visit in visits {
-            incremental = RecentTrail.applying(visit, to: incremental)
-        }
-
-        #expect(incremental == RecentTrail.folding(visits))
+        #expect(RecentTrail.shelf(from: []).isEmpty)
     }
 }
