@@ -45,7 +45,7 @@ public enum PlaybackOrigin: Hashable, Sendable {
 /// album, so the kind cannot be inferred from the discriminator either. Both
 /// extra columns are cheap now and impossible to backfill later, so they are
 /// here from v1 even though nothing reads them yet.
-struct StoredOrigin {
+struct StoredOrigin: Codable {
     var name: String
     var term: String?
     var kind: String?
@@ -105,5 +105,37 @@ extension PlaybackOrigin {
         default:
             return nil
         }
+    }
+}
+
+// MARK: - Coding
+
+/// **One wire format, and it is the one the columns already use.**
+///
+/// An origin is now written down in two places: the four event columns, and the
+/// device-local play queue a kid comes back to. Synthesising `Codable` for an
+/// enum with associated values would have given the second one its own shape,
+/// so a case added here would need remembering twice and the two would drift
+/// apart silently. Going through ``StoredOrigin`` means the frozen case names in
+/// ``PlaybackOrigin/Name`` govern both.
+///
+/// Decoding columns that do not make an origin throws rather than falling back
+/// to ``home`` — the same call ``init(stored:)`` makes, for the same reason.
+extension PlaybackOrigin: Codable {
+    public func encode(to encoder: any Encoder) throws {
+        try stored.encode(to: encoder)
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let stored = try StoredOrigin(from: decoder)
+        guard let origin = PlaybackOrigin(stored: stored) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Not an origin: \(stored.name)"
+                )
+            )
+        }
+        self = origin
     }
 }

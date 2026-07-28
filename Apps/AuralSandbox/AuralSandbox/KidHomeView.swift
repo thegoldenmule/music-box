@@ -145,6 +145,12 @@ struct KidHomeView: View {
             // else happened.
             await session.loadRecentTrail()
             reload()
+            // The queue came back with the player itself, so the bar is already
+            // drawn by the time this runs. This is the second half: what a
+            // parent denied while the app was closed comes off it. Nothing plays
+            // in between — a restored queue is stopped until the kid presses
+            // play, and pressing play asks the engine again anyway.
+            await player.revalidate()
         }
         .onChange(of: term) { _, new in
             if new.isEmpty {
@@ -163,9 +169,25 @@ struct KidHomeView: View {
         .onChange(of: session.recentTrail) { _, _ in
             if isHome { reloadRecents() }
         }
+        // A kid switch in the admin changes whose sandbox this is, and what is
+        // playing belongs to the child who is no longer using the app. The
+        // player stops and picks up the other kid's queue instead.
+        .onChange(of: session.kid.id) { _, _ in
+            Task {
+                await player.switchedKid()
+                await player.revalidate()
+            }
+        }
+        // A parent who clears the logs must not find the bar still holding what
+        // their child was listening to. The stored queue is already gone; this
+        // is the copy on screen.
+        .onChange(of: session.historyCleared) { _, _ in
+            Task { await player.stop() }
+        }
         .onChange(of: scenePhase) { _, phase in
             // Otherwise a kid who plays one song and puts the phone down never
-            // produces a play event at all.
+            // produces a play event at all — and the queue would come back
+            // pointing at the top of a track they were halfway through.
             if phase != .active {
                 player.flush()
             } else if isHome {

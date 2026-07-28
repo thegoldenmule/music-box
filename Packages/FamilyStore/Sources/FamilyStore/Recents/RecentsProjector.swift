@@ -77,15 +77,29 @@ public actor RecentsProjector {
         return RecentTrailProjection.trail(of: kid)
     }
 
-    /// The stored trail, newest first, rebuilding first if the walk has changed.
+    /// The shelf, newest first. **Always recomputed, never merely read.**
     ///
-    /// What a session reads at launch and on a kid switch.
+    /// What a session reads at launch and on a kid switch, and the reason the
+    /// projection is self-healing rather than merely usually-right.
+    ///
+    /// Trusting the stored rows here was a real hole, and a device found it: a
+    /// shelf can only be as good as the last write that landed, ``record`` is
+    /// called with `try?` from the kid's session, and a write that failed left
+    /// rows that were wrong in a way nothing would ever notice. Staleness was
+    /// detected by *version*, which catches a change of rules and cannot catch a
+    /// missed update — so one dropped write meant a wrong shelf until the next
+    /// arrival, and a write that failed reproducibly meant a wrong shelf
+    /// forever.
+    ///
+    /// Recomputing costs a bounded fetch and a fold over at most
+    /// ``RecentTrail/window`` values, once per launch. That is nothing next to
+    /// the round trip that resolves the tiles, and it is the property derived
+    /// data should have: if it can be rebuilt cheaply, rebuild it rather than
+    /// believe it.
     public func trail(for kidID: UUID) throws -> [RecentEntry] {
         let kid = try kid(kidID)
-        if RecentTrailProjection.isStale(kid) {
-            try RecentTrailProjection.rebuild(for: kid, in: modelContext)
-            try modelContext.save()
-        }
+        try RecentTrailProjection.recompute(for: kid, in: modelContext)
+        try modelContext.save()
         return RecentTrailProjection.trail(of: kid)
     }
 

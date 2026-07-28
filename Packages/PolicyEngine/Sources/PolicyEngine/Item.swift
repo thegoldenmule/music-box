@@ -1,5 +1,10 @@
 /// A container an item sits inside, and its rating if it has one.
-public struct Ancestor: Hashable, Sendable {
+///
+/// `Codable` because ancestry travels with an item that is written down —
+/// a persisted play queue is the case that forced it. Ancestry is what makes a
+/// verdict final rather than provisional, so a stored item that dropped its
+/// ancestors would have to go back to the network before it could be judged.
+public struct Ancestor: Hashable, Sendable, Codable {
     public let id: CatalogID
     public let rating: ContentRating?
 

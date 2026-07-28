@@ -4,10 +4,15 @@ import SwiftUI
 
 /// What is playing, and the controls that go with it.
 ///
-/// Play, pause, skip. No shuffle, no repeat, no next-up list — the bar itself
-/// stays as narrow as it ever was. Tapping the song opens ``NowPlayingView``,
-/// which is the same controls at a bigger size, a scrubber, and links to the
-/// record and the artist.
+/// Play, pause, skip, and the heart. No shuffle, no repeat, no next-up list —
+/// the bar itself stays as narrow as it ever was. Tapping the artwork or the
+/// title opens ``NowPlayingView``, which is the same controls at a bigger size,
+/// a scrubber, links to the record and the artist, and the way onto a playlist.
+///
+/// **What is not here is a space decision, not a policy one.** A phone gives
+/// this row one line, and every glyph on it is a word of the title the kid
+/// cannot read. So the title takes the room and the two things that survived
+/// the cut are the ones a kid reaches for mid-song.
 ///
 /// Skip stops at the end of the queue rather than finding something else to
 /// play. Autoplay past the end is the fourth MusicKit affordance this app never
@@ -51,7 +56,7 @@ struct NowPlayingBar: View {
                             .frame(width: 56, height: 56)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                            VStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text(entry.item.title).font(.headline).lineLimit(1)
                                 if let subtitle = entry.item.subtitle {
                                     Text(subtitle)
@@ -60,14 +65,18 @@ struct NowPlayingBar: View {
                                         .lineLimit(1)
                                 }
                             }
-
-                            Spacer()
-
-                            // The only cue that the bar opens. A kid does not
-                            // discover a gesture nothing points at.
-                            Image(systemName: "chevron.up")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                            // Claims the whole row rather than sizing to the
+                            // words, which is both the tap target and the
+                            // point: a bar this narrow spends every point it
+                            // has on the title, and the title is the only
+                            // thing here a kid cannot work out from a glyph.
+                            //
+                            // No caret. It was the one cue that the bar opens,
+                            // and it cost more room than it bought — the
+                            // artwork and the title are the target, and a kid
+                            // who taps a picture of the song they are hearing
+                            // is not guessing.
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .contentShape(Rectangle())
                     }
@@ -75,17 +84,16 @@ struct NowPlayingBar: View {
                     .accessibilityLabel("Open the player")
                     .accessibilityHint(entry.item.title)
 
-                    // Keeping what is playing, and putting it on a playlist.
-                    // Not doors: both act on the song already in the bar rather
-                    // than leading anywhere, which is the line this bar draws.
-                    // It is also the screen the spec names as one of the two
-                    // places a playlist gets made.
+                    // Keeping what is playing. Not a door: it acts on the song
+                    // already in the bar rather than leading anywhere, which is
+                    // the line this bar draws.
+                    //
+                    // Adding to a playlist lives on ``NowPlayingView`` alone
+                    // now. The bar is one row on a phone and four controls do
+                    // not fit beside a title worth reading; the screen behind
+                    // one tap has room for both, and is still one of the two
+                    // places the spec says a playlist gets made.
                     HeartButton(session: session, item: entry.item, origin: entry.origin)
-                    AddToPlaylistButton(
-                        session: session,
-                        item: entry.item,
-                        origin: entry.origin
-                    )
 
                     Button {
                         Task { await player.togglePlayPause() }

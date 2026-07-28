@@ -72,22 +72,34 @@ struct HistoryView: View {
         isLoading = true
         defer { isLoading = false }
 
-        do {
-            let result = try await session.recentEvents(page: page)
-            // De-duplicated across pages as well as within one. The same record
-            // opened twice is two arrivals and two rows in the store; on screen
-            // it is one tile, in the place it was last reached.
-            let known = Set(items.map(\.id))
-            items += result.items.filter { !known.contains($0.id) }
-            hasMore = result.hasMore
-            page += 1
-        } catch {
-            hasMore = false
+        // A loop rather than one pass, because a page can arrive with nothing
+        // new on it: repeats are collapsed, and a kid who spent an evening on
+        // one record produced a page of arrivals that are all the same two
+        // things. Stopping there would leave the spinner sitting under an
+        // unchanged list with everything older still behind it.
+        while hasMore {
+            do {
+                let result = try await session.recentEvents(page: page)
+                page += 1
+                hasMore = result.hasMore
+
+                // Within a page the source has already done this. Across pages
+                // it has to happen here: boundaries cut through runs, so what a
+                // kid was on at the end of one page is often the top of the
+                // next.
+                let known = Set(items.map(\.id))
+                let fresh = result.items.filter { !known.contains($0.id) }
+                items += fresh
+                if !fresh.isEmpty { return }
+            } catch {
+                hasMore = false
+                return
+            }
         }
     }
 
-    /// Only songs play from here; a record or an artist opens, which `TileWrap`
-    /// already decides for itself.
+    /// Only songs play from here; a record or an artist opens, which the row
+    /// decides for itself.
     private func play(_ item: CatalogItem) async {
         await player.play(item, from: items.filter { $0.id.kind == .song }, origin: .home)
     }

@@ -17,7 +17,15 @@ public typealias SandboxContentRating = ContentRating
 ///
 /// Always an Apple Music catalog item. Library content reaches the app only by
 /// being resolved to its catalog equivalent first — see ``LibrarySource``.
-public struct CatalogItem: Sendable, Hashable, Identifiable {
+///
+/// **`Codable` is for device-local caches, never for the store.** Anything that
+/// goes in the CloudKit zone copies the fields it needs by name — that is what
+/// makes a schema change a decision rather than an accident of this type
+/// gaining a property. Encoding the whole item is for state a device may throw
+/// away and rebuild, which today means the persisted play queue: a value that
+/// fails to decode simply means the app opens with nothing loaded, so the shape
+/// stays free to change.
+public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
     public let id: CatalogID
 
     public let title: String

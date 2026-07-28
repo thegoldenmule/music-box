@@ -73,8 +73,11 @@ public final class RecentTrailRecord {
     /// Cheaper than delete-and-insert, and quieter: this table syncs, and a row
     /// rewritten wholesale on every revisit is a CloudKit change where a
     /// timestamp would do.
+    /// Also stamps the current version: a row the running rules just re-derived
+    /// *was* produced by them, whatever produced it before.
     func refresh(at newDate: Date) {
         at = newDate
+        version = RecentTrail.version
     }
 
     /// Ages a row, so the replay path can be tested without shipping a version

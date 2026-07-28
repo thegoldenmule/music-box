@@ -98,6 +98,25 @@ final class Session {
     /// authoritative in one place rather than two.
     private(set) var deviceLibrary: DeviceLibraryState = .unasked
 
+    /// What each kid was playing when the app last closed.
+    ///
+    /// Device-local for the reason ``deviceLibraryStore`` is: a queue describes
+    /// one device's speaker, and syncing it would have a second device resume
+    /// something nobody there pressed play on. Held on the session rather than
+    /// inside ``KidPlayerModel`` so a history wipe can reach it — see
+    /// ``deleteHistory(for:)``.
+    let playQueues: any PlayQueueStore = UserDefaultsPlayQueueStore()
+
+    /// Bumped whenever the active kid's history is cleared.
+    ///
+    /// A counter rather than a callback into the player, which would be a
+    /// reference from the session back up into the view layer it is read by. The
+    /// kid's screen watches this and stops the player; the alternative was a
+    /// parent wiping the logs and finding the bar still holding the track their
+    /// child was on, which is the same loophole ``RecentTrailRecord`` is exempt
+    /// from the sweep and not from a wipe to avoid.
+    private(set) var historyCleared = 0
+
     private let family: Family
     private let context: ModelContext
     private let musicAccess = MusicKitAccess()
@@ -202,7 +221,16 @@ final class Session {
 
     // MARK: - Kids
 
+    /// Moves the app into another kid's sandbox.
+    ///
+    /// The play in progress is written **before** the switch, because
+    /// ``logCurrentPlay()`` files it under whoever ``kid`` is at the time. Doing
+    /// it afterwards would put one child's listening in another child's report,
+    /// which is the one thing a report cannot be allowed to do. The player is
+    /// stopped by the kid's screen watching ``kid`` change — see
+    /// ``KidPlayerModel/switchedKid()``.
     func switchTo(_ kid: Kid) {
+        flushCurrentPlay()
         self.kid = kid
         recentTrail = []
         rebuildCatalog()
@@ -240,6 +268,10 @@ final class Session {
     func delete(_ kid: Kid) -> String? {
         guard family.kids.count > 1 else { return "A family needs at least one kid." }
         let wasActive = kid.id == self.kid.id
+        // The cascade is in the schema and reaches nothing outside the store, so
+        // the device-local queue has to be named. A kid removed and re-added
+        // would otherwise come back holding the first one's last album.
+        playQueues.clear(for: kid.id)
         family.removeKid(kid)
         context.delete(kid)
         let failure = saveLists()
@@ -309,10 +341,19 @@ final class Session {
     func deleteHistory(for kid: Kid) -> String? {
         kid.deleteHistory()
         let failure = saveLists()
+        // The queue is the same kind of derived state as the shelf, and on a
+        // device rather than in the store — so it has to be named here or it
+        // survives a wipe. Cleared for whichever kid was asked about, active or
+        // not.
+        playQueues.clear(for: kid.id)
         // The shelf is derived from what was just deleted. Leaving the copy on
         // screen would show a parent their child's activity seconds after being
         // told it was gone.
-        if kid.id == self.kid.id { recentTrail = [] }
+        if kid.id == self.kid.id {
+            recentTrail = []
+            discardCurrentPlay()
+            historyCleared += 1
+        }
         return failure
     }
 
@@ -323,8 +364,11 @@ final class Session {
     func deleteEverything(for kid: Kid) async -> String? {
         kid.deleteEverything()
         let failure = saveLists()
+        playQueues.clear(for: kid.id)
         if kid.id == self.kid.id {
             recentTrail = []
+            discardCurrentPlay()
+            historyCleared += 1
             await refreshLibrary()
         }
         return failure
@@ -672,8 +716,18 @@ final class Session {
     /// different table.
     ///
     /// Filtered at render time like everything else, so something denied since
-    /// is absent. Duplicates are kept: the same record opened on Monday and
-    /// again on Friday is two arrivals, and this is the ungrouped view.
+    /// is absent.
+    ///
+    /// **One row per item, at the most recent time it was reached.** A kid who
+    /// opened one record five times running produced five arrivals and wants one
+    /// row; more to the point, a list cannot draw the same thing twice — two
+    /// rows sharing a `CatalogItem` identity give SwiftUI duplicate ids in a
+    /// `ForEach`, and what it draws for the loser is a blank the height of a row
+    /// with the separators still around it. That is not a hypothetical: it is
+    /// what this screen did.
+    ///
+    /// Deduplicated *before* resolving, so a page of forty-eight arrivals
+    /// through one record costs one lookup rather than forty-eight.
     func recentEvents(page: Int, pageSize: Int = 48) async throws
         -> (items: [CatalogItem], hasMore: Bool)
     {
@@ -686,7 +740,13 @@ final class Session {
         descriptor.fetchOffset = page * pageSize
 
         guard let rows = try? ModelContext(container).fetch(descriptor) else { return ([], false) }
-        let ids = rows.compactMap(\.event).map(\.itemID)
+
+        var seen: Set<CatalogID> = []
+        let ids = rows.compactMap(\.event).map(\.itemID).filter { seen.insert($0).inserted }
+
+        // `hasMore` is about the rows behind the page, not the items in front of
+        // it: collapsing repeats can empty a page that had plenty in it, and
+        // stopping there would hide everything older.
         return (try await resolveAllowed(ids), rows.count == pageSize)
     }
 
@@ -891,6 +951,17 @@ final class Session {
     /// whether one of the others got there first.
     func flushCurrentPlay() {
         logCurrentPlay()
+    }
+
+    /// Throws the play in progress away instead of writing it.
+    ///
+    /// The one caller is a history wipe, and it is the only place discarding is
+    /// right. The song a kid is in the middle of when a parent clears the logs
+    /// is part of what was cleared, and stopping the player afterwards would
+    /// otherwise write it straight back — a report that comes back with one row
+    /// in it seconds after being emptied.
+    private func discardCurrentPlay() {
+        currentPlayLogged = true
     }
 
     private func logCurrentPlay() {

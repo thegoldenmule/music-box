@@ -125,7 +125,7 @@ enum RecentTrailProjection {
                 let replacement = RecentTrailRecord(entry: entry)
                 context.insert(replacement)
                 kid.attach(replacement)
-            } else if row.at != entry.at {
+            } else if row.at != entry.at || row.version != RecentTrail.version {
                 row.refresh(at: entry.at)
             }
         }
