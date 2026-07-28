@@ -14,12 +14,16 @@ import SwiftData
 @Observable
 final class Session {
     /// What Apple Music will allow, before any of it is worth showing.
+    ///
+    /// There is deliberately no `failed` case. Not being able to *reach* Apple
+    /// is not an answer about the account, and it used to be treated as one:
+    /// any error out of the subscription check replaced the whole app with a
+    /// message about Apple Music not answering. See ``start()``.
     enum Access {
         case checking
         case needsAuthorization(AuthorizationStatus)
         case cannotPlay(SubscriptionState)
         case ready
-        case failed(String)
     }
 
     private(set) var access: Access = .checking
@@ -446,6 +450,30 @@ final class Session {
 
     // MARK: - Apple Music access
 
+    /// Settles authorization, then lets the subscription answer arrive behind
+    /// the app rather than in front of it.
+    ///
+    /// **Authorization is awaited and the subscription is not**, because they
+    /// cost nothing alike. Authorization is answered locally in single-digit
+    /// milliseconds and decides whether this app can do its job at all. The
+    /// subscription is a network round trip to Apple that takes as long as it
+    /// takes — measured hanging indefinitely in the simulator — and the whole
+    /// app used to sit behind it under a spinner. That is the launch cost:
+    /// nothing was wrong, we were waiting for a question whose answer is yes
+    /// for every real user of this app.
+    ///
+    /// So it is assumed yes and checked afterwards. The optimism gives away
+    /// nothing: an account that cannot play catalog content still cannot, and
+    /// the screen swaps to ``Access/cannotPlay(_:)`` the moment the answer says
+    /// so — before a kid can get much further than looking at their shelves,
+    /// and nothing they tap in the meantime will produce sound it should not.
+    ///
+    /// **A failure to reach Apple is not a negative answer**, which is why the
+    /// error is dropped rather than shown. Only a definite "this account cannot
+    /// play" takes the app down. An offline device leaves the app up and lets
+    /// playback fail with its own error, which names the real problem —
+    /// ``CatalogError/offline`` — instead of telling a parent their
+    /// subscription is the trouble when it is not.
     func start() async {
         let status = await musicAccess.requestAuthorization()
         guard status == .authorized else {
@@ -453,12 +481,12 @@ final class Session {
             return
         }
 
-        do {
-            let subscription = try await musicAccess.subscriptionState()
-            access = subscription.canPlayCatalogContent ? .ready : .cannotPlay(subscription)
-        } catch {
-            access = .failed(Self.message(for: error))
-        }
+        access = .ready
+
+        guard let subscription = try? await musicAccess.subscriptionState(),
+              !subscription.canPlayCatalogContent
+        else { return }
+        access = .cannotPlay(subscription)
     }
 
     // MARK: - Searching
@@ -815,6 +843,18 @@ final class Session {
     func allowListItems() async throws -> [CatalogItem] {
         let ids = kid.entries.compactMap { $0.entry }.filter { $0.kind == .allow }.map(\.id)
         return try await resolveAllowed(ids)
+    }
+
+    /// The allow list where the level shows one, and nothing where it does not.
+    ///
+    /// The empty answer is a policy answer, not a view's shortcut, which is why
+    /// it is here: levels 2 and 3 have an allow list and simply do not put it on
+    /// the home screen, so "which level shows this shelf" is a question about
+    /// the sandbox rather than about layout. It also lets the home screen start
+    /// all three of its fetches together — a branch in the caller would have to
+    /// be resolved before any of them began.
+    func grownUpItems() async throws -> [CatalogItem] {
+        kid.mode == .allowOnly ? try await allowListItems() : []
     }
 
     // There is deliberately no kid-facing play history any more. It read

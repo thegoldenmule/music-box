@@ -28,7 +28,15 @@ struct KidHomeView: View {
     /// that lands first — nothing is filtered out of an artist page, so it
     /// settles in a single request while songs are still paging.
     @State private var filter: SearchFilter = .artists
-    @State private var isLoading = false
+    /// Starts *true*, because this screen always loads when it appears and the
+    /// load is not instant.
+    ///
+    /// Starting false meant the first frame had no items and nothing in flight,
+    /// which is the state that draws "Pick something to listen to" — so a kid
+    /// with a full home screen saw it flash the empty screen, then the loader,
+    /// then their shelves. The reload is kicked off from `.task`, one frame
+    /// later; this is what covers that frame.
+    @State private var isLoading = true
     @State private var trouble: String?
     @State private var showingAdmin = false
     /// The path lives in a ``KidRouter`` rather than in a plain `@State` for two
@@ -329,7 +337,7 @@ struct KidHomeView: View {
     @ViewBuilder
     private var home: some View {
         if isLoading && isHomeEmpty {
-            ProgressView()
+            HomeSkeleton()
         } else if isHomeEmpty {
             ContentUnavailableView {
                 Label(
@@ -419,11 +427,16 @@ struct KidHomeView: View {
             // so this costs nothing and has to happen before the shelves draw.
             await session.refreshLibrary()
             do {
-                recents = try await session.homeItems()
-                yours = try await session.favoriteItems()
-                fromTheGrownUp = session.kid.mode == .allowOnly
-                    ? try await session.allowListItems()
-                    : []
+                // Started together, not one after another. Each of these is a
+                // round trip to Apple Music — the item cache is rebuilt empty
+                // with the process, so a cold launch resolves every recent and
+                // every favorite over the network — and awaiting them in turn
+                // made the wait their sum when it only ever needed to be their
+                // maximum. Nothing here depends on anything else here.
+                async let recentItems = session.homeItems()
+                async let favorites = session.favoriteItems()
+                async let grownUp = session.grownUpItems()
+                (recents, yours, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
             } catch {
                 trouble = Session.message(for: error)
             }
@@ -660,6 +673,79 @@ struct PlaylistCard: View {
         .frame(width: 150)
         .accessibilityElement(children: .combine)
         .accessibilityHint(Text("Opens"))
+    }
+}
+
+/// What the home screen looks like while its shelves are still resolving.
+///
+/// Placeholder tiles rather than a spinner, because of how long this is on
+/// screen: every shelf here is fetched from Apple Music on a cold launch — the
+/// item cache is rebuilt empty with the process — so this is up for as long as
+/// those round trips take. A small spinner alone in the middle of a phone reads
+/// as a blank screen for that whole time. Shapes where the tiles are about to
+/// be read as something arriving, and they arrive in the same places.
+///
+/// Deliberately not `.redacted(reason: .placeholder)` over real tiles: there
+/// are no real tiles yet, and inventing ``CatalogItem`` values to redact would
+/// put fabricated catalog data on a kid's screen to hide it again.
+///
+/// Two shelves and four tiles because that is roughly a phone's worth, not
+/// because it predicts what lands — the count is scenery, and a shelf that
+/// turns out to be empty simply is not drawn a moment later.
+struct HomeSkeleton: View {
+    /// Matches ``TileShelf``, so nothing jumps sideways on the swap.
+    private let tileWidth: CGFloat = 150
+
+    /// The pulse. Without it a grey screen reads as broken rather than busy;
+    /// slow enough to be calm, since a kid is looking at it.
+    @State private var dimmed = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                shelf
+                shelf
+            }
+            .padding(.vertical)
+        }
+        .opacity(dimmed ? 0.55 : 1)
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dimmed)
+        .onAppear { dimmed = true }
+        // Nothing here is real, so nothing here is tappable, and VoiceOver is
+        // told what it is once rather than reading out eight empty shapes.
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Loading"))
+    }
+
+    private var shelf: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            block(width: 120, height: 26, radius: 6)
+                .padding(.horizontal)
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(0..<4, id: \.self) { _ in tile }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    private var tile: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .aspectRatio(1, contentMode: .fit)
+            block(width: nil, height: 15, radius: 4)
+            block(width: 80, height: 13, radius: 4)
+        }
+        .padding(Tile.padding)
+        .frame(width: tileWidth)
+    }
+
+    private func block(width: CGFloat?, height: CGFloat, radius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: radius)
+            .fill(.quaternary)
+            .frame(width: width, height: height)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     }
 }
 

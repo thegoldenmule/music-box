@@ -1,12 +1,18 @@
 import CatalogKit
 import SwiftUI
 
-/// The gate: nothing is worth showing until Apple Music says yes twice —
-/// authorization, then a subscription that can actually play catalog content.
+/// The gate: nothing is worth showing until Apple Music has authorized us.
 ///
-/// Asking both up front rather than at play time is deliberate. Finding out at
-/// the moment a kid taps a song that the account cannot play it is the worst
+/// Both questions — authorization, then a subscription that can actually play
+/// catalog content — are still asked before a kid taps anything, and asking
+/// them up front rather than at play time is still deliberate: finding out at
+/// the moment a kid presses play that the account cannot play it is the worst
 /// possible time to find out.
+///
+/// What changed is that only the first of the two is *waited on*. The
+/// subscription answer lands behind this screen and swaps it out if it is bad;
+/// it no longer holds a blank window open for however long Apple takes to
+/// reply. See ``Session/start()``.
 struct RootView: View {
     @Bindable var session: Session
 
@@ -46,13 +52,6 @@ struct RootView: View {
                     KidHomeView(session: session)
                 } else {
                     SharedDeviceOnboardingView(session: session)
-                }
-
-            case .failed(let message):
-                ContentUnavailableView {
-                    Label("Apple Music isn't answering", systemImage: "wifi.exclamationmark")
-                } description: {
-                    Text(message)
                 }
             }
         }
