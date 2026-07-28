@@ -143,6 +143,30 @@ struct OverFetchTests {
         #expect(offsets == [0, 4])
     }
 
+    @Test("An item returned on two pages is judged once and shown once")
+    func deduplicatesAcrossPages() async throws {
+        // Search ordering is Apple's relevance ranking and nothing promises it
+        // holds still between two requests at different offsets, so an item can
+        // drift across a page boundary and come back twice. Song 2 is allowed
+        // on both pages here and song 3 is explicit on both.
+        let source = StubCatalogSource(pages: [
+            Fix.page((0..<4).map { Fix.songItem($0, rating: $0 == 3 ? .explicit : .clean) }),
+            Fix.page((2..<8).map { Fix.songItem($0) }, hasMore: false),
+        ])
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.search(term: "x", kinds: [.song], limit: 10)
+
+        // On screen this was a blank the height of a row with its separators
+        // gone, because `ForEach` keys on the identifier and two rows shared
+        // one.
+        let ids = results.items.map(\.id)
+        #expect(ids == [0, 1, 2, 4, 5, 6, 7].map(Fix.song))
+        #expect(ids.count == Set(ids).count)
+        // And the repeat is not logged to the parent's report a second time.
+        #expect(results.blocked.map(\.item.id) == [Fix.song(3)])
+    }
+
     @Test("Gives up after the retry cap rather than spinning")
     func stopsAtRetryCap() async throws {
         // Every page is entirely explicit and always claims more.

@@ -547,15 +547,20 @@ struct SongList<Footer: View>: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(items, id: \.id) { item in
-                    Button { onPlay(item) } label: { SongRow(item: item) }
-                        .buttonStyle(.plain)
-
-                    if item.id != items.last?.id {
+                // Indexed, so the separator is decided by position rather than
+                // by comparing against the last item's identifier. That
+                // comparison drops the rule under any row that happens to share
+                // an id with the last one — which is only ever the case when
+                // something upstream has leaked a duplicate, but it turns one
+                // bug into two and hides the shape of the first.
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 {
                         // Inset past the artwork, so the rule reads as a break
                         // between titles rather than a line across the page.
                         Divider().padding(.leading, SongRow.textInset)
                     }
+                    Button { onPlay(item) } label: { SongRow(item: item) }
+                        .buttonStyle(.plain)
                 }
             }
             footer()

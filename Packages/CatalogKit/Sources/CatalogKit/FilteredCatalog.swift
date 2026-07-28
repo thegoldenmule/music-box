@@ -229,6 +229,17 @@ public struct FilteredCatalog: Sendable {
 
         var allowed: [CatalogItem] = []
         var blocked: [BlockedItem] = []
+        /// Every identifier already judged on this search, allowed or blocked.
+        ///
+        /// Paging can hand back an item that came on an earlier page. Search
+        /// ordering is Apple's relevance ranking and nothing promises it is
+        /// stable between two requests at different offsets, so an item can
+        /// shift across a page boundary and be returned twice.
+        ///
+        /// One set covering both outcomes, not one per outcome: the engine is
+        /// pure, so the same item judged twice gets the same verdict, and a
+        /// repeat is a repeat whichever list it landed in.
+        var seen: Set<CatalogID> = []
         var offset = 0
         var requestCount = 0
         var retries = 0
@@ -246,6 +257,12 @@ public struct FilteredCatalog: Sendable {
             let resolved = try await source.resolveAncestry(for: page.items)
 
             for item in resolved {
+                // A duplicate is not merely a row shown twice. Every list above
+                // this keys on the identifier — SwiftUI's `ForEach` does — and
+                // two entries sharing one produce a blank the height of a row
+                // where a song should be, with its separators missing too.
+                guard seen.insert(item.id).inserted else { continue }
+
                 switch engine.evaluate(item.policyItem) {
                 case .allowed:
                     allowed.append(item)
