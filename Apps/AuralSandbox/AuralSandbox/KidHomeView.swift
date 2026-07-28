@@ -179,6 +179,10 @@ struct KidHomeView: View {
                     Label("Nothing to play", systemImage: "magnifyingglass")
                 }
                 Spacer()
+            } else if filter == .songs {
+                SongList(items: items) { item in
+                    Task { await playSong(item) }
+                }
             } else {
                 TileGrid(items: items) { item in
                     Task { await playSong(item) }
@@ -521,6 +525,112 @@ struct TileGrid: View {
     }
 }
 
+/// Songs, stacked.
+///
+/// A grid is for choosing between pictures. A song is a line of text with a
+/// picture beside it — the artwork is recognition, not the thing being chosen —
+/// so a 150pt square of it buys nothing a 56pt one does not, and costs most of
+/// the screen. Four tiles fit a phone; eight rows do, and a kid hunting for the
+/// one song they meant is reading titles.
+///
+/// Artists and albums stay as tiles, where the artwork genuinely is what is
+/// being picked between.
+/// The `footer` slot exists for the history screen, which pages: it puts a
+/// spinner below the last row that loads the next page when it scrolls into
+/// view. That has to live inside this scroll view, not below it, so the list
+/// owns the scrolling and lends out the bottom.
+struct SongList<Footer: View>: View {
+    let items: [CatalogItem]
+    let onPlay: (CatalogItem) -> Void
+    @ViewBuilder var footer: () -> Footer
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(items, id: \.id) { item in
+                    Button { onPlay(item) } label: { SongRow(item: item) }
+                        .buttonStyle(.plain)
+
+                    if item.id != items.last?.id {
+                        // Inset past the artwork, so the rule reads as a break
+                        // between titles rather than a line across the page.
+                        Divider().padding(.leading, SongRow.textInset)
+                    }
+                }
+            }
+            footer()
+        }
+    }
+}
+
+extension SongList where Footer == EmptyView {
+    init(items: [CatalogItem], onPlay: @escaping (CatalogItem) -> Void) {
+        self.init(items: items, onPlay: onPlay, footer: { EmptyView() })
+    }
+}
+
+/// One song: artwork, what it is, and the play button at the end.
+struct SongRow: View {
+    let item: CatalogItem
+
+    private static let artworkSize: CGFloat = 56
+    private static let margin: CGFloat = 16
+    private static let gap: CGFloat = 12
+
+    /// Where the text starts, which is where a separator should too.
+    static var textInset: CGFloat { margin + artworkSize + gap }
+
+    var body: some View {
+        HStack(spacing: Self.gap) {
+            artwork
+            VStack(alignment: .leading, spacing: 2) {
+                // Two lines, not truncated to one. Rows in a list are allowed
+                // to differ in height — the grid's alignment problem does not
+                // exist here — and cutting off the title of the thing being
+                // chosen is the worse trade.
+                Text(item.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                if let subtitle = item.subtitle {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: Self.gap)
+            // At the end of the row, never on the artwork — the same rule the
+            // tiles follow. Clipping is ours to do; compositing onto Apple's
+            // pixels is not. See `Tile.artwork`.
+            Image(systemName: "play.circle.fill")
+                .font(.title)
+                .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, Self.margin)
+        .padding(.vertical, 10)
+        // The whole row, including the gap the Spacer opens up, not just the
+        // parts with something drawn on them.
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text([item.title, item.subtitle].compactMap { $0 }.joined(separator: ", ")))
+        .accessibilityHint(Text("Plays"))
+    }
+
+    private var artwork: some View {
+        AsyncImage(url: item.artworkURL) { image in
+            image.resizable().aspectRatio(1, contentMode: .fit)
+        } placeholder: {
+            ZStack {
+                Rectangle().fill(.quaternary)
+                Image(systemName: "music.note").foregroundStyle(.tertiary)
+            }
+            .aspectRatio(1, contentMode: .fit)
+        }
+        .frame(width: Self.artworkSize, height: Self.artworkSize)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 struct Tile: View {
     let item: CatalogItem
 
@@ -536,10 +646,7 @@ struct Tile: View {
         VStack(alignment: .leading, spacing: 8) {
             artwork
             titleRow
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            subtitleRow
         }
         // Padded whatever the kind, so every tile is the same size and a grid
         // of mixed kinds still lines up. Only the fill behind it differs.
@@ -556,15 +663,16 @@ struct Tile: View {
         .accessibilityHint(Text(opens ? "Opens" : "Plays"))
     }
 
-    /// **Never cropped, covered, or composited onto.**
+    /// **Clipped to a shape, never covered or composited onto.**
     ///
     /// The Developer Program License Agreement §3.3.6(D) says MusicKit Content
-    /// may not be *modified*, and does not define the word. Masking artwork to a
-    /// circle removes part of it and a play badge laid over it obscures part of
-    /// it — so the kind is drawn everywhere except here. The corner radius is
-    /// the one liberty taken, and it is a considered one rather than an
-    /// inherited default: near-universal in MusicKit apps, and the shape of the
-    /// frame rather than a change to what the frame contains.
+    /// may not be *modified*, and does not define the word. Clipping is the
+    /// reading of that word this app has settled on: the shape of the frame is
+    /// ours, what the frame contains is untouched, and nothing is ever drawn
+    /// over the top. A circle crops harder than a rounded rectangle, so it is
+    /// further along the same line rather than across a new one — and it is what
+    /// the Music app itself does for artists, which is the convention a kid will
+    /// have met everywhere else.
     ///
     /// Bytes are referenced by URL and never copied into our storage, which the
     /// same clause forbids outright.
@@ -584,7 +692,44 @@ struct Tile: View {
             }
             .aspectRatio(1, contentMode: .fit)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(artworkShape)
+    }
+
+    /// A circle for artists, the way every music app draws a person.
+    ///
+    /// `AnyShape` rather than a branch around two `clipShape` calls: branching
+    /// gives SwiftUI two different views to reconcile, so a tile changing kind
+    /// under reuse would rebuild rather than redraw. It arrived in iOS 16, one
+    /// under the floor.
+    ///
+    /// The square bounding box is the same either way, so a grid of circles and
+    /// squares still lines up.
+    private var artworkShape: AnyShape {
+        item.id.kind == .artist
+            ? AnyShape(Circle())
+            : AnyShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// The kind, and — for anything you can open — a caret saying so.
+    ///
+    /// Trailing on this line rather than beside the title, which is where a
+    /// chevron sat once before and had to go: next to the play triangle it was
+    /// two rightward wedges at caption size and read as the same mark. Down here
+    /// it is pinned to the opposite edge from any glyph, on the line that names
+    /// the kind, where it reads as "and this takes you there" instead.
+    private var subtitleRow: some View {
+        HStack(spacing: 4) {
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if opens {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var titleRow: some View {

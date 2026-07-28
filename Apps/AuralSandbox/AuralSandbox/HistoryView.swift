@@ -28,22 +28,13 @@ struct HistoryView: View {
                     Label("Nothing played yet", systemImage: "clock")
                 }
             } else {
-                ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 150), spacing: 16)],
-                        spacing: 16
-                    ) {
-                        ForEach(items, id: \.id) { item in
-                            Button {
-                                Task { await play(item) }
-                            } label: {
-                                Tile(item: item)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding()
-
+                // A list, not a grid: everything here is a song, and a song is a
+                // line of text with a picture beside it. Twice as many fit the
+                // screen, which is what a history is for — the same reasoning as
+                // the Songs tab in search, and the same rows.
+                SongList(items: items) { item in
+                    Task { await play(item) }
+                } footer: {
                     if hasMore {
                         // Paged on appearance rather than by a button: a child
                         // should not have to know what a page is.
