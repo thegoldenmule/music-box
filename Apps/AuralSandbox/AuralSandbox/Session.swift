@@ -472,6 +472,12 @@ final class Session {
         try await catalog.children(of: id)
     }
 
+    /// Who made this, as items a screen can link to — and only the ones this kid
+    /// is allowed to reach.
+    func artists(of id: CatalogID) async throws -> [CatalogItem] {
+        try await catalog.artists(of: id)
+    }
+
     // MARK: - The kid's library
     //
     // Everything here goes through ``MergedLibrary``. Nothing on this side names
@@ -487,21 +493,25 @@ final class Session {
     /// is true — see ``DeviceLibraryState/hasBeenAsked``.
     var hasAnsweredSharedDevice: Bool { deviceLibrary.hasBeenAsked }
 
-    /// Records the answer, from onboarding or from the admin.
+    /// Records both answers, from onboarding or from the admin.
     ///
     /// **Both call sites mark it answered**, which is the point. A parent who
-    /// reaches the switch in the admin has been asked as surely as one who
+    /// reaches the switches in the admin has been asked as surely as one who
     /// answered at first launch, and treating the two differently would leave a
     /// device where the question was settled and the gate still shut.
     ///
-    /// Changing it later loses nothing. Turning it off adopts the library at
-    /// that point rather than backfilling anything; turning it on stops reading
-    /// and writing there and leaves every row we already hold.
-    func setSharedDevice(_ isShared: Bool) {
-        deviceLibrary = DeviceLibraryState(isSharedDevice: isShared, hasBeenAsked: true)
+    /// Changing them later loses nothing. Becoming the kid's own library adopts
+    /// what is in it from that point rather than backfilling anything; ceasing
+    /// to be one stops reading and writing there and leaves every row we hold.
+    func setDeviceAnswers(sharesDevice: Bool, childHasOwnAccount: Bool) {
+        deviceLibrary = DeviceLibraryState(
+            sharesDeviceWithChild: sharesDevice,
+            childHasOwnAccount: childHasOwnAccount,
+            hasBeenAsked: true
+        )
         deviceLibraryStore.save(deviceLibrary)
-        // Which providers are live has just changed, so what the shelves draw
-        // from has too.
+        // Which providers are live may have just changed, so what the shelves
+        // draw from has too.
         Task { await refreshLibrary() }
     }
 

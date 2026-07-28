@@ -176,6 +176,37 @@ public struct MusicKitCatalogSource: CatalogSource {
         }
     }
 
+    // MARK: - Credits
+
+    /// Everyone credited, not just the first one.
+    ///
+    /// The asymmetry with ``ancestry(of:)-(Album)`` is deliberate: that keeps one
+    /// artist because one container is all a deny needs, and this returns the
+    /// whole credit because a record made by two artists names two.
+    ///
+    /// Empty identifiers are dropped for the same reason they are dropped from
+    /// ancestry — a chip that links nowhere is worse than no chip.
+    public func artists(of id: CatalogID) async throws -> [CatalogItem] {
+        let musicID = MusicItemID(id.rawValue)
+
+        switch id.kind {
+        case .album:
+            guard let album = try await fetchAlbum(musicID) else { return [] }
+            let detailed = try await mapErrors { try await album.with([.artists]) }
+            return (detailed.artists ?? []).map(item(from:)).filter { !$0.id.rawValue.isEmpty }
+
+        case .song:
+            guard let song = try await fetchSong(musicID) else { return [] }
+            let detailed = try await mapErrors { try await song.with([.artists]) }
+            return (detailed.artists ?? []).map(item(from:)).filter { !$0.id.rawValue.isEmpty }
+
+        // An artist is their own credit, and a playlist's tracks each carry
+        // their own — there is no one answer for the container.
+        case .artist, .playlist:
+            return []
+        }
+    }
+
     // MARK: - Ancestry
 
     /// Batched, because search results arrive without relationships and the
@@ -274,7 +305,12 @@ public struct MusicKitCatalogSource: CatalogSource {
             title: song.title,
             subtitle: song.artistName,
             artworkURL: artworkURL(song.artwork),
-            rating: rating(from: song.contentRating)
+            rating: rating(from: song.contentRating),
+            // Both come back with the song itself — no extra property, no second
+            // request — so they cost nothing to carry and are absent forever if
+            // the screen that wants them has to ask separately.
+            duration: song.duration,
+            trackNumber: song.trackNumber
         )
     }
 
@@ -546,7 +582,9 @@ public struct MusicKitLibrarySource: LibrarySource {
             subtitle: song.artistName,
             artworkURL: artworkURL(song.artwork),
             rating: rating(from: song.contentRating),
-            ancestors: ancestors
+            ancestors: ancestors,
+            duration: song.duration,
+            trackNumber: song.trackNumber
         )
     }
 

@@ -518,6 +518,51 @@ struct ChildrenTests {
         #expect(results.blocked.count == 3)
     }
 
+    @Test("Album credits come back whole when nothing is denied")
+    func creditsAreReturned() async throws {
+        let source = StubCatalogSource(
+            artists: [Fix.album: [Fix.artistItem(1), Fix.artistItem(2)]]
+        )
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let credits = try await sut.artists(of: Fix.album)
+
+        #expect(credits.map(\.title) == ["Artist 1", "Artist 2"])
+    }
+
+    /// The case ancestry cannot cover: a record keeps only its *first* artist as
+    /// an ancestor, so a collaboration stays reachable while the second name on
+    /// it is denied. Filtering the credits is what stops that name being a link
+    /// into everything they have ever made.
+    @Test("A denied co-credit is dropped, and the record itself stays reachable")
+    func deniedCreditIsDropped() async throws {
+        let denied = CatalogID(.artist, "artist-2")
+        let source = StubCatalogSource(
+            artists: [Fix.album: [Fix.artistItem(1), Fix.artistItem(2)]]
+        )
+        let sut = FilteredCatalog(source: source, engine: Fix.engine(.denyPlusAuto, [.deny(denied)]))
+
+        let credits = try await sut.artists(of: Fix.album)
+
+        #expect(credits.map(\.title) == ["Artist 1"])
+    }
+
+    /// Level 1 is the harder half of the same rule. Nothing is denied here — the
+    /// artist simply is not on the allow list, and a link to them would open onto
+    /// a page with nothing on it.
+    @Test("Level 1 offers only credits the parent put on the list")
+    func allowOnlyKeepsListedCredits() async throws {
+        let listed = CatalogID(.artist, "artist-1")
+        let source = StubCatalogSource(
+            artists: [Fix.album: [Fix.artistItem(1), Fix.artistItem(2)]]
+        )
+        let sut = FilteredCatalog(source: source, engine: Fix.engine(.allowOnly, [.allow(listed)]))
+
+        let credits = try await sut.artists(of: Fix.album)
+
+        #expect(credits.map(\.title) == ["Artist 1"])
+    }
+
     @Test("The player's pre-playback re-check resolves ancestry when it is missing")
     func verdictResolvesAncestry() async throws {
         let source = StubCatalogSource(

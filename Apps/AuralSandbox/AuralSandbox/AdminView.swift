@@ -121,26 +121,31 @@ struct AdminView: View {
 
     // MARK: - This device
 
-    /// The shared-device switch, worded for the question it actually asks.
+    /// The same two questions onboarding asked, changeable.
     ///
-    /// **Per device, not per family, and not per kid.** It describes the Apple
-    /// Music library signed in here, so it is never synced — a second device has
-    /// its own answer and would be handed one that is false there.
+    /// **Per device, not per family, and not per kid.** They describe the Apple
+    /// Music library signed in here, so they are never synced — a second device
+    /// has its own answers and would be handed ones that are false there.
     ///
-    /// Phrased positively ("this kid's own library") rather than as the stored
-    /// `isSharedDevice`, because the stored name asks the narrower question: a
-    /// hand-me-down phone that only the kid uses is not shared and is still
-    /// somebody else's library.
+    /// Two switches rather than the single derived one, so this screen and
+    /// onboarding ask the same thing. A lone "is this my kid's own library?"
+    /// switch would be a third wording of a question already asked twice, and
+    /// the one wording a parent cannot answer without working out what it means.
     private var deviceSection: some View {
         Section {
-            Toggle("This is my kid's own library", isOn: ownLibraryBinding)
+            Toggle("Sharing this device with your child", isOn: sharesDeviceBinding)
+            Toggle("Your child has their own Apple Music account", isOn: ownAccountBinding)
+                // Moot on a shared device, exactly as in onboarding: the account
+                // signed in is a grown-up's and the library is theirs whichever
+                // way this points.
+                .disabled(session.deviceLibrary.sharesDeviceWithChild)
         } header: {
             Text("This device")
         } footer: {
             Text(
                 session.deviceLibrary.isSharedDevice
-                    ? "Nothing is read from the Apple Music library on this device and nothing is written to it. Your kid's favorites and playlists live in this app. Turning this on picks the library up from that point rather than backfilling anything."
-                    : "Your kid's favorites and playlists become real Apple Music library items on this account, and whatever is already in that library shows up on their shelf — filtered by their level, like everything else. What they keep is sent to Apple under your own account and nowhere else."
+                    ? "Their favorites and playlists live in this app only. Nothing is read from the Apple Music library on this device and nothing is written to it."
+                    : "Their favorites and playlists become real items in your child's Apple Music library, and whatever is already in it shows up on their shelf — filtered by their level, like everything else. What they keep is sent to Apple under your family's account and nowhere else."
             )
         }
     }
@@ -194,13 +199,29 @@ struct AdminView: View {
         Binding(get: { session.kid.unratedBehavior }, set: { session.setUnratedBehavior($0) })
     }
 
-    /// Inverted, because the switch says the useful thing and the column stores
-    /// the other one. `isSharedDevice` is the field; "this is my kid's own
-    /// library" is the question a parent can answer without thinking about it.
-    private var ownLibraryBinding: Binding<Bool> {
+    /// Each switch writes both answers, because the stored value is derived from
+    /// the pair and half of a pair is not a state.
+    private var sharesDeviceBinding: Binding<Bool> {
         Binding(
-            get: { !session.deviceLibrary.isSharedDevice },
-            set: { session.setSharedDevice(!$0) }
+            get: { session.deviceLibrary.sharesDeviceWithChild },
+            set: {
+                session.setDeviceAnswers(
+                    sharesDevice: $0,
+                    childHasOwnAccount: session.deviceLibrary.childHasOwnAccount
+                )
+            }
+        )
+    }
+
+    private var ownAccountBinding: Binding<Bool> {
+        Binding(
+            get: { session.deviceLibrary.childHasOwnAccount },
+            set: {
+                session.setDeviceAnswers(
+                    sharesDevice: session.deviceLibrary.sharesDeviceWithChild,
+                    childHasOwnAccount: $0
+                )
+            }
         )
     }
 

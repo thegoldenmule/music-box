@@ -414,6 +414,23 @@ public struct FilteredCatalog: Sendable {
         )
     }
 
+    /// The credited artists this kid may actually visit.
+    ///
+    /// Filtered like anything else, because a credit on an album page is a link
+    /// to that artist's whole catalogue — in level 1 an artist who is not on the
+    /// allow list opens onto nothing, and in level 2 a denied one is precisely
+    /// what a deny is for. What is left is dropped rather than returned blocked:
+    /// nothing was rendered and nothing was reached for, so there is no block to
+    /// report. The album the kid did open is the event worth logging, and its
+    /// caller already does.
+    ///
+    /// A co-credit disappearing is why this is worth doing at all: a record can
+    /// be reachable while one of its two artists is denied, since ancestry only
+    /// ever carried the first of them.
+    public func artists(of id: CatalogID) async throws -> [CatalogItem] {
+        try await source.artists(of: id).filter { engine.evaluate($0.policyItem).isAllowed }
+    }
+
     /// Judge one item, resolving its lineage first if it has none.
     ///
     /// This is what the player calls immediately before playback starts. It asks

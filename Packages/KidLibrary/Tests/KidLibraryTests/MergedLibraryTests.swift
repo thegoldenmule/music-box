@@ -465,7 +465,7 @@ struct SharedDevice {
         )
         let harness = try Harness(
             extra: [apple],
-            device: DeviceLibraryState(isSharedDevice: true, hasBeenAsked: true)
+            device: .asked(shared: true)
         )
 
         try await harness.library.addFavorite(Fix.item(Fix.clean))
@@ -477,7 +477,7 @@ struct SharedDevice {
     @Test("Off: both, which is the default")
     func defaultIsBoth() async throws {
         let apple = StubProvider()
-        let harness = try Harness(extra: [apple], device: DeviceLibraryState(hasBeenAsked: true))
+        let harness = try Harness(extra: [apple], device: .asked(shared: false))
 
         try await harness.library.addFavorite(Fix.item(Fix.clean))
         #expect(apple.calls.contains { $0.hasPrefix("addFavorite") })
@@ -485,7 +485,7 @@ struct SharedDevice {
 
     @Test("The kid still has a whole library with our store alone")
     func completeWithoutAppleMusic() async throws {
-        let harness = try Harness(device: DeviceLibraryState(isSharedDevice: true))
+        let harness = try Harness(device: DeviceLibraryState(sharesDeviceWithChild: true))
 
         try await harness.library.addFavorite(Fix.item(Fix.clean))
         let row = try await harness.library.createPlaylist(
@@ -531,7 +531,7 @@ struct SharedDevice {
             ]
         )
         let harness = try Harness(extra: [apple], device: .unasked)
-        harness.device.save(DeviceLibraryState(isSharedDevice: false, hasBeenAsked: true))
+        harness.device.save(.asked(shared: false))
 
         #expect(try await harness.library.favorites().items.map(\.id) == [Fix.other])
     }
@@ -554,6 +554,73 @@ struct SharedDevice {
         let shelf = try await harness.library.favorites()
         #expect(shelf.items.isEmpty)
         #expect(shelf.blocked.map(\.reason) == [.explicitContent])
+    }
+}
+
+// MARK: - Deriving the answer
+
+@Suite("Two questions, one answer")
+struct DerivingSharedDevice {
+    @Test(
+        "The library is the kid's own only when the device and the account both are",
+        arguments: [
+            // shares device, kid has own account, library is a grown-up's
+            (false, true, false),  // their own phone, their own account
+            (true, true, true),  // the family iPad — the parent's library is signed in
+            (false, false, true),  // the hand-me-down: nobody else uses it, still not theirs
+            (true, false, true),  // shared, and on a grown-up's account
+        ]
+    )
+    func derivation(shares: Bool, ownAccount: Bool, expected: Bool) {
+        let state = DeviceLibraryState(
+            sharesDeviceWithChild: shares,
+            childHasOwnAccount: ownAccount
+        )
+        #expect(state.isSharedDevice == expected)
+    }
+
+    @Test("The hand-me-down is the case a single question kept getting wrong")
+    func handMeDown() {
+        // One user, one device, somebody else's library. Asked on its own, "do
+        // you share this device?" answers no and means yes.
+        let phone = DeviceLibraryState(sharesDeviceWithChild: false, childHasOwnAccount: false)
+        #expect(phone.isSharedDevice)
+    }
+
+    @Test("Unasked means both providers live, as the spec's default says")
+    func unaskedDefault() {
+        #expect(DeviceLibraryState.unasked.isSharedDevice == false)
+        #expect(DeviceLibraryState.unasked.hasBeenAsked == false)
+    }
+
+    @Test("A stored answer this version cannot read reads back as unasked")
+    func unreadableIsUnasked() {
+        // Which is why changing the shape of the questions costs one re-ask
+        // rather than a migration — and re-asking is the safe outcome.
+        let suite = "aural-sandbox-tests-device-state"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(Data("not json".utf8), forKey: UserDefaultsDeviceLibraryState.key)
+
+        #expect(UserDefaultsDeviceLibraryState(defaults: defaults).state == .unasked)
+    }
+
+    @Test("A saved answer round-trips")
+    func roundTrips() {
+        let suite = "aural-sandbox-tests-device-state-2"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+
+        let store = UserDefaultsDeviceLibraryState(defaults: defaults)
+        let answered = DeviceLibraryState(
+            sharesDeviceWithChild: true,
+            childHasOwnAccount: false,
+            hasBeenAsked: true
+        )
+        store.save(answered)
+
+        #expect(store.state == answered)
+        #expect(store.state.isSharedDevice)
     }
 }
 

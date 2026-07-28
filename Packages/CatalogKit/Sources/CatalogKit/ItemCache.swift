@@ -125,6 +125,14 @@ public struct CachingCatalogSource: CatalogSource {
         return children
     }
 
+    /// Not served from the cache, only stored into it: the cache is keyed by
+    /// item, and nothing in it records *whose* credit an artist was.
+    public func artists(of id: CatalogID) async throws -> [CatalogItem] {
+        let artists = try await wrapped.artists(of: id)
+        await cache.store(artists)
+        return artists
+    }
+
     public func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
         var resolved: [CatalogItem] = []
         var needsFetch: [CatalogItem] = []

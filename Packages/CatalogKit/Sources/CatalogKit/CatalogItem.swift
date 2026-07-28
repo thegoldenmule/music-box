@@ -38,13 +38,30 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
     /// fills these in as a batch before anything is judged.
     public let ancestors: [Ancestor]
 
+    /// How long a song runs, in seconds.
+    ///
+    /// `nil` for everything that is not a song, and for a song the catalog gave
+    /// no length for. Presentation only — nothing about a policy decision reads
+    /// it.
+    public let duration: TimeInterval?
+
+    /// Where a song sits on its album, as the catalog numbers it.
+    ///
+    /// Kept rather than derived from position in a list, because the list a kid
+    /// sees has had the policy engine through it: track 4 blocked makes the fifth
+    /// song the fourth row, and a number counted off the rows would quietly
+    /// renumber the record.
+    public let trackNumber: Int?
+
     public init(
         id: CatalogID,
         title: String,
         subtitle: String? = nil,
         artworkURL: URL? = nil,
         rating: ContentRating? = nil,
-        ancestors: [Ancestor] = []
+        ancestors: [Ancestor] = [],
+        duration: TimeInterval? = nil,
+        trackNumber: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -52,6 +69,8 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
         self.artworkURL = artworkURL
         self.rating = rating
         self.ancestors = ancestors
+        self.duration = duration
+        self.trackNumber = trackNumber
     }
 
     /// The view of this item that the policy engine takes.
@@ -67,7 +86,9 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
             subtitle: subtitle,
             artworkURL: artworkURL,
             rating: rating,
-            ancestors: ancestors
+            ancestors: ancestors,
+            duration: duration,
+            trackNumber: trackNumber
         )
     }
 }

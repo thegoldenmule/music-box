@@ -33,6 +33,18 @@ public protocol CatalogSource: Sendable {
     /// playlist's entries.
     func children(of id: CatalogID) async throws -> [CatalogItem]
 
+    /// Who is credited on an album or a song, as items in their own right.
+    ///
+    /// Distinct from ancestry, and deliberately so. ``resolveAncestry(for:)``
+    /// keeps a single artist because it feeds the policy engine, where one
+    /// container is enough to carry a deny; this is for *showing* the credit, and
+    /// a record made by two artists names two. Nothing judged is decided from
+    /// what comes back here.
+    ///
+    /// Returns items rather than identifiers because a name is the whole point,
+    /// and a name is not something ``Ancestor`` carries.
+    func artists(of id: CatalogID) async throws -> [CatalogItem]
+
     /// Attach ancestry to a batch of items.
     ///
     /// This exists as a batch call on purpose. MusicKit does not return
@@ -59,6 +71,13 @@ extension CatalogSource {
     /// Sources whose reads already include lineage can skip this.
     public func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
         items
+    }
+
+    /// No credits, for sources that cannot supply them. A screen that gets
+    /// nothing back falls back to the artist name it already has, which is the
+    /// same thing minus the link.
+    public func artists(of id: CatalogID) async throws -> [CatalogItem] {
+        []
     }
 }
 

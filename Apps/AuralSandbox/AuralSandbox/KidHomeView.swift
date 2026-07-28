@@ -84,8 +84,16 @@ struct KidHomeView: View {
                 }
             }
             .navigationTitle(session.kid.name)
+            // Every container push in the app lands here — from search, from a
+            // shelf, from a playlist, from an artist's page — because they all
+            // sit inside this stack. An album gets its own screen; an artist and
+            // a playlist are grids of pictures, which is what browsing is.
             .navigationDestination(for: CatalogItem.self) { container in
-                BrowseView(session: session, player: player, container: container)
+                if container.id.kind == .album {
+                    AlbumView(session: session, player: player, album: container)
+                } else {
+                    BrowseView(session: session, player: player, container: container)
+                }
             }
             .navigationDestination(for: HomeRoute.self) { route in
                 switch route {

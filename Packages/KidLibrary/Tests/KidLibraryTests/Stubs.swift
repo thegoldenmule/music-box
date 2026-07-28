@@ -235,6 +235,22 @@ final class StubProvider: LibraryProvider {
     }
 }
 
+extension DeviceLibraryState {
+    /// The pair of answers that lands on a given `isSharedDevice`, for tests
+    /// that care about the derived value rather than how it was reached.
+    ///
+    /// "Shared" here is the whole-device-and-account question, so the false case
+    /// has to say both things: nobody else uses it *and* the account is the
+    /// kid's. Saying only the first is the hand-me-down phone, which is shared.
+    static func asked(shared: Bool) -> DeviceLibraryState {
+        DeviceLibraryState(
+            sharesDeviceWithChild: shared,
+            childHasOwnAccount: !shared,
+            hasBeenAsked: true
+        )
+    }
+}
+
 // MARK: - Wiring one up
 
 @MainActor
@@ -253,7 +269,7 @@ struct Harness {
         unrated: UnratedBehavior = .block,
         entries: [PolicyEntry] = [],
         extra: [any LibraryProvider] = [],
-        device state: DeviceLibraryState = DeviceLibraryState(hasBeenAsked: true),
+        device state: DeviceLibraryState = .asked(shared: false),
         container: ModelContainer? = nil
     ) throws {
         self.container = try container ?? FamilyStore.inMemoryContainer()
