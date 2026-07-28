@@ -205,6 +205,178 @@ struct OverFetchTests {
     }
 }
 
+@Suite("Kinded search")
+struct KindedSearchTests {
+    /// Three kinds, and enough songs to swamp the other two if they shared a
+    /// budget.
+    private func source() -> StubCatalogSource {
+        StubCatalogSource(pagesByKind: [
+            .artist: [Fix.page((0..<3).map(Fix.artistItem), hasMore: false)],
+            .album: [Fix.page((0..<4).map { Fix.albumItem($0) }, hasMore: false)],
+            .song: [Fix.page((0..<30).map { Fix.songItem($0) }, hasMore: false)],
+        ])
+    }
+
+    @Test("Every kind comes back — songs do not crowd out albums and artists")
+    func everyKindSurvives() async throws {
+        let sut = FilteredCatalog(source: source(), engine: Fix.engine())
+
+        let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
+
+        // The bug this exists to catch: one shared limit, plus the adapter
+        // appending songs first, means `prefix(limit)` cuts every album and
+        // artist off the end of a full page of songs. The screen then looks
+        // exactly as if the catalog had no albums to offer.
+        #expect(results.items(of: .artist).count == 3)
+        #expect(results.items(of: .album).count == 4)
+        #expect(results.items(of: .song).count == 24)
+    }
+
+    @Test("Each kind is asked for on its own, never in one mixed request")
+    func neverMixesKindsInARequest() async throws {
+        let source = source()
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        _ = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
+
+        // The whole reason this is one loop per kind. Apple Music applies
+        // `limit` and `offset` per type, so a mixed request breaks both the
+        // `hasMore` inference and the offset arithmetic — silently, and only
+        // on device.
+        let calls = await source.searchCalls
+        #expect(calls.allSatisfy { $0.kinds.count == 1 })
+        #expect(await source.searchCallCount(for: .artist) == 1)
+        #expect(await source.searchCallCount(for: .album) == 1)
+        #expect(await source.searchCallCount(for: .song) == 1)
+    }
+
+    @Test("Each kind gets its own budget, not a share of one")
+    func budgetsArePerKind() async throws {
+        let source = source()
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        _ = try await sut.search(term: "x", budgets: [.artist: 2, .song: 24])
+
+        // Over-fetch is per kind too: 2 × 3 for artists, and songs clamped at
+        // Apple Music's cap of 25.
+        let asked = await source.searchCalls
+        #expect(asked.first { $0.kinds == [.artist] }?.limit == 6)
+        #expect(asked.first { $0.kinds == [.song] }?.limit == 25)
+    }
+
+    @Test("A kind with no budget makes no request at all")
+    func zeroBudgetIsSkipped() async throws {
+        let source = source()
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.search(term: "x", budgets: [.song: 10, .album: 0])
+
+        #expect(await source.searchCallCount(for: .album) == 0)
+        // Absent, not present-and-empty: never asked for is a different fact
+        // from asked for and found nothing, and a filter control needs both.
+        #expect(results.results(for: .album) == nil)
+        #expect(results.results(for: .song) != nil)
+    }
+
+    @Test("Artists survive UnratedBehavior.block, which would otherwise hide them all")
+    func artistsAreNotBlockedAsUnrated() async throws {
+        // Artists carry no rating in the catalog, so `nil` here is normal
+        // rather than missing data. The engine treats them as containers for
+        // exactly this reason — without that, turning on artist search under
+        // the default unrated behavior would return nothing, every time.
+        let sut = FilteredCatalog(source: source(), engine: Fix.engine(unrated: .block))
+
+        let results = try await sut.search(term: "x", budgets: [.artist: 6])
+
+        #expect(results.items(of: .artist).count == 3)
+        #expect(results.blocked.isEmpty)
+    }
+
+    @Test("An album result is still judged against a deny on its artist")
+    func ancestryIsResolvedForAlbumsToo() async throws {
+        let source = StubCatalogSource(
+            pagesByKind: [.album: [Fix.page([Fix.albumItem(0)], hasMore: false)]],
+            ancestry: [CatalogID(.album, "album-0"): [Ancestor(id: Fix.artist)]]
+        )
+        let sut = FilteredCatalog(
+            source: source,
+            engine: Fix.engine(.denyPlusAuto, [.deny(Fix.artist)])
+        )
+
+        let results = try await sut.search(term: "x", budgets: [.album: 6])
+
+        #expect(results.items.isEmpty)
+        #expect(results.blocked.first?.reason == .deniedByParent(Fix.artist))
+    }
+
+    @Test("Allowed items are ordered containers first, then songs")
+    func displayOrderPutsContainersFirst() async throws {
+        let sut = FilteredCatalog(source: source(), engine: Fix.engine())
+
+        let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
+
+        #expect(results.items.prefix(3).allSatisfy { $0.id.kind == .artist })
+        #expect(results.items.dropFirst(3).prefix(4).allSatisfy { $0.id.kind == .album })
+        #expect(results.items.dropFirst(7).allSatisfy { $0.id.kind == .song })
+    }
+
+    @Test("Only kinds that found something are offered as filters")
+    func populatedKindsSkipsEmptyOnes() async throws {
+        let source = StubCatalogSource(pagesByKind: [
+            .artist: [Fix.page((0..<2).map(Fix.artistItem), hasMore: false)],
+            .album: [Fix.page([], hasMore: false)],
+            .song: [Fix.page((0..<5).map { Fix.songItem($0) }, hasMore: false)],
+        ])
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
+
+        // A filter that leads to an empty screen is a dead end a kid has no way
+        // to interpret, so the control is built from this rather than from what
+        // was asked for.
+        #expect(results.populatedKinds == [.artist, .song])
+    }
+
+    @Test("One kind giving up is reported, and does not read as the end")
+    func gaveUpEarlyWinsOverReachedEnd() async throws {
+        // Songs are entirely explicit and the source always claims more, so
+        // that loop burns its retries; artists run out honestly on page one.
+        let explicit = (0..<20).map { page in
+            Fix.page((0..<4).map { Fix.songItem(page * 4 + $0, rating: .explicit) }, hasMore: true)
+        }
+        let source = StubCatalogSource(pagesByKind: [
+            .song: explicit,
+            .artist: [Fix.page([Fix.artistItem(0)], hasMore: false)],
+        ])
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.search(term: "x", budgets: [.song: 10, .artist: 6])
+
+        // Asymmetric on purpose: "we stopped looking" has to survive the merge,
+        // because losing it turns a partial answer into a confident empty one.
+        #expect(results.gaveUpEarly)
+        #expect(!results.reachedEnd)
+        #expect(results.results(for: .artist)?.reachedEnd == true)
+        // Four requests for songs, one for artists.
+        #expect(results.requestCount == 5)
+    }
+
+    @Test("Degenerate inputs make no requests at all", arguments: [
+        (term: "", budgets: [ItemKind.song: 10]),
+        (term: "x", budgets: [ItemKind: Int]()),
+        (term: "x", budgets: [ItemKind.song: 0]),
+    ])
+    func degenerateInputs(input: (term: String, budgets: [ItemKind: Int])) async throws {
+        let source = source()
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.search(term: input.term, budgets: input.budgets)
+
+        #expect(results.items.isEmpty)
+        #expect(await source.searchCalls.isEmpty)
+    }
+}
+
 @Suite("Children and re-checks")
 struct ChildrenTests {
     @Test("Playlist entries are filtered track by track")

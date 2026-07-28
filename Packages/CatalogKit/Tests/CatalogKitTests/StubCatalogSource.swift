@@ -18,6 +18,7 @@ actor StubCatalogSource: CatalogSource {
     }
 
     private var pages: [CatalogPage]
+    private var pagesByKind: [ItemKind: [CatalogPage]]
     private var ancestry: [CatalogID: [Ancestor]]
     private var children: [CatalogID: [CatalogItem]]
     private var items: [CatalogID: CatalogItem]
@@ -27,13 +28,19 @@ actor StubCatalogSource: CatalogSource {
     private(set) var ancestryResolvedCount = 0
     private(set) var itemCallCount = 0
 
+    /// - Parameter pagesByKind: a separate queue per kind, for the kinded search
+    ///   — which runs one loop per kind, concurrently. Three loops drawing from
+    ///   the single `pages` queue makes which loop gets which page a race, so a
+    ///   test written that way passes or fails on scheduling.
     init(
         pages: [CatalogPage] = [],
+        pagesByKind: [ItemKind: [CatalogPage]] = [:],
         ancestry: [CatalogID: [Ancestor]] = [:],
         children: [CatalogID: [CatalogItem]] = [:],
         items: [CatalogID: CatalogItem] = [:]
     ) {
         self.pages = pages
+        self.pagesByKind = pagesByKind
         self.ancestry = ancestry
         self.children = children
         self.items = items
@@ -46,8 +53,22 @@ actor StubCatalogSource: CatalogSource {
         offset: Int
     ) async throws -> CatalogPage {
         searchCalls.append(SearchCall(term: term, kinds: kinds, limit: limit, offset: offset))
+
+        if kinds.count == 1, let kind = kinds.first, var queue = pagesByKind[kind] {
+            guard !queue.isEmpty else { return .empty }
+            let page = queue.removeFirst()
+            pagesByKind[kind] = queue
+            return page
+        }
+
         guard !pages.isEmpty else { return .empty }
         return pages.removeFirst()
+    }
+
+    /// How many requests this kind's loop made. `searchCalls` is in completion
+    /// order across concurrent loops, so counting it by hand is a race.
+    func searchCallCount(for kind: ItemKind) -> Int {
+        searchCalls.filter { $0.kinds == [kind] }.count
     }
 
     func item(for id: CatalogID) async throws -> CatalogItem? {
@@ -145,6 +166,26 @@ enum Fix {
             rating: rating,
             ancestors: ancestors
         )
+    }
+
+    static func albumItem(
+        _ n: Int,
+        rating: SandboxContentRating? = .clean,
+        ancestors: [Ancestor] = []
+    ) -> CatalogItem {
+        CatalogItem(
+            id: CatalogID(.album, "album-\(n)"),
+            title: "Album \(n)",
+            subtitle: "Artist A",
+            rating: rating,
+            ancestors: ancestors
+        )
+    }
+
+    /// An artist carries no rating and no lineage — the catalog has neither for
+    /// them. That is the whole reason the engine treats them as containers.
+    static func artistItem(_ n: Int) -> CatalogItem {
+        CatalogItem(id: CatalogID(.artist, "artist-\(n)"), title: "Artist \(n)", rating: nil)
     }
 
     /// A library song. No ISRC means a raw file — nothing to match on.

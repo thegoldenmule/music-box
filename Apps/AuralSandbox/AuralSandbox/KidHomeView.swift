@@ -16,7 +16,8 @@ struct KidHomeView: View {
     @State private var recents: [CatalogItem] = []
     @State private var mine: [CatalogItem] = []
     @State private var term = ""
-    @State private var searchResults: [CatalogItem]?
+    @State private var searchResults: KindedResults?
+    @State private var filter: SearchFilter = .all
     @State private var isLoading = false
     @State private var trouble: String?
     @State private var showingAdmin = false
@@ -35,23 +36,24 @@ struct KidHomeView: View {
     private var canSearch: Bool { session.kid.mode != .allowOnly }
 
     /// Everything currently tappable, which is what a play queues from.
-    private var shown: [CatalogItem] { searchResults ?? (recents + mine) }
+    ///
+    /// The *visible* results, not every result: a kid looking at Songs should
+    /// get a queue of the songs they can see, not one silently padded out of a
+    /// tab they are not on.
+    private var shown: [CatalogItem] { visible ?? (recents + mine) }
+
+    /// What the results grid is showing, once the filter has had its say.
+    private var visible: [CatalogItem]? {
+        guard let searchResults else { return nil }
+        guard let kind = filter.kind else { return searchResults.items }
+        return searchResults.items(of: kind)
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
                 if let searchResults {
-                    if isLoading && searchResults.isEmpty {
-                        ProgressView()
-                    } else if searchResults.isEmpty {
-                        ContentUnavailableView {
-                            Label("Nothing to play", systemImage: "magnifyingglass")
-                        }
-                    } else {
-                        TileGrid(items: searchResults) { item in
-                            Task { await playSong(item) }
-                        }
-                    }
+                    results(searchResults)
                 } else {
                     home
                 }
@@ -96,7 +98,10 @@ struct KidHomeView: View {
         }
         .task { reload() }
         .onChange(of: term) { _, new in
-            if new.isEmpty { searchResults = nil }
+            if new.isEmpty {
+                searchResults = nil
+                filter = .all
+            }
         }
         // A play is written when the track ends, is skipped, or the app goes
         // away — duration is the signal, and there is no stop control. So
@@ -112,6 +117,49 @@ struct KidHomeView: View {
                 player.flush()
             } else if searchResults == nil {
                 reload()
+            }
+        }
+    }
+
+    /// Search results: one list, with a filter across the top.
+    ///
+    /// One list rather than a section per kind, because sections make the answer
+    /// depend on how far a kid scrolls — songs below two rows of albums are
+    /// off-screen on a phone. The filter is the whole control surface, and it
+    /// costs nothing to use: every kind was fetched by the one search, so
+    /// switching is a redraw rather than a round trip.
+    @ViewBuilder
+    private func results(_ results: KindedResults) -> some View {
+        let items = visible ?? []
+
+        VStack(spacing: 0) {
+            // Only kinds that found something. Four tabs where three lead to an
+            // empty screen is three dead ends a kid has no way to interpret —
+            // and for a narrow term that is the common case, not the edge one.
+            let filters = SearchFilter.available(for: results)
+            if filters.count > 2 {
+                Picker("Show", selection: $filter) {
+                    ForEach(filters) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            }
+
+            if isLoading && items.isEmpty {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else if items.isEmpty {
+                Spacer()
+                ContentUnavailableView {
+                    Label("Nothing to play", systemImage: "magnifyingglass")
+                }
+                Spacer()
+            } else {
+                TileGrid(items: items) { item in
+                    Task { await playSong(item) }
+                }
             }
         }
     }
@@ -199,7 +247,12 @@ struct KidHomeView: View {
             do {
                 // Filtered, and the blocked half still reaches the parent's
                 // report even though the kid never sees it.
-                searchResults = try await session.search(term: term).items
+                //
+                // Back to All on every new search. A filter left on Albums from
+                // the last term would meet a new one that has none, leaving a
+                // segmented control with nothing selected above an empty grid.
+                filter = .all
+                searchResults = try await session.search(term: term)
             } catch {
                 trouble = Session.message(for: error)
             }
@@ -229,6 +282,56 @@ private struct SearchIfAllowed: ViewModifier {
                 .onSubmit(of: .search, onSubmit)
         } else {
             content
+        }
+    }
+}
+
+/// Which kind of result the search screen is showing.
+///
+/// A filter over results already in hand, **not a new search**. Every kind comes
+/// back in one round trip, so switching costs nothing and the parent's report
+/// records one search rather than one per tap.
+///
+/// This is a separate type from `ItemKind` rather than an optional one because
+/// `all` is a real choice here and not the absence of a choice — and because
+/// `ItemKind` has a `playlist` case that the kid's search deliberately does not
+/// ask for.
+enum SearchFilter: Hashable, Identifiable, CaseIterable {
+    case all
+    case songs
+    case artists
+    case albums
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .all: "All"
+        case .songs: "Songs"
+        case .artists: "Artists"
+        case .albums: "Albums"
+        }
+    }
+
+    /// `nil` for ``all`` — everything, in `KindedResults.displayOrder`.
+    var kind: ItemKind? {
+        switch self {
+        case .all: nil
+        case .songs: .song
+        case .artists: .artist
+        case .albums: .album
+        }
+    }
+
+    /// The filters worth offering for one set of results.
+    ///
+    /// Built from what came back, not from what was asked for. A kind that
+    /// matched nothing is left out rather than offered as a tab onto an empty
+    /// screen.
+    static func available(for results: KindedResults) -> [SearchFilter] {
+        allCases.filter { filter in
+            guard let kind = filter.kind else { return true }
+            return results.populatedKinds.contains(kind)
         }
     }
 }
@@ -326,26 +429,129 @@ struct TileGrid: View {
 struct Tile: View {
     let item: CatalogItem
 
+    /// Songs play where they stand; everything else opens. That is the only
+    /// distinction a kid needs from a tile, and it is the one the tile draws.
+    ///
+    /// Deliberately the *action*, not the taxonomy. `TileGrid` already branches
+    /// on exactly this to decide between a `Button` and a `NavigationLink`, so
+    /// the look and the behaviour cannot drift apart.
+    private var opens: Bool { item.id.kind != .song }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Artwork loads after the item, by URL. Its bytes are never copied
-            // into our storage — the MusicKit terms do not allow it.
-            AsyncImage(url: item.artworkURL) { image in
-                image.resizable().aspectRatio(1, contentMode: .fit)
-            } placeholder: {
-                RoundedRectangle(cornerRadius: 12).fill(.quaternary).aspectRatio(1, contentMode: .fit)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            Text(item.title)
-                .font(.headline)
-                .lineLimit(2)
-            if let subtitle = item.subtitle {
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            artwork
+            titleRow
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        // Padded whatever the kind, so every tile is the same size and a grid
+        // of mixed kinds still lines up. Only the fill behind it differs.
+        .padding(8)
+        .background {
+            if opens {
+                RoundedRectangle(cornerRadius: 16).fill(.quaternary)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(accessibilityLabel))
+        // Shape and glyph are invisible to VoiceOver, which otherwise announces
+        // an album and a song of the same name identically.
+        .accessibilityHint(Text(opens ? "Opens" : "Plays"))
+    }
+
+    /// **Never cropped, covered, or composited onto.**
+    ///
+    /// The Developer Program License Agreement §3.3.6(D) says MusicKit Content
+    /// may not be *modified*, and does not define the word. Masking artwork to a
+    /// circle removes part of it and a play badge laid over it obscures part of
+    /// it — so the kind is drawn everywhere except here. The corner radius is
+    /// the one liberty taken, and it is a considered one rather than an
+    /// inherited default: near-universal in MusicKit apps, and the shape of the
+    /// frame rather than a change to what the frame contains.
+    ///
+    /// Bytes are referenced by URL and never copied into our storage, which the
+    /// same clause forbids outright.
+    private var artwork: some View {
+        AsyncImage(url: item.artworkURL) { image in
+            image.resizable().aspectRatio(1, contentMode: .fit)
+        } placeholder: {
+            // A steady sight, not a flicker on the way to artwork: plenty of
+            // artists have no image in the catalog at all, so this is what their
+            // tile looks like for good. A glyph reads as "a person" where a bare
+            // grey slab reads as something still loading.
+            ZStack {
+                Rectangle().fill(.quaternary)
+                Image(systemName: placeholderGlyph)
+                    .font(.largeTitle)
+                    .foregroundStyle(.tertiary)
+            }
+            .aspectRatio(1, contentMode: .fit)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var titleRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: glyph)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(item.title)
+                .font(.headline)
+                // Two lines whether or not the title needs them. Without it a
+                // one-line title makes a shorter tile than a two-line one and
+                // every grid row sits on a ragged baseline — invisible while
+                // tiles were bare, obvious the moment containers grew a card.
+                .lineLimit(2, reservesSpace: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The kind's own mark, on its own silhouette.
+    ///
+    /// This was a chevron for containers and a play triangle for songs, which
+    /// is two rightward wedges at caption size — no distinction at all once
+    /// they are 8 points tall and next to each other in a grid.
+    ///
+    /// Splitting it by kind rather than by action also buys back something the
+    /// single chevron lost: an artist and an album are both "opens", so a shared
+    /// glyph left them telling apart only by their titles. The card behind the
+    /// tile still carries the action; the glyph carries the kind. Two facts, two
+    /// channels.
+    private var glyph: String {
+        switch item.id.kind {
+        case .song: "play.fill"
+        case .album: "square.stack.fill"
+        case .artist: "music.mic"
+        case .playlist: "music.note.list"
+        }
+    }
+
+    private var placeholderGlyph: String {
+        switch item.id.kind {
+        case .artist: "music.mic"
+        case .album: "square.stack"
+        case .playlist: "music.note.list"
+        // Not `play.fill` here: a play triangle filling the space where artwork
+        // should be reads as a button, and this is the one tile you cannot tap
+        // to hear anything yet.
+        case .song: "music.note"
+        }
+    }
+
+    /// Always present, so every tile is the same height.
+    ///
+    /// An artist's `subtitle` is `nil` by design — it would only repeat the
+    /// title — which left artist tiles one line shorter than their neighbours
+    /// and the grid ragged the moment search started returning them.
+    private var subtitle: String {
+        item.subtitle ?? item.id.kind.rawValue.capitalized
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [item.title, item.id.kind.rawValue]
+        if let subtitle = item.subtitle { parts.append(subtitle) }
+        return parts.joined(separator: ", ")
     }
 }

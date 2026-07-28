@@ -203,13 +203,32 @@ final class Session {
 
     // MARK: - Searching
 
+    /// How many of each kind one search aims for.
+    ///
+    /// Three budgets rather than one shared limit, because one shared limit is
+    /// how this app ended up song-only without anyone deciding it should be:
+    /// the source returns songs first and the cap cut the rest off the end.
+    ///
+    /// Weighted the way a search is actually read. A handful of artists is
+    /// usually the whole useful answer — there is one Taylor Swift — while songs
+    /// are the long tail where a kid is scanning for the one they meant.
+    static let searchBudgets: [ItemKind: Int] = [.artist: 6, .album: 12, .song: 24]
+
     /// Searches, and logs what came back — including everything filtered out.
     ///
     /// Blocked results are logged even though the kid never saw them. They are
     /// the most useful line in a parent's report: they are how a parent finds
     /// out what their kid is curious about.
-    func search(term: String, limit: Int = 25) async throws -> FilteredResults {
-        let results = try await catalog.search(term: term, kinds: [.song], limit: limit)
+    ///
+    /// Every kind is fetched in one go, so the filter on the results screen is a
+    /// view onto what is already here rather than a new search. That keeps
+    /// switching instant, and it keeps the parent's report honest: one search is
+    /// one logged event, not one per time a kid taps a tab.
+    func search(
+        term: String,
+        budgets: [ItemKind: Int] = Session.searchBudgets
+    ) async throws -> KindedResults {
+        let results = try await catalog.search(term: term, budgets: budgets)
 
         eventLog.log(
             SearchEvent(

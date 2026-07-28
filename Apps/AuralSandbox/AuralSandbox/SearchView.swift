@@ -16,7 +16,7 @@ struct SearchView: View {
     @Bindable var session: Session
 
     @State private var term = ""
-    @State private var results: FilteredResults?
+    @State private var results: KindedResults?
     @State private var isSearching = false
     @State private var message: String?
 
@@ -46,7 +46,7 @@ struct SearchView: View {
 
     // MARK: - Sections
 
-    private func allowedSection(_ results: FilteredResults) -> some View {
+    private func allowedSection(_ results: KindedResults) -> some View {
         Section("Allowed (\(results.items.count))") {
             if results.items.isEmpty {
                 // reachedEnd and gaveUpEarly mean different things, and saying
@@ -60,10 +60,16 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
             }
             ForEach(results.items, id: \.id) { item in
-                Button {
-                    play(item)
-                } label: {
-                    row(item)
+                Group {
+                    // Only songs are tappable. This screen has no browse stack
+                    // to push an album or artist onto, and handing a container
+                    // to the player would surface an error alert for what is
+                    // really just a row with nowhere to go.
+                    if item.id.kind == .song {
+                        Button { play(item) } label: { row(item) }
+                    } else {
+                        row(item)
+                    }
                 }
                 // Both gestures, because a swipe is not discoverable and this
                 // is the control that tests the safety-critical case.
@@ -73,7 +79,7 @@ struct SearchView: View {
         }
     }
 
-    private func blockedSection(_ results: FilteredResults) -> some View {
+    private func blockedSection(_ results: KindedResults) -> some View {
         Section("Blocked (\(results.blocked.count))") {
             ForEach(results.blocked, id: \.item.id) { blocked in
                 VStack(alignment: .leading, spacing: 2) {
@@ -109,24 +115,35 @@ struct SearchView: View {
         }
     }
 
-    private func diagnosticsSection(_ results: FilteredResults) -> some View {
+    private func diagnosticsSection(_ results: KindedResults) -> some View {
         Section("Diagnostics") {
             LabeledContent("Requests", value: "\(results.requestCount)")
             LabeledContent("Reached end", value: results.reachedEnd ? "yes" : "no")
             LabeledContent("Gave up early", value: results.gaveUpEarly ? "yes" : "no")
+            // Per kind, because a search is now one over-fetch loop per kind and
+            // a single total hides which one is struggling.
+            ForEach(KindedResults.displayOrder, id: \.self) { kind in
+                if let kinded = results.results(for: kind) {
+                    LabeledContent(
+                        kind.rawValue.capitalized,
+                        value: "\(kinded.items.count) shown, \(kinded.blocked.count) blocked"
+                            + (kinded.gaveUpEarly ? " — gave up" : "")
+                    )
+                }
+            }
             // Research question 1: how often is contentRating nil? This is the
             // cheap version of Tools/RatingProbe, and the number it shows
             // decides the UnratedBehavior default and whether an over-fetch
             // multiplier of 3 is anywhere near right.
-            LabeledContent("Unrated seen", value: "\(unratedCount(results))")
+            LabeledContent("Unrated seen", value: unrated(results))
             // Whether ancestry actually resolved. MusicKit logs "A
             // MusicIdentifierSet with empty string … is being used" freely, and
             // that log cannot distinguish harmless noise from lineage silently
             // failing to arrive. These two counts can: a deny on an artist only
             // reaches their tracks if the artist count matches the result
             // count.
-            LabeledContent("With album", value: "\(lineageCount(results, .album))")
-            LabeledContent("With artist", value: "\(lineageCount(results, .artist))")
+            LabeledContent("With album", value: lineage(results, .album))
+            LabeledContent("With artist", value: lineage(results, .artist))
             LabeledContent("Judged", value: "\(results.items.count + results.blocked.count)")
         }
     }
@@ -139,10 +156,16 @@ struct SearchView: View {
     /// which is open question 13, answered by looking rather than by reading a
     /// log.
     ///
-    /// There is no album button. A song's `CatalogItem` carries the artist name
-    /// as its subtitle but never the album's title, and `displayName` is copied
-    /// at write time and never refreshed — so an album deny here would store a
-    /// permanently wrong name. The real admin resolves the album first.
+    /// There is still no button for widening a *song* to its album. A song's
+    /// `CatalogItem` carries the artist name as its subtitle but never the
+    /// album's title, and `displayName` is copied at write time and never
+    /// refreshed — so an album deny taken from a song row would store a
+    /// permanently wrong name.
+    ///
+    /// Denying an album row itself is fine, and now possible: an album result
+    /// carries its own correct title. Hence the kind-named button rather than a
+    /// hardcoded "Deny song", which would have quietly mislabelled every album
+    /// and artist row as soon as those started coming back.
     @ViewBuilder
     private func denyButtons(for item: CatalogItem) -> some View {
         if let artist = item.ancestors.first(where: { $0.id.kind == .artist }) {
@@ -150,7 +173,7 @@ struct SearchView: View {
                 deny(artist.id, name: item.subtitle ?? "Artist")
             }
         }
-        Button("Deny song", role: .destructive) {
+        Button("Deny \(item.id.kind.rawValue)", role: .destructive) {
             deny(item.id, name: item.title, artwork: item.artworkURL)
         }
     }
@@ -158,10 +181,16 @@ struct SearchView: View {
     private func row(_ item: CatalogItem) -> some View {
         VStack(alignment: .leading) {
             Text(item.title)
-            if let subtitle = item.subtitle {
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
-            }
+            Text(subtitle(for: item)).font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    /// The kind leads, because results are mixed now and an album and a song of
+    /// the same name are otherwise the same row twice.
+    private func subtitle(for item: CatalogItem) -> String {
+        var parts = [item.id.kind.rawValue]
+        if let subtitle = item.subtitle { parts.append(subtitle) }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Actions
@@ -205,18 +234,46 @@ struct SearchView: View {
         }
     }
 
-    private func unratedCount(_ results: FilteredResults) -> Int {
-        results.items.filter { $0.rating == nil }.count
-            + results.blocked.filter { $0.item.rating == nil }.count
+    private func judged(_ results: KindedResults) -> [CatalogItem] {
+        results.items + results.blocked.map(\.item)
     }
 
-    /// How many judged items carry a non-empty ancestor of this kind.
-    private func lineageCount(_ results: FilteredResults, _ kind: ItemKind) -> Int {
-        let judged = results.items + results.blocked.map(\.item)
-        return judged.filter { item in
-            item.ancestors.contains { $0.id.kind == kind && !$0.id.rawValue.isEmpty }
+    /// How many rateable results came back with no rating, over how many were
+    /// rateable at all.
+    ///
+    /// **Artists are excluded from both halves.** MusicKit's `Artist` has no
+    /// `contentRating` at all, so every artist result is `nil` by construction —
+    /// counting them would answer research question 1 with a number made
+    /// entirely of items the question is not about, and six artists a search
+    /// would have made unrated content look far more common than it is. That
+    /// distortion arrived the moment search stopped being song-only, which is
+    /// why the denominator is now shown rather than implied.
+    private func unrated(_ results: KindedResults) -> String {
+        let rateable = judged(results).filter { $0.id.kind == .song || $0.id.kind == .album }
+        return "\(rateable.filter { $0.rating == nil }.count) / \(rateable.count)"
+    }
+
+    /// How many results that *can* have an ancestor of this kind actually carry
+    /// a non-empty one.
+    ///
+    /// The denominator counts only the kinds for which the ancestor is possible:
+    /// a song has both an album and an artist, an album has an artist and no
+    /// album, and an artist has neither. Counting every result would make
+    /// ancestry resolution look broken as soon as artists appear in results,
+    /// when nothing had changed about whether lineage resolves. Open question 13
+    /// is answered by this number, so its denominator has to be honest.
+    private func lineage(_ results: KindedResults, _ ancestor: ItemKind) -> String {
+        let eligible = judged(results).filter { item in
+            switch (item.id.kind, ancestor) {
+            case (.song, _): true
+            case (.album, .artist): true
+            default: false
+            }
         }
-        .count
+        let resolved = eligible.filter { item in
+            item.ancestors.contains { $0.id.kind == ancestor && !$0.id.rawValue.isEmpty }
+        }
+        return "\(resolved.count) / \(eligible.count)"
     }
 
     private func describe(_ reason: Reason) -> String {
