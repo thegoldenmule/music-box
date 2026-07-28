@@ -16,7 +16,11 @@ struct KidHomeView: View {
     @State private var recents: [CatalogItem] = []
     @State private var mine: [CatalogItem] = []
     @State private var term = ""
-    @State private var searchResults: KindedResults?
+    @State private var search: SearchState = .home
+    /// Held so a second search cancels the first. Without it the slower of two
+    /// round trips wins whichever order they were asked for in, and the kid ends
+    /// up looking at results for a term they have already replaced.
+    @State private var searchTask: Task<Void, Never>?
     @State private var filter: SearchFilter = .all
     @State private var isLoading = false
     @State private var trouble: String?
@@ -35,6 +39,14 @@ struct KidHomeView: View {
 
     private var canSearch: Bool { session.kid.mode != .allowOnly }
 
+    /// Whether the home screen is what is underneath — as opposed to a search,
+    /// running or finished. Reloading recents out from under a set of results
+    /// would swap the screen for one nobody asked for.
+    private var isHome: Bool {
+        if case .home = search { return true }
+        return false
+    }
+
     /// Everything currently tappable, which is what a play queues from.
     ///
     /// The *visible* results, not every result: a kid looking at Songs should
@@ -44,18 +56,26 @@ struct KidHomeView: View {
 
     /// What the results grid is showing, once the filter has had its say.
     private var visible: [CatalogItem]? {
-        guard let searchResults else { return nil }
-        guard let kind = filter.kind else { return searchResults.items }
-        return searchResults.items(of: kind)
+        guard case .results(let results) = search else { return nil }
+        guard let kind = filter.kind else { return results.items }
+        return results.items(of: kind)
     }
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if let searchResults {
-                    results(searchResults)
-                } else {
-                    home
+                // A crossfade on every branch, so the swap to the loader and the
+                // swap from it to results are the same gesture rather than two
+                // hard cuts a fast search turns into a flash.
+                switch search {
+                case .home:
+                    home.transition(.opacity)
+                case .running(let term):
+                    SearchingView(term: term).transition(.opacity)
+                case .results(let found):
+                    results(found).transition(.opacity)
+                case .trouble:
+                    searchFailed.transition(.opacity)
                 }
             }
             .navigationTitle(session.kid.name)
@@ -99,8 +119,10 @@ struct KidHomeView: View {
         .task { reload() }
         .onChange(of: term) { _, new in
             if new.isEmpty {
-                searchResults = nil
+                searchTask?.cancel()
+                searchTask = nil
                 filter = .all
+                withAnimation(.easeInOut(duration: 0.2)) { search = .home }
             }
         }
         // A play is written when the track ends, is skipped, or the app goes
@@ -108,14 +130,14 @@ struct KidHomeView: View {
         // recents changes when what is playing changes, which is when to look
         // again.
         .onChange(of: player.current?.id) { _, _ in
-            if searchResults == nil { reload() }
+            if isHome { reload() }
         }
         .onChange(of: scenePhase) { _, phase in
             // Otherwise a kid who plays one song and puts the phone down never
             // produces a play event at all.
             if phase != .active {
                 player.flush()
-            } else if searchResults == nil {
+            } else if isHome {
                 reload()
             }
         }
@@ -146,11 +168,10 @@ struct KidHomeView: View {
                 .padding(.bottom, 8)
             }
 
-            if isLoading && items.isEmpty {
-                Spacer()
-                ProgressView()
-                Spacer()
-            } else if items.isEmpty {
+            // No loading branch here: a search in flight is its own screen now,
+            // so anything reaching this view has already come back. Empty means
+            // empty.
+            if items.isEmpty {
                 Spacer()
                 ContentUnavailableView {
                     Label("Nothing to play", systemImage: "magnifyingglass")
@@ -161,6 +182,23 @@ struct KidHomeView: View {
                     Task { await playSong(item) }
                 }
             }
+        }
+    }
+
+    /// A search that did not come back.
+    ///
+    /// Plain words and a way to try again, in the tone of the one other message
+    /// a kid is ever shown. No error text, no code, and nothing that reads as
+    /// "you did something wrong" — the network fell over, which is not a thing a
+    /// six-year-old can act on.
+    private var searchFailed: some View {
+        ContentUnavailableView {
+            Label("That didn't work", systemImage: "wifi.exclamationmark")
+        } description: {
+            Text("Let's try again.")
+        } actions: {
+            Button("Try again") { runSearch() }
+                .buttonStyle(.borderedProminent)
         }
     }
 
@@ -237,33 +275,61 @@ struct KidHomeView: View {
         }
     }
 
+    /// Leaves for the search screen on the keystroke, not on the response.
+    ///
+    /// The state change is synchronous and the round trip happens behind it.
+    /// Doing it the other way around — waiting, then swapping — leaves a kid
+    /// staring at the home screen they just typed away from for as long as the
+    /// network takes, which reads as enter not working and gets hit again.
     private func runSearch() {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSearch, !term.isEmpty else { return }
 
-        Task {
-            isLoading = true
-            defer { isLoading = false }
+        // Back to All on every new search. A filter left on Albums from the last
+        // term would meet a new one that has none, leaving a segmented control
+        // with nothing selected above an empty grid.
+        filter = .all
+        withAnimation(.easeInOut(duration: 0.2)) { search = .running(term) }
+
+        searchTask?.cancel()
+        searchTask = Task {
             do {
                 // Filtered, and the blocked half still reaches the parent's
                 // report even though the kid never sees it.
-                //
-                // Back to All on every new search. A filter left on Albums from
-                // the last term would meet a new one that has none, leaving a
-                // segmented control with nothing selected above an empty grid.
-                filter = .all
-                searchResults = try await session.search(term: term)
+                let found = try await session.search(term: term)
+                // A cancelled search has already been replaced on screen by the
+                // one that cancelled it. Its results are stale by definition.
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { search = .results(found) }
             } catch {
+                guard !Task.isCancelled else { return }
                 trouble = Session.message(for: error)
+                withAnimation(.easeInOut(duration: 0.2)) { search = .trouble }
             }
         }
     }
 
     /// Songs play. Containers navigate, which ``TileGrid`` handles itself.
     private func playSong(_ item: CatalogItem) async {
-        let origin: PlaybackOrigin = searchResults == nil ? .home : .search(term: term)
+        let origin: PlaybackOrigin = isHome ? .home : .search(term: term)
         await player.play(item, from: shown.filter { $0.id.kind == .song }, origin: origin)
     }
+}
+
+/// What the kid's home screen is showing.
+///
+/// ``running`` is a state rather than a flag beside the results because it is a
+/// different screen, not the same screen with a spinner on it — and because it
+/// carries the term it is looking for, which is the one thing worth saying while
+/// there is nothing to show.
+private enum SearchState {
+    case home
+    case running(String)
+    case results(KindedResults)
+    /// The lookup failed. Carries no reason, deliberately: nothing on the kid's
+    /// side shows an error string, so a payload here could only ever be read by
+    /// something that should not be showing it.
+    case trouble
 }
 
 /// `searchable` applied only when the kid's level has search at all.
