@@ -38,6 +38,13 @@ struct KidHomeView: View {
     /// later; this is what covers that frame.
     @State private var isLoading = true
     @State private var trouble: String?
+    /// Bumped to ask the shelves to go back to the top.
+    ///
+    /// A counter and not a flag, because two presses of the home button are two
+    /// requests and a `Bool` that is already `true` is not a second one. The
+    /// scroll view is inside a `ScrollViewReader` and its proxy exists only in
+    /// that closure, so this is how a press out in the bottom bar reaches it.
+    @State private var scrollHomeToTop = 0
     @State private var showingAdmin = false
     /// The path lives in a ``KidRouter`` rather than in a plain `@State` for two
     /// reasons. ``NowPlayingView`` covers this stack rather than living in it,
@@ -107,7 +114,18 @@ struct KidHomeView: View {
                     searchFailed.transition(.opacity)
                 }
             }
-            .navigationTitle(session.kid.name)
+            // **No title.** The kid's own name was the one thing on this screen
+            // written for somebody who can read, and a large title is a band of
+            // it that scrolls away and comes back — which is also what made the
+            // home button land short: `scrollTo` puts the anchor below the title
+            // area, so "the top" was the top of a screen with a name on it
+            // rather than the top of the shelves.
+            //
+            // The bar itself stays, because the lock still lives on it.
+            .navigationTitle("")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             // Every push in the app lands here — from search, from a shelf, from
             // a playlist, from an artist's page — because they all sit inside
             // this stack. One destination rather than two, because the path is
@@ -133,12 +151,37 @@ struct KidHomeView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
+        }
+        // **Both bars, one inset, under the whole stack rather than inside it.**
+        //
+        // Out here because a `searchable` belongs to the navigation container it
+        // is applied to and draws on that container's *root*, so the field
+        // vanished the moment a kid opened an album — and eight screens deep is
+        // exactly where both of these controls are wanted. Nothing here moves
+        // when a screen is pushed, because pushing does not touch it.
+        //
+        // *One* inset and not two, which is the part that has to stay that way:
+        // an inset inside the stack and another outside it do not know about
+        // each other, and the two bars were drawn over the top of one another.
+        // Stacked in a single `VStack` they cannot be — the layout does the
+        // arranging, rather than two independent claims on the same edge
+        // happening to agree.
+        //
+        // This is also the only place ``NowPlayingBar`` is drawn now. It used to
+        // be a `safeAreaInset` repeated on all eight kid screens, and every one
+        // of those repeats was a chance for exactly this bug.
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                // What is playing sits above what to do next.
+                NowPlayingBar(session: session, player: player)
+                KidSearchBar(canSearch: canSearch, term: $term, onSubmit: runSearch, onHome: goHome)
+            }
         }
         // The full-screen player, over the stack rather than modally in front of
         // it — the one thing a modal cannot be is half open, and this one is
         // dragged. It covers the bar and the toolbar because it is applied out
-        // here, to everything.
+        // here, to everything — and now the search bar too, which is the one
+        // screen in the app that should not have one.
         #if os(iOS)
         .overlay { ExpandedPlayer(session: session, player: player, expansion: expansion) }
         .environment(expansion)
@@ -147,9 +190,6 @@ struct KidHomeView: View {
         // — every sheet and cover they present, and the player over the top of
         // them.
         .environment(router)
-        .modifier(
-            SearchIfAllowed(enabled: canSearch, term: $term, onSubmit: runSearch)
-        )
         .sheet(isPresented: $showingAdmin, onDismiss: reload) {
             NavigationStack {
                 if session.isAdminOpen {
@@ -310,6 +350,33 @@ struct KidHomeView: View {
         }
     }
 
+    /// Everything the home button undoes.
+    ///
+    /// **Both ways of leaving home, because either one alone leaves the kid
+    /// somewhere that is not home.** The stack is one of them; a set of search
+    /// results standing where the shelves go is the other, and popping an album
+    /// that was opened from results lands back on the results.
+    private func goHome() {
+        router.path.removeAll()
+        searchTask?.cancel()
+        searchTask = nil
+        // What empties the field itself, and done here rather than left to the
+        // `onChange` below because that fires only when the term was not already
+        // empty — which is the case where a kid cleared the box by hand and is
+        // still looking at the results it fetched.
+        term = ""
+        filter = .artists
+        withAnimation(.easeInOut(duration: 0.2)) { search = .home }
+
+        // Unconditionally, which covers the case the button is otherwise silent
+        // for: already home, already at the root, nothing to clear, and a kid
+        // who has scrolled to the bottom of their shelves and pressed the one
+        // control that is meant to take them back to the start. It costs
+        // nothing anywhere else — a home screen arriving from search or from a
+        // pop is drawn at the top regardless.
+        scrollHomeToTop += 1
+    }
+
     /// A search that did not come back.
     ///
     /// Plain words and a way to try again, in the tone of the one other message
@@ -348,56 +415,93 @@ struct KidHomeView: View {
                 )
             }
         } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    if !recents.isEmpty {
-                        Section {
-                            TileShelf(session: session, items: recents, origin: .home) { item in
-                                Task { await playSong(item) }
-                            }
-                        } header: {
-                            ShelfHeader(title: "Recent", route: .history)
+            ScrollViewReader { proxy in
+                shelves
+                    .onChange(of: scrollHomeToTop) { _, _ in
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo(Self.homeTop, anchor: .top)
                         }
                     }
-
-                    // "Yours" means the kid's own favorites now. It used to
-                    // label the list a parent built, which was the app telling a
-                    // kid that someone else's choices were their own.
-                    if !yours.isEmpty {
-                        Section {
-                            TileShelf(session: session, items: yours, origin: .home) { item in
-                                Task { await playSong(item) }
-                            }
-                        } header: {
-                            ShelfHeader(title: "Yours", route: .library)
-                        }
-                    }
-
-                    if !session.playlists.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Playlists").font(.title2.bold()).padding(.horizontal)
-                            PlaylistShelf(playlists: session.playlists)
-                        }
-                    }
-
-                    // The allow list, under the name it should have had all
-                    // along now that the kid has a shelf of their own.
-                    if !fromTheGrownUp.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("From your grown-up")
-                                .font(.title2.bold())
-                                .padding(.horizontal)
-                            TileWrap(session: session, items: fromTheGrownUp, origin: .home) {
-                                item in
-                                Task { await playSong(item) }
-                            }
-                        }
-                    }
-                }
-                .padding(.vertical)
             }
         }
     }
+
+    /// The shelves themselves, lifted out of ``home`` only so the
+    /// `ScrollViewReader` around them has one thing to wrap.
+    private var shelves: some View {
+        ScrollView {
+            // Nothing to look at — somewhere to scroll to. A zero-height anchor
+            // rather than the stack's own id, because "the top of the shelves"
+            // is a fixed point and the stack is a thing whose height changes
+            // every time a shelf loads.
+            //
+            // **Outside the spaced stack, not the first thing in it.** A child
+            // of a `VStack(spacing: 24)` is worth 24 points of gap even when it
+            // is worth no height, so as the first row it pushed every shelf down
+            // by a shelf-gap of nothing.
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 0).id(Self.homeTop)
+
+                content
+            }
+            // Barely anything at the top: the toolbar is already a band of empty
+            // above this, and a second one under it is the whole complaint.
+            .padding(.top, 4)
+            .padding(.bottom)
+        }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            if !recents.isEmpty {
+                Section {
+                    TileShelf(session: session, items: recents, origin: .home) { item in
+                        Task { await playSong(item) }
+                    }
+                } header: {
+                    ShelfHeader(title: "Recent", route: .history)
+                }
+            }
+
+            // "Yours" means the kid's own favorites now. It used to
+            // label the list a parent built, which was the app telling a
+            // kid that someone else's choices were their own.
+            if !yours.isEmpty {
+                Section {
+                    TileShelf(session: session, items: yours, origin: .home) { item in
+                        Task { await playSong(item) }
+                    }
+                } header: {
+                    ShelfHeader(title: "Yours", route: .library)
+                }
+            }
+
+            if !session.playlists.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Playlists").font(.title2.bold()).padding(.horizontal)
+                    PlaylistShelf(playlists: session.playlists)
+                }
+            }
+
+            // The allow list, under the name it should have had all
+            // along now that the kid has a shelf of their own.
+            if !fromTheGrownUp.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("From your grown-up")
+                        .font(.title2.bold())
+                        .padding(.horizontal)
+                    TileWrap(session: session, items: fromTheGrownUp, origin: .home) {
+                        item in
+                        Task { await playSong(item) }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The top of the shelves, as something `scrollTo` can be handed.
+    private static let homeTop = "home-top"
 
     private var isHomeEmpty: Bool {
         recents.isEmpty && yours.isEmpty && fromTheGrownUp.isEmpty
@@ -452,6 +556,12 @@ struct KidHomeView: View {
     private func runSearch() {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSearch, !term.isEmpty else { return }
+
+        // Results are drawn at the root of the stack, and the field that asked
+        // for them is now reachable from anywhere in it — so a search run from
+        // three screens deep would land behind three screens. Popping is what
+        // makes searching from an album page mean anything.
+        router.path.removeAll()
 
         // Back to Artists on every new search, so two terms in a row start the
         // same way rather than the second landing on whichever tab the first
@@ -528,26 +638,6 @@ private enum SearchState {
     /// side shows an error string, so a payload here could only ever be read by
     /// something that should not be showing it.
     case trouble
-}
-
-/// `searchable` applied only when the kid's level has search at all.
-///
-/// A modifier rather than an `if` around the view: toggling `searchable` in a
-/// branch rebuilds the navigation stack underneath it.
-private struct SearchIfAllowed: ViewModifier {
-    let enabled: Bool
-    @Binding var term: String
-    let onSubmit: () -> Void
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content
-                .searchable(text: $term, prompt: "What do you want to hear?")
-                .onSubmit(of: .search, onSubmit)
-        } else {
-            content
-        }
-    }
 }
 
 /// Which kind of result the search screen is showing.

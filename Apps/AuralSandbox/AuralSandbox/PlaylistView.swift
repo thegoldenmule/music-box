@@ -103,7 +103,6 @@ struct PlaylistView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         .task { await load() }
         .onChange(of: playlist?.modifiedAt) { _, _ in Task { await load() } }
     }

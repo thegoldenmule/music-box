@@ -60,7 +60,6 @@ struct HistoryView: View {
             }
         }
         .navigationTitle("Recent")
-        .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         .task {
             guard items.isEmpty else { return }
             await loadNextPage()

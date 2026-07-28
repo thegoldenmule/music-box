@@ -41,7 +41,6 @@ struct BrowseView: View {
             }
         }
         .navigationTitle(container.title)
-        .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         .task { await load() }
     }
 

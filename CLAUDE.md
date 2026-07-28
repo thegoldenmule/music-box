@@ -348,6 +348,14 @@ everything Apple-facing. `MusicKitCatalogSource`, `MusicKitLibrarySource` and
 Time cannot be tested at all. Claims about child-account behavior hold only after
 running on the real under-13 account.
 
+**Never run this app in the simulator.** Not to check a layout, not to take a
+screenshot, not to confirm a change "works" — do not boot a device, install, or
+launch. It proves nothing here for the reason above, it is slow, and it takes
+over the maintainer's machine. The verification available from this side is
+`swift test` for the packages and the two `xcodebuild build` invocations for the
+app. Anything that needs to be *seen* is the maintainer's to run on a device;
+say what you changed and what remains unverified, and let them look.
+
 ## Style
 
 Match the surrounding code. The existing packages favor small value types,

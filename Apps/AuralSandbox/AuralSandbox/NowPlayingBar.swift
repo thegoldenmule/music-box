@@ -27,11 +27,13 @@ struct NowPlayingBar: View {
     /// movement that starts here and ends there and a finger may turn back
     /// halfway through it.
     ///
-    /// From the environment for the same reason ``KidRouter`` is: eight screens
-    /// draw this bar, and threading a parameter through all of them to reach the
-    /// one row at the bottom is an initializer argument per screen forever. Nil
-    /// wherever nobody put one up, and the drag is simply absent there — the tap
-    /// is not, because it never needed anything.
+    /// From the environment for the same reason ``KidRouter`` is. It used to be
+    /// that eight screens drew this bar and threading a parameter through all of
+    /// them was an initializer argument per screen forever; now ``KidHomeView``
+    /// draws it once, beneath the whole stack, and the environment is what
+    /// reaches *out* of the inset to the expansion held on the screen around it.
+    /// Nil wherever nobody put one up, and the drag is simply absent there — the
+    /// tap is not, because it never needed anything.
     @Environment(PlayerExpansion.self) private var expansion: PlayerExpansion?
     #else
     @State private var isExpanded = false

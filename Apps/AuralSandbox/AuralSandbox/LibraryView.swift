@@ -66,7 +66,6 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $isNaming) { NamePlaylistSheet(session: session) }
-        .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         .task { await load() }
         // Typed a character at a time. The predicate is local and the rows are
         // already resolved, so there is nothing to debounce and no request to

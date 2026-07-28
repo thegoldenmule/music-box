@@ -40,7 +40,6 @@ struct ArtistView: View {
             // time directly above the picture that already says it.
             .navigationBarTitleDisplayMode(.inline)
         #endif
-        .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         .task { await load() }
     }
 

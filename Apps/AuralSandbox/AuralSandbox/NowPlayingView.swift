@@ -41,6 +41,14 @@ struct NowPlayingView: View {
     /// ``ExpandedPlayer`` — so "closed" is a position rather than an absence,
     /// and work that only matters on screen has to be told. Defaulted, because
     /// the Mac presents this in a sheet and a sheet is only ever up.
+    ///
+    /// **Do not gate loading on this.** It reads as the obvious saving and it is
+    /// the wrong one: work deferred until this flips is work that lands while
+    /// the screen is sliding open, and anything drawn from it changes shape
+    /// mid-animation. ``Lineage`` was fetched that way and cost two separate bug
+    /// reports — see the `.task` in ``content(for:)``. What this is *for* is the
+    /// opposite question: something that should not happen to a kid who cannot
+    /// see the screen, like closing the player out from under them.
     var isShowing = true
 
     @Environment(KidRouter.self) private var router: KidRouter?
@@ -128,12 +136,25 @@ struct NowPlayingView: View {
                 .padding(.bottom, 40)
         }
         // Keyed to the song, so skipping replaces the lineage rather than
-        // leaving the last track's record under a new title — and to whether
-        // this is on screen at all, because the player outlives its own
-        // closing and a resolve for every track a kid skips past is a request
-        // for a link nobody can see.
-        .task(id: isShowing ? entry.item.id : nil) {
-            guard isShowing else { return }
+        // leaving the last track's record under a new title.
+        //
+        // **No longer gated on being on screen, and that is the fix for a whole
+        // class of bug rather than one of them.** It used to wait for
+        // `isShowing`, which meant the resolve began on the tap that opened the
+        // player — so the answer arrived *during* the slide up, and every part
+        // of this screen that depends on it changed shape while the screen was
+        // moving. The cover flashed. The artist chip flashed. Anything added
+        // here later that reads ``Lineage`` would have flashed too, and would
+        // have been found the same way: one report at a time.
+        //
+        // Resolving ahead of the open means the screen is already in its final
+        // form before it starts travelling, so there is nothing to change
+        // half-way. What the gate was protecting against was a request per
+        // skipped track — `.task(id:)` cancels the previous one on every change,
+        // so what actually costs anything is one batched resolve per track that
+        // settles, usually against a warm catalog cache, off the playback path,
+        // for a screen the kid opens constantly anyway.
+        .task(id: entry.item.id) {
             await lineage.load(entry.item, from: session)
         }
     }
@@ -151,17 +172,28 @@ struct NowPlayingView: View {
     /// one place the drag could not start. A tap gesture gives way as soon as
     /// the finger moves, which is exactly the difference between the two
     /// meanings of touching a picture.
-    @ViewBuilder
+    ///
+    /// **One view whichever answer the lineage gives, and the modifiers carry
+    /// the difference.** This was an `if let album` with `artwork(for:)` in both
+    /// branches, which reads as the same picture twice and is not: an `if/else`
+    /// is two positions in the view tree, so the moment ``Lineage`` came back
+    /// the cover was torn down and a fresh one inserted in the other branch.
+    /// With a warm catalog cache that answer lands in the same breath as the
+    /// tap, so the cover *appeared* — no transition, no travel — while the rest
+    /// of the screen was still sliding up behind it. Same picture, same
+    /// position, and it flashed anyway, because nothing about identity here is
+    /// about what is drawn.
     private func cover(for song: CatalogItem) -> some View {
-        if let album = lineage.album {
-            artwork(for: song)
-                .onTapGesture { open(album) }
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Open the album \(album.title)")
-        } else {
-            artwork(for: song)
-                .accessibilityHidden(true)
-        }
+        let album = lineage.album
+        return artwork(for: song)
+            // Guarded inside the closure rather than by attaching the gesture
+            // conditionally — attaching it is another thing that would differ
+            // between two builds of this view. A tap with nowhere to go does
+            // nothing, and there is no affordance on the cover saying otherwise.
+            .onTapGesture { if let album { open(album) } }
+            .accessibilityHidden(album == nil)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(album.map { "Open the album \($0.title)" } ?? "")
     }
 
     private func artwork(for song: CatalogItem) -> some View {
@@ -188,20 +220,18 @@ struct NowPlayingView: View {
     /// same call ``AlbumView`` makes about its credits. The name stays either
     /// way, because it is the song's subtitle everywhere else in the app and a
     /// song with no artist under it reads as missing rather than as restricted.
-    @ViewBuilder
+    ///
+    /// The two states are one view — see ``ArtistLine`` — for the reason
+    /// ``cover(for:)`` is one view. This used to be an `if/else` between
+    /// ``ArtistChip`` and a `Text`, which is two positions in the view tree, so
+    /// the resolve did not change the credit so much as replace it.
     private func artist(for song: CatalogItem) -> some View {
-        if let artist = lineage.artist {
-            // A tap rather than a button, for the reason the cover is one.
-            ArtistChip(artist: artist)
-                .onTapGesture { open(artist) }
-                .accessibilityAddTraits(.isButton)
-        } else if let subtitle = song.subtitle {
-            Text(subtitle)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(1)
-        }
+        let artist = lineage.artist
+        // A tap rather than a button, for the reason the cover is one, and
+        // guarded inside the closure rather than attached conditionally.
+        return ArtistLine(artist: artist, fallback: song.subtitle)
+            .onTapGesture { if let artist { open(artist) } }
+            .accessibilityAddTraits(.isButton)
     }
 
     /// Closes the player, then pushes.
@@ -308,6 +338,75 @@ struct NowPlayingView: View {
             .accessibilityLabel("Skip")
 
             AddToPlaylistButton(session: session, item: entry.item, origin: entry.origin)
+        }
+    }
+}
+
+/// The credit under the title, in both of the states it has, as **one view**.
+///
+/// A chip — a circle, the name, a chevron — when the kid may open the artist,
+/// and the name alone when they may not. Written as one view whose parts come
+/// and go rather than as two views chosen between, because the answer arrives
+/// after this is first drawn: an `if/else` would make the credit appear rather
+/// than change, and the name is the one part that is the same in both states.
+/// Keeping it in one position keeps it one piece of text that restyles.
+///
+/// Not folded into ``ArtistChip``, which is drawn inside a `NavigationLink` on
+/// ``AlbumView`` and is always a link there. A chip that can be un-chipped is a
+/// concept that screen has no use for.
+private struct ArtistLine: View {
+    let artist: CatalogItem?
+    /// The song's own subtitle, which is what the name falls back to. Not the
+    /// artist's name by another route — this is what every other screen in the
+    /// app shows under a song.
+    let fallback: String?
+
+    private var name: String? { artist?.title ?? fallback }
+
+    /// Whether this is the chip or the plain name. One question rather than the
+    /// same `!= nil` written five times below.
+    private var isLink: Bool { artist != nil }
+
+    var body: some View {
+        if let name {
+            HStack(spacing: 8) {
+                if let artist {
+                    ArtworkImage(url: artist.artworkURL) { image in
+                        image.resizable().aspectRatio(1, contentMode: .fit)
+                    } placeholder: {
+                        ZStack {
+                            Rectangle().fill(.quaternary)
+                            Image(systemName: "music.mic")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .aspectRatio(1, contentMode: .fit)
+                    }
+                    .frame(width: 32, height: 32)
+                    .clipShape(Circle())
+                }
+
+                // One `Text`, restyled — never two swapped for each other.
+                Text(name)
+                    .font(isLink ? .headline : .title3)
+                    .foregroundStyle(isLink ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+
+                if isLink {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            // Numbers rather than a second set of modifiers, so the capsule
+            // grows into place instead of being put there.
+            .padding(.leading, isLink ? 6 : 0)
+            .padding(.trailing, isLink ? 12 : 0)
+            .padding(.vertical, isLink ? 6 : 0)
+            .background {
+                if isLink { Capsule().fill(.quaternary) }
+            }
         }
     }
 }

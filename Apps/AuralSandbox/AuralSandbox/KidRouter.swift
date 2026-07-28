@@ -26,10 +26,10 @@ enum KidRoute: Hashable {
 /// living in it — a sheet on the Mac and an overlay on iOS, where it has to be
 /// draggable — so it sits *outside* and a link from it has nothing to push onto.
 ///
-/// Handing the path down through the eight screens that draw a
-/// ``NowPlayingBar`` would mean an initializer parameter on each, so it travels
-/// in the environment instead, which reaches over the top of the stack as well
-/// as into it. That is exactly the reach that is needed and no more.
+/// Handing the path down to every screen that might want it would mean an
+/// initializer parameter on each, so it travels in the environment instead,
+/// which reaches over the top of the stack as well as into it. That is exactly
+/// the reach that is needed and no more.
 ///
 /// **Not a way around the rules.** Everything this opens is a `CatalogItem` the
 /// policy engine already allowed, and the screen it lands on filters its own
