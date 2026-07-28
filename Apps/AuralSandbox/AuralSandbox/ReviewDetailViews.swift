@@ -130,6 +130,44 @@ struct ReviewSearchesView: View {
     }
 }
 
+// MARK: - Where they went
+
+/// Every arrival, in order.
+///
+/// The Recent shelf is a projection over exactly these rows, collapsed so that
+/// only the deepest thing in each excursion survives. This is the record the
+/// shelf was made from: a parent reading it sees the artist their kid opened
+/// *and* the album they went into next, which the shelf deliberately does not
+/// show them.
+struct ReviewVisitsView: View {
+    let model: ReviewModel
+
+    var body: some View {
+        List {
+            if model.window?.visits.isEmpty ?? true {
+                Text("Nothing opened in this period.").foregroundStyle(.secondary)
+            }
+            ForEach(Array((model.window?.visits ?? []).enumerated()), id: \.offset) { _, visit in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(visit.displayName)
+                    Text(caption(visit))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(visit.at.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Where they went")
+    }
+
+    private func caption(_ visit: VisitEvent) -> String {
+        let verb = visit.manner == .played ? "played" : "opened"
+        return "\(verb) · \(visit.itemID.kind.rawValue)"
+    }
+}
+
 // MARK: - What they couldn't reach
 
 struct ReviewBlocksView: View {
@@ -438,12 +476,14 @@ struct ReviewLogView: View {
         case play(Int, Annotated<PlayEvent>)
         case search(Int, SearchEvent)
         case block(Int, Annotated<ReviewedBlock>)
+        case visit(Int, VisitEvent)
 
         var id: String {
             switch self {
             case .play(let i, _): "play-\(i)"
             case .search(let i, _): "search-\(i)"
             case .block(let i, _): "block-\(i)"
+            case .visit(let i, _): "visit-\(i)"
             }
         }
 
@@ -452,6 +492,7 @@ struct ReviewLogView: View {
             case .play(_, let play): play.fact.at
             case .search(_, let search): search.at
             case .block(_, let block): block.fact.event.at
+            case .visit(_, let visit): visit.at
             }
         }
     }
@@ -473,6 +514,11 @@ struct ReviewLogView: View {
                     detail(
                         "\(block.fact.event.reach == .reached ? "Reached for" : "Never seen") · \(ReviewFormat.reason(block.fact.event.reason, deniedBy: block.fact.deniedBy))"
                     )
+                case .visit(_, let visit):
+                    Label(visit.displayName, systemImage: "signpost.right")
+                    detail(
+                        "\(visit.manner == .played ? "Played" : "Opened") · \(visit.itemID.kind.rawValue)"
+                    )
                 }
                 Text(row.at.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2)
@@ -493,6 +539,9 @@ struct ReviewLogView: View {
             rows.append(.search(index, search))
         }
         for (index, block) in model.blocks.enumerated() { rows.append(.block(index, block)) }
+        for (index, visit) in (model.window?.visits ?? []).enumerated() {
+            rows.append(.visit(index, visit))
+        }
         return rows.sorted { $0.at > $1.at }
     }
 }

@@ -11,6 +11,76 @@ import PolicyEngine
 /// time either way, which a kid can change, so weekly bucketing is approximate
 /// and a report is not forensic.
 
+/// The kid arrived at something.
+///
+/// One fact covering four kinds: they pressed play on a song, or they opened an
+/// album, an artist, a playlist. It is one event rather than four because the
+/// trail that feeds the Recent shelf has to compare them *to each other* — an
+/// album supersedes its artist, a song supersedes its album — and a comparison
+/// across four tables is four times the work for no extra truth.
+///
+/// **Distinct from ``PlayEvent``, which is written on stop.** Duration is the
+/// signal the parent's report wants, so a play is recorded when it ends and a
+/// mis-tap under five seconds is never recorded at all. Neither of those is what
+/// a Recent shelf means by recent: a kid who presses play wants to see it there
+/// now, not when the song finishes. Started and listened-for-N-seconds are two
+/// facts and both are worth having.
+///
+/// **No `origin`, deliberately** — the one event without one. A visit is
+/// recorded where a container push lands, and `TileCell` pushes a bare
+/// `CatalogItem` through `NavigationLink(value:)`, dropping the origin on the
+/// way. The alternative to a guess is better than the guess: the trail's
+/// *previous entry* is where the kid came from, which is strictly more than
+/// `browse(id)` carries. If something ever genuinely needs the coarse origin,
+/// thread a route value through `TileCell` rather than inventing a column here.
+public struct VisitEvent: Hashable, Sendable {
+    public let itemID: CatalogID
+
+    /// Captured now, so a delisted album still reads as a name.
+    public let displayName: String
+
+    /// A reference. Artwork bytes are never copied into our storage.
+    public let artworkURL: URL?
+
+    /// Lineage, and the whole basis of the walk: a song belongs to an album and
+    /// an artist, an album to an artist. `nil` when it never resolved — and an
+    /// entry with unknown lineage is deliberately **not** treated as anyone's
+    /// descendant, so the container it came from stays on the shelf beside it.
+    /// That fails toward showing more, which on a shelf costs nothing.
+    public let albumID: CatalogID?
+    public let artistID: CatalogID?
+
+    /// What the catalog said when they got here. See ``PlayEvent/rating`` —
+    /// same field, same reason: the parent's report re-judges old rows against
+    /// today's policy, and the rating is what decides most of them.
+    public let rating: StoredRating
+
+    /// Opened, or played. The shelf does not care; a parent does.
+    public let manner: VisitManner
+
+    public let at: Date
+
+    public init(
+        itemID: CatalogID,
+        displayName: String,
+        artworkURL: URL? = nil,
+        albumID: CatalogID? = nil,
+        artistID: CatalogID? = nil,
+        rating: StoredRating = .unknown,
+        manner: VisitManner,
+        at: Date = .now
+    ) {
+        self.itemID = itemID
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        self.albumID = albumID
+        self.artistID = artistID
+        self.rating = rating
+        self.manner = manner
+        self.at = at
+    }
+}
+
 /// One search, debounced to the term the kid settled on rather than every
 /// keystroke.
 public struct SearchEvent: Hashable, Sendable {

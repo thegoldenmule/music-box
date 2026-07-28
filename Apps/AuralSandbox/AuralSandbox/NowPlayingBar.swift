@@ -4,11 +4,10 @@ import SwiftUI
 
 /// What is playing, and the controls that go with it.
 ///
-/// Play, pause, skip. No shuffle, no repeat, no next-up list, no "go to artist"
-/// — every one of those is a door, and this app's whole promise is that there
-/// are none. Tapping the song opens ``NowPlayingView``, which is the same three
-/// controls at a bigger size plus a scrubber; that is not a door either, since
-/// dragging the playhead reaches nothing outside the track already allowed.
+/// Play, pause, skip. No shuffle, no repeat, no next-up list — the bar itself
+/// stays as narrow as it ever was. Tapping the song opens ``NowPlayingView``,
+/// which is the same controls at a bigger size, a scrubber, and links to the
+/// record and the artist.
 ///
 /// Skip stops at the end of the queue rather than finding something else to
 /// play. Autoplay past the end is the fourth MusicKit affordance this app never
@@ -44,7 +43,7 @@ struct NowPlayingBar: View {
                     // right keep their own taps.
                     Button { isExpanded = true } label: {
                         HStack(spacing: 16) {
-                            AsyncImage(url: entry.item.artworkURL) { image in
+                            ArtworkImage(url: entry.item.artworkURL) { image in
                                 image.resizable()
                             } placeholder: {
                                 RoundedRectangle(cornerRadius: 8).fill(.quaternary)

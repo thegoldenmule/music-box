@@ -31,11 +31,16 @@ struct KidHomeView: View {
     @State private var isLoading = false
     @State private var trouble: String?
     @State private var showingAdmin = false
-    /// Type-erased, because this stack pushes two unrelated things: a
+    /// The path lives in a ``KidRouter`` rather than in a plain `@State` so that
+    /// ``NowPlayingView`` — presented modally, and therefore outside this stack
+    /// — can push onto it. Everything drawn *inside* the stack still uses an
+    /// ordinary `NavigationLink` and never touches this.
+    ///
+    /// It is type-erased because this stack pushes two unrelated things: a
     /// `CatalogItem` when browsing into a container, and a ``HomeRoute`` for the
     /// history. A `[CatalogItem]` path accepts only the former and refuses the
     /// latter at runtime — it compiles, and the link simply does not work.
-    @State private var path = NavigationPath()
+    @State private var router = KidRouter()
     @Environment(\.scenePhase) private var scenePhase
 
     init(session: Session) {
@@ -67,7 +72,7 @@ struct KidHomeView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: $router.path) {
             Group {
                 // A crossfade on every branch, so the swap to the loader and the
                 // swap from it to results are the same gesture rather than two
@@ -90,14 +95,30 @@ struct KidHomeView: View {
             // shaped like what they are; a playlist is a grid of pictures, which
             // is what browsing was before either of them existed.
             .navigationDestination(for: CatalogItem.self) { container in
-                switch container.id.kind {
-                case .album:
-                    AlbumView(session: session, player: player, album: container)
-                case .artist:
-                    ArtistView(session: session, player: player, artist: container)
-                default:
-                    BrowseView(session: session, player: player, container: container)
+                Group {
+                    switch container.id.kind {
+                    case .album:
+                        AlbumView(session: session, player: player, album: container)
+                    case .artist:
+                        ArtistView(session: session, player: player, artist: container)
+                    default:
+                        BrowseView(session: session, player: player, container: container)
+                    }
                 }
+                // The one place a container open is recorded, for the same
+                // reason this is the one place a container is opened. It catches
+                // a tile from a shelf, a search result, an artist's album, and
+                // the chips on the now-playing screen — which reach the path
+                // through ``KidRouter`` and would each need their own hook
+                // otherwise.
+                //
+                // Here rather than inside the destination's own `load()`,
+                // because a kid reached this screen whether or not the track
+                // list came back, and because "Try again" re-runs `load()` and
+                // is not a second arrival. A `.task` that fires twice is
+                // harmless: the walk collapses a repeat and the projector
+                // coalesces the row.
+                .task { await session.noteVisit(container, manner: .opened) }
             }
             .navigationDestination(for: HomeRoute.self) { route in
                 switch route {
@@ -122,6 +143,9 @@ struct KidHomeView: View {
             }
             .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         }
+        // Reaches every screen in the stack, and — the point of putting it here
+        // — every sheet and cover they present.
+        .environment(router)
         .modifier(
             SearchIfAllowed(enabled: canSearch, term: $term, onSubmit: runSearch)
         )
@@ -137,7 +161,14 @@ struct KidHomeView: View {
                 }
             }
         }
-        .task { reload() }
+        .task {
+            // The trail before the shelf that draws from it: `homeItems()` reads
+            // it synchronously, so a reload that ran first would resolve an
+            // empty list and the home screen would be blank until something
+            // else happened.
+            await session.loadRecentTrail()
+            reload()
+        }
         .onChange(of: term) { _, new in
             if new.isEmpty {
                 searchTask?.cancel()
@@ -146,12 +177,14 @@ struct KidHomeView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { search = .home }
             }
         }
-        // A play is written when the track ends, is skipped, or the app goes
-        // away — duration is the signal, and there is no stop control. So
-        // recents changes when what is playing changes, which is when to look
-        // again.
-        .onChange(of: player.current?.id) { _, _ in
-            if isHome { reload() }
+        // The shelf follows the trail directly now, rather than watching the
+        // player and hoping a write had landed. That guess was the bug: the
+        // track changed microseconds after the play row was handed to a
+        // detached task, so the reload it triggered usually read the store
+        // before the row committed. `recentTrail` changes only once the write
+        // has actually returned.
+        .onChange(of: session.recentTrail) { _, _ in
+            if isHome { reloadRecents() }
         }
         .onChange(of: scenePhase) { _, phase in
             // Otherwise a kid who plays one song and puts the phone down never
@@ -305,6 +338,19 @@ struct KidHomeView: View {
     }
 
     // MARK: - Loading
+
+    /// Re-resolves the Recent shelf and nothing else.
+    ///
+    /// Cheap where the whole reload is not: the kid just tapped one of these, so
+    /// `CachingCatalogSource` usually has every item warm and this costs no
+    /// request at all. Separated because it now runs on every arrival rather
+    /// than on the handful of moments the full reload was written for.
+    private func reloadRecents() {
+        Task {
+            guard let items = try? await session.homeItems() else { return }
+            recents = items
+        }
+    }
 
     private func reload() {
         Task {
@@ -792,7 +838,7 @@ struct SongRow<Accessory: View>: View {
     }
 
     private var artwork: some View {
-        AsyncImage(url: item.artworkURL) { image in
+        ArtworkImage(url: item.artworkURL) { image in
             image.resizable().aspectRatio(1, contentMode: .fit)
         } placeholder: {
             ZStack {
@@ -864,7 +910,7 @@ struct Tile: View {
     /// Bytes are referenced by URL and never copied into our storage, which the
     /// same clause forbids outright.
     private var artwork: some View {
-        AsyncImage(url: item.artworkURL) { image in
+        ArtworkImage(url: item.artworkURL) { image in
             image.resizable().aspectRatio(1, contentMode: .fit)
         } placeholder: {
             // A steady sight, not a flicker on the way to artwork: plenty of

@@ -290,6 +290,29 @@ struct Deletion {
         #expect(kid.summaries.isEmpty)
     }
 
+    /// The assertion above passes on a `removeAll()` that only detaches, which
+    /// is what this used to do: the rows stayed on disk with a null kid, and
+    /// because every query is `kid?.id == kidID` they were invisible to the
+    /// report. A parent would have seen exactly what they expected while the
+    /// data sat there. Check the store, not the relationship.
+    @Test("Deleting history takes the rows off disk, not just off the kid")
+    func historyLeavesNoOrphans() throws {
+        let context = try newStore()
+        let kid = populated(context)
+        kid.deleteHistory(at: Fix.t1)
+        try context.save()
+
+        let searches = try context.fetch(FetchDescriptor<SearchEventRecord>())
+        let plays = try context.fetch(FetchDescriptor<PlayEventRecord>())
+        let blocks = try context.fetch(FetchDescriptor<BlockEventRecord>())
+        let summaries = try context.fetch(FetchDescriptor<WeeklySummaryRecord>())
+
+        #expect(searches.isEmpty)
+        #expect(plays.isEmpty)
+        #expect(blocks.isEmpty)
+        #expect(summaries.isEmpty)
+    }
+
     @Test("Deleting history leaves the lists and the mode alone")
     func curationSurvives() throws {
         let context = try newStore()

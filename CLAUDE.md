@@ -256,6 +256,29 @@ choices are expensive to reverse:
   continuously rather than something a hand-run probe answered once.
 - The admin passcode lives in the **Keychain**, not the app store, so it
   survives a reinstall.
+- **Events are the write model; read models are projections over them.**
+  `VisitEventRecord` records that a kid reached something — a song at play
+  start, or a container they opened. `RecentTrailRecord` is the Recent shelf
+  derived from it, and the **first projection in this store**. The distinction
+  is what lets the sweep delete a child's browsing history without emptying
+  their home screen, and it is the pattern to reach for next time a hot read
+  wants a table. `ReviewReader` is the other half of the rule: materialise a
+  read model when the read is hot, compute it on demand when it is cold.
+- **The retention sweep must not delete a visit a live trail still references.**
+  `RecentsProjector.retentionFloor(for:)` returns the boundary. Sweeping below
+  it is fine; sweeping through it leaves a trail that cannot be rebuilt, so the
+  next bump of `RecentTrail.version` silently empties every kid's shelf —
+  months later, on an upgrade, with nothing on screen to explain it. The floor
+  costs at most fifty rows per kid past the window.
+- **`RecentTrailRecord` is exempt from the sweep and not from `deleteHistory`.**
+  Derived state is not a loophole: a parent who clears the logs must not find
+  the home screen still listing what their child was doing.
+- **Removing a row from a relationship is not deleting it.** `removeAll()` on
+  `kid.plays` nulls the inverse and leaves the row on disk, and because every
+  query is `kid?.id == kidID` the orphan is invisible — so a delete looks like
+  it worked while the data sits there. `Kid.deleteHistory` deletes through the
+  model context. Cascade does not help; it fires when the *kid* goes, not when
+  a child leaves the array.
 - **Favorites and playlists are not events and must be exempt from whatever
   retention window ships.** A sweep written against "child data older than 90
   days" would delete a kid's playlists silently, months later, and they are the

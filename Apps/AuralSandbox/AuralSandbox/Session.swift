@@ -36,6 +36,13 @@ final class Session {
     /// not a property, so a parent can review one child while another is
     /// mid-song.
     let review: ReviewReader
+
+    /// Writes visits and keeps the Recent shelf in step with them.
+    ///
+    /// Separate from ``eventLog`` because the contract is the opposite one: that
+    /// is fire-and-forget and swallows failures, which is right for a report
+    /// line and wrong for a shelf a kid is looking at. See ``RecentsProjector``.
+    let recents: RecentsProjector
     let player: MusicKitPlayer
     let passcodes: any PasscodeStore
 
@@ -74,6 +81,14 @@ final class Session {
     /// the songs are resolved by the screen that shows them.
     private(set) var playlists: [PlaylistRow] = []
 
+    /// The Recent shelf, newest first, as the projector last left it.
+    ///
+    /// **Not policy filtered, and it must never become so.** This is what the
+    /// kid *reached*; whether they may still reach it is decided at render time,
+    /// every time, because a parent can deny between the arrival and the draw.
+    /// See ``homeItems(limit:)``.
+    private(set) var recentTrail: [RecentEntry] = []
+
     /// Whether the Apple Music library on this device is the kid's own, and
     /// whether anyone has been asked.
     ///
@@ -96,6 +111,7 @@ final class Session {
         context = ModelContext(container)
         eventLog = EventLog(modelContainer: container)
         review = ReviewReader(modelContainer: container)
+        recents = RecentsProjector(modelContainer: container)
         player = MusicKitPlayer()
         self.passcodes = passcodes
 
@@ -188,7 +204,19 @@ final class Session {
 
     func switchTo(_ kid: Kid) {
         self.kid = kid
+        recentTrail = []
         rebuildCatalog()
+        Task { await loadRecentTrail() }
+    }
+
+    /// Reads the shelf back from the projector.
+    ///
+    /// On launch and on a kid switch — the only two moments it is not already in
+    /// hand, because every visit returns the trail it produced.
+    func loadRecentTrail() async {
+        let kidID = kid.id
+        guard let trail = try? await recents.trail(for: kidID), kidID == kid.id else { return }
+        recentTrail = trail
     }
 
     @discardableResult
@@ -280,7 +308,12 @@ final class Session {
     /// does not keep rows the store no longer has.
     func deleteHistory(for kid: Kid) -> String? {
         kid.deleteHistory()
-        return saveLists()
+        let failure = saveLists()
+        // The shelf is derived from what was just deleted. Leaving the copy on
+        // screen would show a parent their child's activity seconds after being
+        // told it was gone.
+        if kid.id == self.kid.id { recentTrail = [] }
+        return failure
     }
 
     /// Clears the logs **and** the kid's favorites and playlists.
@@ -290,7 +323,10 @@ final class Session {
     func deleteEverything(for kid: Kid) async -> String? {
         kid.deleteEverything()
         let failure = saveLists()
-        if kid.id == self.kid.id { await refreshLibrary() }
+        if kid.id == self.kid.id {
+            recentTrail = []
+            await refreshLibrary()
+        }
         return failure
     }
 
@@ -547,6 +583,44 @@ final class Session {
         try await player.play(item)
         playingOrigin = origin
         currentPlayLogged = false
+
+        // After the audio is running, not before: this is the shelf catching up
+        // with the kid, and nothing about it should delay the sound.
+        await noteVisit(item, manner: .played)
+    }
+
+    /// Records that the kid got to something, and takes the new shelf back.
+    ///
+    /// **Awaited, unlike ``EventLog``**, and the asymmetry is the point. A
+    /// dropped log line costs a report a line; a home screen that does not
+    /// change when a kid presses play reads as the tap having done nothing. It
+    /// is a local insert on a background actor, on a path that already awaits a
+    /// network round trip for the verdict.
+    ///
+    /// The trail comes back *from the write*. A caller that wrote and then
+    /// fetched would be racing its own write — which is exactly the bug the
+    /// Recent shelf had: the home screen reloaded microseconds after the write
+    /// was handed to a detached task, usually before the row committed.
+    ///
+    /// On failure the trail is left alone rather than guessed at. The next
+    /// arrival converges; a shelf that disagrees with the store would not.
+    func noteVisit(_ item: CatalogItem, manner: VisitManner) async {
+        let kidID = kid.id
+        let visit = VisitEvent(
+            itemID: item.id,
+            displayName: item.title,
+            artworkURL: item.artworkURL,
+            albumID: item.ancestors.first { $0.id.kind == .album }?.id,
+            artistID: item.ancestors.first { $0.id.kind == .artist }?.id,
+            rating: StoredRating(item.rating),
+            manner: manner
+        )
+
+        guard let trail = try? await recents.record(visit, for: kidID) else { return }
+        // A parent can switch kids while this is in flight, and one child's
+        // shelf must not land on another's screen.
+        guard kidID == kid.id else { return }
+        recentTrail = trail
     }
 
     func resume() async throws {
@@ -558,13 +632,19 @@ final class Session {
     /// What the home screen shows.
     ///
     /// Level 1 is the allow list itself — that *is* the reachable catalogue.
-    /// Levels 2 and 3 show what was played recently, which is only useful
-    /// because it is **filtered at render time** rather than kept as a stored
-    /// list of allowed things: a kid's recents can contain something a parent
-    /// has denied since, and a stale list would leave it sitting on the home
-    /// screen looking tappable.
+    /// Levels 2 and 3 show the trail: songs, albums and artists mixed, whatever
+    /// the kid last got to. It is only useful because it is **filtered at render
+    /// time** rather than kept as a stored list of allowed things — a kid's
+    /// recents can contain something a parent has denied since, and a stale list
+    /// would leave it sitting on the home screen looking tappable.
+    ///
+    /// The limit is applied **after** filtering, not before. Taking it first is
+    /// how the shelf used to come back short, or empty, with plenty of eligible
+    /// history behind it: a denied artist near the front of the trail ate one of
+    /// the twenty-four slots and nothing topped it up.
     func homeItems(limit: Int = 24) async throws -> [CatalogItem] {
-        try await resolveAllowed(recentlyPlayed(limit: limit))
+        let allowed = try await resolveAllowed(recentTrail.map(\.catalogID))
+        return Array(allowed.prefix(limit))
     }
 
     /// The allow list, resolved. What a level 1 home shows below its recents,
@@ -594,6 +674,13 @@ final class Session {
     }
 
     /// Distinct songs this kid played, most recent first.
+    ///
+    /// **Only the history screen reads this now.** Recent and History have
+    /// different sources on purpose: Recent is where the kid *went*, written on
+    /// arrival, so it moves the moment they tap; History is what they *played*,
+    /// written on stop with the five-second floor, so a mis-tap stays out of it.
+    /// Unifying them would either put mis-taps in the history or make the shelf
+    /// wait for a track to end.
     ///
     /// **Fetched on a fresh context, not read off `kid.plays`.** Events are
     /// written by ``EventLog``, which is a `@ModelActor` with its own context —

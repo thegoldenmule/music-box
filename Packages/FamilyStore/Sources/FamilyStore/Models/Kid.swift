@@ -40,8 +40,19 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \BlockEventRecord.kid)
     public private(set) var blocks: [BlockEventRecord] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \VisitEventRecord.kid)
+    public private(set) var visits: [VisitEventRecord] = []
+
     @Relationship(deleteRule: .cascade, inverse: \WeeklySummaryRecord.kid)
     public private(set) var summaries: [WeeklySummaryRecord] = []
+
+    /// The Recent shelf, derived from ``visits``.
+    ///
+    /// A projection rather than a record of anything — see ``RecentTrailRecord``
+    /// — which is why it sits apart from the event relationships above and is
+    /// listed separately everywhere they are handled together.
+    @Relationship(deleteRule: .cascade, inverse: \RecentTrailRecord.kid)
+    public private(set) var recentTrail: [RecentTrailRecord] = []
 
     // The kid's own library. Not events, and deliberately not touched by
     // ``deleteHistory()`` — see the note there.
@@ -148,6 +159,24 @@ public final class Kid {
     func attach(_ record: BlockEventRecord) {
         blocks.append(record)
         record.kid = self
+    }
+
+    func attach(_ record: VisitEventRecord) {
+        visits.append(record)
+        record.kid = self
+    }
+
+    func attach(_ record: RecentTrailRecord) {
+        recentTrail.append(record)
+        record.kid = self
+    }
+
+    func remove(_ record: RecentTrailRecord) {
+        recentTrail.removeAll { $0.id == record.id }
+    }
+
+    func clearRecentTrail() {
+        recentTrail.removeAll()
     }
 
     func attach(_ record: WeeklySummaryRecord) {
@@ -265,12 +294,41 @@ public final class Kid {
     /// child's own work in them, and nothing about "delete my history" asks for
     /// a playlist to disappear. Whatever retention window is eventually chosen
     /// for event data must exempt them too.
+    /// **The Recent shelf goes too**, even though it is a projection rather than
+    /// history. It is derived from the visits being deleted here, and a parent
+    /// who clears the logs and then finds their child's home screen still
+    /// listing what they were doing would rightly conclude the delete did not
+    /// work. Derived state is not a loophole.
     public func deleteHistory(at: Date = .now) {
+        delete(searches)
+        delete(plays)
+        delete(blocks)
+        delete(visits)
+        delete(recentTrail)
+        delete(summaries)
         searches.removeAll()
         plays.removeAll()
         blocks.removeAll()
+        visits.removeAll()
+        recentTrail.removeAll()
         summaries.removeAll()
         modifiedAt = at
+    }
+
+    /// Deletes the rows, rather than only detaching them.
+    ///
+    /// **`removeAll()` on a relationship is not a delete.** It nulls the inverse
+    /// and leaves the row on disk, orphaned — and because every query here is
+    /// `kid?.id == kidID`, an orphan is invisible to the report, so a parent
+    /// tapping "clear the logs" would see exactly what they expected while the
+    /// rows sat there. The cascade rule does not help: it fires when the *kid*
+    /// is deleted, not when a child leaves the array.
+    ///
+    /// Delete has to mean delete. That is the sentence the whole retention
+    /// section rests on, and it was not true.
+    private func delete(_ records: [some PersistentModel]) {
+        guard let modelContext else { return }
+        for record in records { modelContext.delete(record) }
     }
 
     /// Everything this kid did: their history **and** their library.
@@ -285,6 +343,8 @@ public final class Kid {
     /// did is not asking to rebuild their allow list.
     public func deleteEverything(at: Date = .now) {
         deleteHistory(at: at)
+        delete(favorites)
+        delete(playlists)
         favorites.removeAll()
         playlists.removeAll()
     }

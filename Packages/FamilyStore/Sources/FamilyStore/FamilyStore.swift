@@ -16,7 +16,12 @@ public enum FamilyStore {
         SearchEventRecord.self,
         PlayEventRecord.self,
         BlockEventRecord.self,
+        VisitEventRecord.self,
         WeeklySummaryRecord.self,
+        // The first projection in this store. Derived from VisitEventRecord and
+        // rebuildable from it — see RecentTrailRecord for why that matters to
+        // the retention sweep.
+        RecentTrailRecord.self,
         FavoriteRecord.self,
         PlaylistRecord.self,
         PlaylistEntryRecord.self,

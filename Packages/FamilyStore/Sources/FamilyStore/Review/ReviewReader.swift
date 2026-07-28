@@ -63,6 +63,14 @@ public actor ReviewReader {
             return event
         }
 
+        let visits = try visitRows(kidID, interval, playLimit).compactMap { row -> VisitEvent? in
+            guard let event = row.event else {
+                unreadable += 1
+                return nil
+            }
+            return event
+        }
+
         let entries = try entrySnapshots(kidID)
         let blocks = try blockRows(kidID, interval, blockLimit).compactMap {
             row -> ReviewedBlock? in
@@ -84,6 +92,7 @@ public actor ReviewReader {
             plays: plays,
             searches: searches,
             blocks: blocks,
+            visits: visits,
             unreadable: unreadable,
             builtAt: now,
             coverage: try coverage(for: kidID, in: interval)
@@ -189,6 +198,19 @@ public actor ReviewReader {
         let start = interval.start
         let end = interval.end
         var descriptor = FetchDescriptor<PlayEventRecord>(
+            predicate: #Predicate { $0.kid?.id == kidID && $0.at >= start && $0.at < end },
+            sortBy: [SortDescriptor(\.at, order: .reverse)]
+        )
+        descriptor.fetchLimit = limit
+        return try modelContext.fetch(descriptor)
+    }
+
+    private func visitRows(_ kidID: UUID, _ interval: DateInterval, _ limit: Int) throws
+        -> [VisitEventRecord]
+    {
+        let start = interval.start
+        let end = interval.end
+        var descriptor = FetchDescriptor<VisitEventRecord>(
             predicate: #Predicate { $0.kid?.id == kidID && $0.at >= start && $0.at < end },
             sortBy: [SortDescriptor(\.at, order: .reverse)]
         )

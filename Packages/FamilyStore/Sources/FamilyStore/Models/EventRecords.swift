@@ -7,6 +7,67 @@ import SwiftData
 // that whole period forever, because no later release can backfill a fact
 // nobody wrote down.
 
+/// One arrival: a song pressed play on, or a container opened.
+///
+/// The write model. What the Recent shelf actually draws is a *projection* over
+/// these — see ``RecentTrail`` — which is why this table can be swept by
+/// retention without emptying a kid's home screen.
+@Model
+public final class VisitEventRecord {
+    public private(set) var id: UUID = UUID()
+    public private(set) var at: Date = Date.distantPast
+
+    public private(set) var catalogID: String = ""
+
+    /// Part of the identity, not decoration: a visit lands on any of the four
+    /// kinds and MusicKit identifiers are only unique within a type.
+    public private(set) var itemKind: String = ItemKind.song.rawValue
+
+    public private(set) var displayName: String = ""
+    public private(set) var artworkURL: URL?
+
+    /// Lineage as it stood at the moment of the visit. `nil` when it never
+    /// resolved; see ``VisitEvent``.
+    public private(set) var albumID: String?
+    public private(set) var artistID: String?
+
+    public private(set) var rating: String = StoredRating.Name.unknown
+    public private(set) var manner: String = VisitManner.opened.rawValue
+
+    public var kid: Kid?
+
+    public init(id: UUID = UUID(), event: VisitEvent) {
+        self.id = id
+        self.at = event.at
+        self.catalogID = event.itemID.rawValue
+        self.itemKind = event.itemID.kind.rawValue
+        self.displayName = event.displayName
+        self.artworkURL = event.artworkURL
+        self.albumID = event.albumID?.rawValue
+        self.artistID = event.artistID?.rawValue
+        self.rating = event.rating.stored
+        self.manner = event.manner.rawValue
+    }
+
+    /// The typed event, or `nil` if the kind or manner columns do not read back.
+    public var event: VisitEvent? {
+        guard
+            let itemKind = ItemKind(rawValue: itemKind),
+            let manner = VisitManner(rawValue: manner)
+        else { return nil }
+        return VisitEvent(
+            itemID: CatalogID(itemKind, catalogID),
+            displayName: displayName,
+            artworkURL: artworkURL,
+            albumID: albumID.map { CatalogID(.album, $0) },
+            artistID: artistID.map { CatalogID(.artist, $0) },
+            rating: StoredRating(stored: rating),
+            manner: manner,
+            at: at
+        )
+    }
+}
+
 /// One search — the term the kid settled on, not every keystroke.
 @Model
 public final class SearchEventRecord {

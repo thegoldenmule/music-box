@@ -151,6 +151,12 @@ struct ReviewView: View {
                 }
 
                 NavigationLink {
+                    ReviewVisitsView(model: model)
+                } label: {
+                    row("Where they went", "\(window.visits.count)", "signpost.right")
+                }
+
+                NavigationLink {
                     ReviewBlocksView(model: model)
                 } label: {
                     // Two numbers, never one. The reached count is about the

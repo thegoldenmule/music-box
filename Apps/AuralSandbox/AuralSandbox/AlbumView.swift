@@ -25,6 +25,10 @@ struct AlbumView: View {
     @State private var credits: [CatalogItem] = []
     @State private var isLoading = true
     @State private var failed = false
+    /// How wide the credits row is allowed to be, so a short one can be centered
+    /// in it. Zero until the first layout, which centers nothing and is the
+    /// right thing to draw for the frame before the width is known.
+    @State private var containerWidth: CGFloat = 0
 
     private var origin: PlaybackOrigin { .browse(album.id) }
 
@@ -90,7 +94,7 @@ struct AlbumView: View {
     /// reading of License §3.3.6(D) the tiles work under, and the reason there is
     /// no play button laid over the cover.
     private var artwork: some View {
-        AsyncImage(url: album.artworkURL) { image in
+        ArtworkImage(url: album.artworkURL) { image in
             image.resizable().aspectRatio(1, contentMode: .fit)
         } placeholder: {
             ZStack {
@@ -134,7 +138,30 @@ struct AlbumView: View {
                     }
                 }
                 .padding(.horizontal)
+                // **`minWidth`, and it has to be measured.** One name sitting
+                // hard left under a centered cover and a centered title reads as
+                // a layout mistake, but `maxWidth: .infinity` does not fix it: a
+                // horizontal `ScrollView` proposes an unspecified width along
+                // its own axis, so the flexible frame collapses to the chips'
+                // ideal width and nothing moves. A measured `minWidth` centers
+                // the short case against the real container and still lets four
+                // artists grow past it and scroll, which `containerRelativeFrame`
+                // would not — that one *sets* the width and would strand the
+                // overflow off-screen.
+                .frame(minWidth: containerWidth)
             }
+            // No rubber-banding on a single name, which is the tell that
+            // something is a scroll view when it has no reason to be one.
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .background {
+                GeometryReader { proxy in
+                    // In the background, so measuring costs the row no height
+                    // and cannot feed its own width back into the scroll view —
+                    // the width here comes from the page, never from the chips.
+                    Color.clear.preference(key: WidthKey.self, value: proxy.size.width)
+                }
+            }
+            .onPreferenceChange(WidthKey.self) { containerWidth = $0 }
         }
     }
 
@@ -209,6 +236,19 @@ struct AlbumView: View {
     }
 }
 
+/// Carries a measured width back up out of a `GeometryReader`.
+///
+/// A preference rather than writing `@State` from inside the reader's body:
+/// that is a mutation during layout, and SwiftUI is entitled to complain about
+/// it or to loop. This runs after layout, where a write is safe.
+struct WidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// An artist credit, as something to tap.
 ///
 /// A circle and a name, because that is how an artist is drawn everywhere else in
@@ -220,7 +260,7 @@ struct ArtistChip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            AsyncImage(url: artist.artworkURL) { image in
+            ArtworkImage(url: artist.artworkURL) { image in
                 image.resizable().aspectRatio(1, contentMode: .fit)
             } placeholder: {
                 ZStack {

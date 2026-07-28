@@ -22,6 +22,11 @@ public struct ReviewWindow: Sendable {
     public let searches: [SearchEvent]
     public let blocks: [ReviewedBlock]
 
+    /// Where they went: containers opened, and songs at the moment play
+    /// started. The Recent shelf is a projection over these, but the parent's
+    /// report reads them raw — a shelf is a summary and this is the record.
+    public let visits: [VisitEvent]
+
     /// Rows whose stored columns did not read back into a typed event.
     ///
     /// A count rather than the rows, because there is nothing to show — but a
@@ -42,6 +47,7 @@ public struct ReviewWindow: Sendable {
         plays: [PlayEvent],
         searches: [SearchEvent],
         blocks: [ReviewedBlock],
+        visits: [VisitEvent] = [],
         unreadable: Int,
         builtAt: Date,
         coverage: Coverage
@@ -51,12 +57,15 @@ public struct ReviewWindow: Sendable {
         self.plays = plays
         self.searches = searches
         self.blocks = blocks
+        self.visits = visits
         self.unreadable = unreadable
         self.builtAt = builtAt
         self.coverage = coverage
     }
 
-    public var isEmpty: Bool { plays.isEmpty && searches.isEmpty && blocks.isEmpty }
+    public var isEmpty: Bool {
+        plays.isEmpty && searches.isEmpty && blocks.isEmpty && visits.isEmpty
+    }
 
     public var totalListeningSeconds: Int { plays.reduce(0) { $0 + $1.secondsPlayed } }
 }

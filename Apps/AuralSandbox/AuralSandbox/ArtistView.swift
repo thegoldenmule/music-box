@@ -67,7 +67,7 @@ struct ArtistView: View {
     /// already draws one on a tile. **Clipped, never composited onto**: the
     /// reading of License §3.3.6(D) the rest of the app works under.
     private var artwork: some View {
-        AsyncImage(url: artist.artworkURL) { image in
+        ArtworkImage(url: artist.artworkURL) { image in
             image.resizable().aspectRatio(1, contentMode: .fit)
         } placeholder: {
             // Plenty of artists have no image in the catalog at all, so this is
