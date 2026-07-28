@@ -64,18 +64,22 @@ final class Session {
     /// the songs are resolved by the screen that shows them.
     private(set) var playlists: [PlaylistRow] = []
 
+    /// Whether the Apple Music library on this device is the kid's own, and
+    /// whether anyone has been asked.
+    ///
+    /// A mirror of what the store holds, so the admin's switch and the
+    /// onboarding question redraw. ``MergedLibrary`` reads the store directly
+    /// and is not looking at this copy — which is what keeps the answer
+    /// authoritative in one place rather than two.
+    private(set) var deviceLibrary: DeviceLibraryState = .unasked
+
     private let family: Family
     private let context: ModelContext
     private let musicAccess = MusicKitAccess()
     private let source: any CatalogSource
 
-    /// Whether the Apple Music library on this device is the kid's own.
-    ///
-    /// Device-local and never synced. Nothing reads it yet beyond
-    /// ``MergedLibrary`` deciding which providers are live, because the only
-    /// provider that exists is ours — the toggle and the onboarding question
-    /// that sets it arrive with the Apple Music provider.
-    private let deviceLibrary: any DeviceLibraryStateStore = UserDefaultsDeviceLibraryState()
+    /// Where the shared-device answer is kept. Device-local, never synced.
+    private let deviceLibraryStore: any DeviceLibraryStateStore = UserDefaultsDeviceLibraryState()
 
     init(passcodes: any PasscodeStore = KeychainPasscodeStore()) throws {
         container = try FamilyStore.container()
@@ -100,9 +104,10 @@ final class Session {
             providers: [CloudKitLibraryProvider(kid: kid, context: context)],
             catalog: source,
             engine: kid.makeEngine(),
-            device: deviceLibrary
+            device: deviceLibraryStore
         )
         kids = family.kids
+        deviceLibrary = deviceLibraryStore.state
     }
 
     /// The family, and one kid to start in.
@@ -475,6 +480,31 @@ final class Session {
 
     func isFavorite(_ id: CatalogID) -> Bool { favoriteIDs.contains(id) }
 
+    // MARK: - The shared-device question
+
+    /// Whether anyone has answered it yet. Onboarding puts the question while
+    /// this is false, and nothing is read from the Apple Music library until it
+    /// is true — see ``DeviceLibraryState/hasBeenAsked``.
+    var hasAnsweredSharedDevice: Bool { deviceLibrary.hasBeenAsked }
+
+    /// Records the answer, from onboarding or from the admin.
+    ///
+    /// **Both call sites mark it answered**, which is the point. A parent who
+    /// reaches the switch in the admin has been asked as surely as one who
+    /// answered at first launch, and treating the two differently would leave a
+    /// device where the question was settled and the gate still shut.
+    ///
+    /// Changing it later loses nothing. Turning it off adopts the library at
+    /// that point rather than backfilling anything; turning it on stops reading
+    /// and writing there and leaves every row we already hold.
+    func setSharedDevice(_ isShared: Bool) {
+        deviceLibrary = DeviceLibraryState(isSharedDevice: isShared, hasBeenAsked: true)
+        deviceLibraryStore.save(deviceLibrary)
+        // Which providers are live has just changed, so what the shelves draw
+        // from has too.
+        Task { await refreshLibrary() }
+    }
+
     /// Fills or empties the heart. Returns a message on failure, `nil` on
     /// success — the same contract a parent's list edit keeps, and for the same
     /// reason: a heart that fills over a write that did not land is a lie.
@@ -727,7 +757,7 @@ final class Session {
             providers: [CloudKitLibraryProvider(kid: kid, context: context)],
             catalog: source,
             engine: kid.makeEngine(),
-            device: deviceLibrary
+            device: deviceLibraryStore
         )
         // The heart and the shelves read from a different kid's rows now, or from
         // the same kid's under a new policy. Neither is what is on screen.

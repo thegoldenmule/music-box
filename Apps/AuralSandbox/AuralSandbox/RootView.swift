@@ -37,7 +37,16 @@ struct RootView: View {
                 }
 
             case .ready:
-                KidHomeView(session: session)
+                // The shared-device question goes here, between authorization
+                // and the kid's first screen. That position is the whole of its
+                // safety story: the answer has to be in before anything can be
+                // read from the Apple Music library, and this is the last point
+                // where nothing has been.
+                if session.hasAnsweredSharedDevice {
+                    KidHomeView(session: session)
+                } else {
+                    SharedDeviceOnboardingView(session: session)
+                }
 
             case .failed(let message):
                 ContentUnavailableView {
