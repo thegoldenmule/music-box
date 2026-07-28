@@ -32,9 +32,9 @@ struct KidHomeView: View {
     @State private var trouble: String?
     @State private var showingAdmin = false
     /// The path lives in a ``KidRouter`` rather than in a plain `@State` for two
-    /// reasons. ``NowPlayingView`` is presented modally, and therefore outside
-    /// this stack, so it needs a way to push onto it. And the router's setter is
-    /// where a repeat push is collapsed — see ``KidRouter/collapsed(_:)``, which
+    /// reasons. ``NowPlayingView`` covers this stack rather than living in it,
+    /// and therefore sits outside it, so it needs a way to push onto it. And
+    /// the router's setter is where a repeat push is collapsed — see ``KidRouter/collapsed(_:)``, which
     /// is why the same album cannot end up on the stack twice.
     ///
     /// It is an array of ``KidRoute`` and not a `NavigationPath`. The stack
@@ -45,6 +45,13 @@ struct KidHomeView: View {
     /// not: it can be counted and popped, never inspected, so a stack built on
     /// one cannot be asked what is already open.
     @State private var router = KidRouter()
+    #if os(iOS)
+    /// How far up the full-screen player is. Held here rather than in
+    /// ``NowPlayingBar`` because the player is drawn over this whole screen and
+    /// the bar is one row inside it — the drag starts in the row and finishes
+    /// over the top of everything. See ``PlayerExpansion``.
+    @State private var expansion = PlayerExpansion()
+    #endif
     @Environment(\.scenePhase) private var scenePhase
 
     init(session: Session) {
@@ -120,8 +127,17 @@ struct KidHomeView: View {
             }
             .safeAreaInset(edge: .bottom) { NowPlayingBar(session: session, player: player) }
         }
+        // The full-screen player, over the stack rather than modally in front of
+        // it — the one thing a modal cannot be is half open, and this one is
+        // dragged. It covers the bar and the toolbar because it is applied out
+        // here, to everything.
+        #if os(iOS)
+        .overlay { ExpandedPlayer(session: session, player: player, expansion: expansion) }
+        .environment(expansion)
+        #endif
         // Reaches every screen in the stack, and — the point of putting it here
-        // — every sheet and cover they present.
+        // — every sheet and cover they present, and the player over the top of
+        // them.
         .environment(router)
         .modifier(
             SearchIfAllowed(enabled: canSearch, term: $term, onSubmit: runSearch)

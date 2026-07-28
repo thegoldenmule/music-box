@@ -6,10 +6,18 @@ import Foundation
 /// layer never sees a MusicKit type, and playback has to be testable without a
 /// device, a subscription, or a signed-in account.
 ///
-/// **Deliberately narrow.** There is no `next`, no `skip`, no shuffle and no
-/// repeat here yet, and there will never be autoplay past the end of a queue or
-/// radio — both reach unvetted material. What this can do is play a thing the
-/// policy engine has already allowed, and stop.
+/// **Deliberately narrow.** There is no `skip`, no shuffle and no repeat here,
+/// and there will never be autoplay past the end of a queue or radio — both
+/// reach unvetted material. What this can do is play a thing the policy engine
+/// has already allowed, hold exactly one more behind it, and stop.
+///
+/// **The one behind it is a considered exception.** Handing the player a second
+/// entry is the only way two tracks join without a gap, and it means the player
+/// advances once without being asked. The rule that replaces "never advance by
+/// yourself" is narrower and has to be kept by the caller: nothing is inserted
+/// that has not just been judged, the verdict is re-taken for as long as it sits
+/// there, and it is pulled back out the moment the answer changes. See
+/// ``enqueueNext(_:)``.
 ///
 /// `@MainActor` because the underlying player is, and because everything that
 /// drives it is a view.
@@ -21,6 +29,47 @@ public protocol CatalogPlayer: AnyObject {
     /// immediately beforehand. This does not re-judge: it is the mechanism, not
     /// the authority.
     func play(_ item: CatalogItem) async throws
+
+    /// Fetches what ``play(_:)`` would need, without playing anything.
+    ///
+    /// **Not a queue, and not a decision.** The gap between two tracks is mostly
+    /// a catalog round trip that only starts once the previous song has ended;
+    /// this is that round trip, moved to while there is still music playing. It
+    /// loads *one* item and leaves the player exactly as it found it, so nothing
+    /// here can advance, and the policy engine is still asked immediately before
+    /// the sound starts — a preloaded song that has since been denied is thrown
+    /// away by ``play(_:)``'s caller like any other.
+    ///
+    /// Best-effort by contract: it does not throw, and a conformance is free to
+    /// do nothing. A caller must never await it on the path to playing.
+    func preload(_ item: CatalogItem) async
+
+    /// Puts a judged song directly behind the one playing, so the two join
+    /// without a gap.
+    ///
+    /// **This is the seam's one dangerous method**, and the danger is entirely
+    /// in *when* the verdict was taken rather than whether it was. Everything
+    /// else here acts on a song the caller judged a moment ago; this one acts on
+    /// a song that will start playing some seconds later, on its own, with no
+    /// further call. The caller owes it three things: judge immediately before
+    /// inserting, keep judging while it is queued, and call ``cancelNext()`` if
+    /// the answer changes.
+    func enqueueNext(_ item: CatalogItem) async throws
+
+    /// Takes the queued song back out, leaving what is playing alone.
+    func cancelNext()
+
+    /// Moves to the queued song now instead of when this one ends. Reaches
+    /// nothing ``enqueueNext(_:)`` had not already put within reach.
+    func advanceToNextEntry() async throws
+
+    /// Takes over the song the player advanced to on its own, returning it so
+    /// the caller can judge it one last time.
+    @discardableResult
+    func adoptNext() -> CatalogItem?
+
+    /// What is queued behind ``nowPlaying``. At most one item, always judged.
+    var nextUp: CatalogItem? { get }
 
     func pause() async throws
 
@@ -85,4 +134,8 @@ public enum PlaybackStatus: String, Sendable, Hashable, CaseIterable {
 
 extension CatalogPlayer {
     public var isPlaying: Bool { status == .playing }
+
+    /// Doing nothing is a correct implementation: it costs a gap, not a wrong
+    /// answer. Only the MusicKit conformance has a round trip worth moving.
+    public func preload(_ item: CatalogItem) async {}
 }

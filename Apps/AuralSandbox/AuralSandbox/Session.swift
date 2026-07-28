@@ -671,6 +671,125 @@ final class Session {
         try await player.resume()
     }
 
+    /// Fetches what the next track will need while this one is still playing.
+    ///
+    /// **Nothing here is a decision.** No verdict is asked and none is cached:
+    /// this warms a catalog fetch, and ``play(_:origin:)`` still judges the item
+    /// immediately before any sound comes out of it. That ordering is what keeps
+    /// a parent's deny landing mid-song from being defeated by a song that had
+    /// already been fetched.
+    ///
+    /// Nothing is logged either. A preload is the app getting ready, not the
+    /// child reaching anything — a visit is recorded when a track starts, which
+    /// is the moment they actually hear it.
+    func preload(_ item: CatalogItem) async {
+        await player.preload(item)
+    }
+
+    // MARK: - The handover
+    //
+    // Where the policy check moved to, and what it costs.
+    //
+    // Two tracks only join without a gap if the player is holding the second one
+    // before the first ends, which means it advances once without being asked —
+    // the thing ``KidPlayerModel`` was built to prevent. The check did not go
+    // away; it moved earlier, and moving it earlier opens a window in which a
+    // parent's deny can land after a song was judged and before it is heard.
+    //
+    // Three things keep that window as small as it can be made:
+    //
+    // 1. The insertion happens late — seconds before the handover, not at the
+    //    start of the previous track. See `KidPlayerModel.enqueueLead`.
+    // 2. The verdict is re-taken on every poll for as long as the song sits
+    //    there, and a changed answer pulls it straight back out.
+    // 3. The song is judged once more the instant the player moves to it, and a
+    //    refusal cuts the audio.
+    //
+    // What is left is the time between the last poll before the handover and the
+    // handover itself. It is not zero, and nothing in this design makes it zero;
+    // it is a fraction of a second of a song a parent denied moments earlier.
+
+    /// Judges an item and, if it passes, puts it behind what is playing.
+    ///
+    /// Nothing is logged on a refusal, deliberately. The kid has not reached
+    /// anything — this is the app looking ahead — and the block will be recorded
+    /// properly by ``play(_:origin:)`` if and when the queue actually gets
+    /// there. Logging here as well would put two rows in the report for one
+    /// song, and the earlier of the two would describe something that never
+    /// happened.
+    ///
+    /// Returns whether the song was queued.
+    @discardableResult
+    func enqueueNext(_ item: CatalogItem) async -> Bool {
+        guard let verdict = try? await catalog.verdict(for: item), verdict.isAllowed else {
+            return false
+        }
+        do {
+            try await player.enqueueNext(item)
+        } catch {
+            return false
+        }
+        return player.nextUp?.id == item.id
+    }
+
+    /// What the engine says about a song that is already queued.
+    ///
+    /// Three states rather than a boolean, for the reason a rating is three
+    /// states rather than a boolean: "we could not say" is not "no", and a
+    /// report that writes it down as one is showing a parent our gap as their
+    /// child's music.
+    enum QueuedVerdict {
+        case allowed
+        case blocked(BlockReason)
+
+        /// Not answerable without going to the network, which this call will not
+        /// do. The caller drops the song from the queue — a guess is not good
+        /// enough to leave one there on — and the ordinary play path judges it
+        /// properly a moment later.
+        case unknown
+    }
+
+    /// Re-asks the engine about the song already queued.
+    ///
+    /// Synchronous and free of I/O, because it runs on every poll: an item that
+    /// reached the queue carries its ancestry, so this is the engine's own
+    /// indexed lookup and nothing more.
+    func queuedVerdict(for item: CatalogItem) -> QueuedVerdict {
+        guard !item.ancestors.isEmpty else { return .unknown }
+        switch kid.makeEngine().evaluate(item.policyItem) {
+        case .allowed: return QueuedVerdict.allowed
+        case .blocked(let reason): return QueuedVerdict.blocked(BlockReason(reason))
+        }
+    }
+
+    /// Pulls the queued song back out. What a changed verdict turns into.
+    func cancelNext() {
+        player.cancelNext()
+    }
+
+    /// Takes over the track the player advanced to on its own.
+    ///
+    /// The previous track's play event must already have been flushed — this
+    /// changes what `nowPlaying` is, and ``logCurrentPlay()`` reads it.
+    func adoptNext(origin: PlaybackOrigin) -> CatalogItem? {
+        guard let adopted = player.adoptNext() else { return nil }
+        playingOrigin = origin
+        currentPlayLogged = false
+        return adopted
+    }
+
+    /// Refuses a track the player had already started.
+    ///
+    /// The one path where a block is logged for something the kid *heard* rather
+    /// than something they asked for, which is why it is `reached`: a fraction
+    /// of a second of it came out of the speaker before this ran, and that is
+    /// the honest record of what happened. The play in progress is thrown away
+    /// rather than written — a refused track is not a listen.
+    func refuseAdopted(_ item: CatalogItem, reason: BlockReason, origin: PlaybackOrigin) {
+        discardCurrentPlay()
+        log(item, blockedFor: reason, reach: .reached, origin: origin)
+    }
+
     // MARK: - The kid's surfaces
 
     /// What the home screen shows.

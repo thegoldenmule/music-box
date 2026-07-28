@@ -22,13 +22,14 @@ enum KidRoute: Hashable {
 ///
 /// Everything a kid browses into is pushed onto the one `NavigationStack` in
 /// ``KidHomeView``, and a `NavigationLink` is enough for anything drawn inside
-/// it. ``NowPlayingView`` is the exception: it is presented modally, so it sits
-/// *outside* the stack and a link from it has nothing to push onto.
+/// it. ``NowPlayingView`` is the exception: it covers the stack rather than
+/// living in it — a sheet on the Mac and an overlay on iOS, where it has to be
+/// draggable — so it sits *outside* and a link from it has nothing to push onto.
 ///
-/// Handing the path down through the seven screens that draw a
+/// Handing the path down through the eight screens that draw a
 /// ``NowPlayingBar`` would mean an initializer parameter on each, so it travels
-/// in the environment instead — a modal inherits the environment of the view
-/// that presented it, which is exactly the reach that is needed and no more.
+/// in the environment instead, which reaches over the top of the stack as well
+/// as into it. That is exactly the reach that is needed and no more.
 ///
 /// **Not a way around the rules.** Everything this opens is a `CatalogItem` the
 /// policy engine already allowed, and the screen it lands on filters its own

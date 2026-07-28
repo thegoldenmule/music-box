@@ -141,6 +141,31 @@ player asks *again* immediately before playback rather than trusting the UI only
 offered allowed things — a UI that shows something the player then refuses is a
 UI bug, not a safety failure.
 
+**"Immediately before playback" now has one exception, and it is the only one.**
+Two tracks join without a gap only if `ApplicationMusicPlayer` is holding the
+second before the first ends, which means it advances once without being asked.
+So `MusicKitPlayer` holds **at most two entries**, and the check moved to
+insertion. What replaces the old rule is narrower and lives in
+`KidPlayerModel`:
+
+- Nothing is inserted that has not just been judged.
+- The verdict is re-taken **every poll** for as long as the song sits there, and
+  a changed answer pulls it back out — `Session.queuedVerdict(for:)` is
+  synchronous and free of I/O so this can run at 10Hz, which is also why nothing
+  is queued whose ancestry is missing: it could not be re-judged locally.
+- Insertion happens `KidPlayerModel.enqueueLead` seconds before the end, not at
+  the start of the previous track. That constant *is* the exposure window.
+- The song is judged once more the instant the player moves to it, and a refusal
+  pauses the audio before it logs anything.
+
+What is left is the time between the last poll and the handover: a fraction of a
+second of a song a parent denied moments earlier. That is the cost, it is not
+zero, and nothing in the design makes it zero. Anything that widens it — a
+longer lead, a third entry, dropping the poll — is spending that window, and the
+whole reason the two-entry limit is enforced in `MusicKitPlayer` rather than by
+convention is that when the second entry ends there is nothing behind it to
+wander into.
+
 **The engine is pure.** No I/O, no clock, no randomness, no throwing path. The
 caller supplies ancestry. Keep it that way: it is the component most worth
 testing exhaustively and it must be testable with no network, no subscription
