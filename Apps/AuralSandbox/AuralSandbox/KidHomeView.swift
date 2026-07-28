@@ -14,7 +14,10 @@ struct KidHomeView: View {
     @State private var player: KidPlayerModel
 
     @State private var recents: [CatalogItem] = []
-    @State private var mine: [CatalogItem] = []
+    /// The parent's allow list — level 1 only, and no longer called "Yours".
+    @State private var fromTheGrownUp: [CatalogItem] = []
+    /// The kid's own favorites, which is what that word describes now.
+    @State private var yours: [CatalogItem] = []
     @State private var term = ""
     @State private var search: SearchState = .home
     /// Held so a second search cancels the first. Without it the slower of two
@@ -55,7 +58,7 @@ struct KidHomeView: View {
     /// The *visible* results, not every result: a kid looking at Songs should
     /// get a queue of the songs they can see, not one silently padded out of a
     /// tab they are not on.
-    private var shown: [CatalogItem] { visible ?? (recents + mine) }
+    private var shown: [CatalogItem] { visible ?? (recents + yours + fromTheGrownUp) }
 
     /// What the results grid is showing, once the filter has had its say.
     private var visible: [CatalogItem]? {
@@ -88,6 +91,10 @@ struct KidHomeView: View {
                 switch route {
                 case .history:
                     HistoryView(session: session, player: player)
+                case .library:
+                    LibraryView(session: session, player: player)
+                case .playlist(let handle):
+                    PlaylistView(session: session, player: player, handle: handle)
                 }
             }
             .toolbar {
@@ -180,11 +187,11 @@ struct KidHomeView: View {
                 }
                 Spacer()
             } else if filter == .songs {
-                SongList(items: items) { item in
+                SongList(session: session, items: items, origin: .search(term: term)) { item in
                     Task { await playSong(item) }
                 }
             } else {
-                TileGrid(items: items) { item in
+                TileGrid(session: session, items: items, origin: .search(term: term)) { item in
                     Task { await playSong(item) }
                 }
             }
@@ -217,9 +224,9 @@ struct KidHomeView: View {
     /// way around it.
     @ViewBuilder
     private var home: some View {
-        if isLoading && recents.isEmpty && mine.isEmpty {
+        if isLoading && isHomeEmpty {
             ProgressView()
-        } else if recents.isEmpty && mine.isEmpty {
+        } else if isHomeEmpty {
             ContentUnavailableView {
                 Label(
                     session.kid.mode == .allowOnly
@@ -233,27 +240,43 @@ struct KidHomeView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     if !recents.isEmpty {
                         Section {
-                            RecentRow(items: recents) { item in
+                            TileShelf(session: session, items: recents, origin: .home) { item in
                                 Task { await playSong(item) }
                             }
                         } header: {
-                            NavigationLink(value: HomeRoute.history) {
-                                HStack {
-                                    Text("Recent").font(.title2.bold())
-                                    Image(systemName: "chevron.right")
-                                        .font(.headline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal)
-                            }
-                            .buttonStyle(.plain)
+                            ShelfHeader(title: "Recent", route: .history)
                         }
                     }
 
-                    if !mine.isEmpty {
+                    // "Yours" means the kid's own favorites now. It used to
+                    // label the list a parent built, which was the app telling a
+                    // kid that someone else's choices were their own.
+                    if !yours.isEmpty {
+                        Section {
+                            TileShelf(session: session, items: yours, origin: .home) { item in
+                                Task { await playSong(item) }
+                            }
+                        } header: {
+                            ShelfHeader(title: "Yours", route: .library)
+                        }
+                    }
+
+                    if !session.playlists.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Yours").font(.title2.bold()).padding(.horizontal)
-                            TileWrap(items: mine) { item in
+                            Text("Playlists").font(.title2.bold()).padding(.horizontal)
+                            PlaylistShelf(playlists: session.playlists)
+                        }
+                    }
+
+                    // The allow list, under the name it should have had all
+                    // along now that the kid has a shelf of their own.
+                    if !fromTheGrownUp.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("From your grown-up")
+                                .font(.title2.bold())
+                                .padding(.horizontal)
+                            TileWrap(session: session, items: fromTheGrownUp, origin: .home) {
+                                item in
                                 Task { await playSong(item) }
                             }
                         }
@@ -264,15 +287,24 @@ struct KidHomeView: View {
         }
     }
 
+    private var isHomeEmpty: Bool {
+        recents.isEmpty && yours.isEmpty && fromTheGrownUp.isEmpty
+            && session.playlists.isEmpty
+    }
+
     // MARK: - Loading
 
     private func reload() {
         Task {
             isLoading = true
             defer { isLoading = false }
+            // The heart and the playlist shelf read from rows already in memory,
+            // so this costs nothing and has to happen before the shelves draw.
+            await session.refreshLibrary()
             do {
                 recents = try await session.homeItems()
-                mine = session.kid.mode == .allowOnly
+                yours = try await session.favoriteItems()
+                fromTheGrownUp = session.kid.mode == .allowOnly
                     ? try await session.allowListItems()
                     : []
             } catch {
@@ -435,15 +467,95 @@ enum SearchFilter: Hashable, Identifiable, CaseIterable {
     }
 }
 
-/// Where the home screen can go. A `CatalogItem` push is browsing; this is not.
+/// Where the home screen can go. A `CatalogItem` push is browsing; these are not.
 enum HomeRoute: Hashable {
     case history
+    /// Everything the kid has kept, with a search over it.
+    case library
+    case playlist(PlaylistHandle)
 }
 
-/// Recents, sideways. One row, scrolled horizontally, so it never pushes the
-/// rest of the home screen off the bottom no matter how much a kid listens to.
-struct RecentRow: View {
+/// A shelf's title, and the way into the whole of it.
+///
+/// The caret is the affordance; the title is the target. A shelf shows what fits
+/// on one line, and the screen behind it shows the rest — which is what makes it
+/// safe for a shelf to be short.
+struct ShelfHeader: View {
+    let title: String
+    let route: HomeRoute
+
+    var body: some View {
+        NavigationLink(value: route) {
+            HStack {
+                Text(title).font(.title2.bold())
+                Image(systemName: "chevron.right")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Playlists, sideways, the way Recent is.
+///
+/// A card rather than a tile: a playlist has no artwork of its own, and
+/// borrowing the first song's would be compositing a name onto Apple's pixels.
+struct PlaylistShelf: View {
+    let playlists: [PlaylistRow]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(playlists) { playlist in
+                    NavigationLink(value: HomeRoute.playlist(playlist.handle)) {
+                        PlaylistCard(playlist: playlist)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+}
+
+struct PlaylistCard: View {
+    let playlist: PlaylistRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12).fill(.quaternary)
+                Image(systemName: "music.note.list")
+                    .font(.largeTitle)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(width: 150, height: 150)
+
+            Text(playlist.name)
+                .font(.headline)
+                .lineLimit(2, reservesSpace: true)
+            Text(playlist.entries.count == 1 ? "1 song" : "\(playlist.entries.count) songs")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 150)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(Text("Opens"))
+    }
+}
+
+/// A shelf of tiles, sideways.
+///
+/// One row, scrolled horizontally, so it never pushes the rest of the home
+/// screen off the bottom no matter how much a kid listens to or keeps. Recents
+/// and favorites are both this: neither has a bound, and both have a screen
+/// behind them holding the whole of it.
+struct TileShelf: View {
+    @Bindable var session: Session
     let items: [CatalogItem]
+    let origin: PlaybackOrigin
     let onPlay: (CatalogItem) -> Void
 
     /// A grid column has a width and hands it to the tile. An `HStack` does
@@ -455,41 +567,30 @@ struct RecentRow: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(items, id: \.id) { item in
-                    Group {
-                        if item.id.kind == .song {
-                            Button { onPlay(item) } label: { Tile(item: item) }
-                        } else {
-                            NavigationLink(value: item) { Tile(item: item) }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .frame(width: tileWidth)
+                    TileCell(session: session, item: item, origin: origin, onPlay: onPlay)
+                        .frame(width: tileWidth)
                 }
             }
             .padding(.horizontal)
         }
         // Tall enough for artwork at this width plus two lines of title and one
         // of subtitle, so a long name does not crop the artwork above it.
-        .frame(height: tileWidth + 76)
+        .frame(height: tileWidth + 84)
     }
 }
 
 /// A wrapping grid that does not scroll — for use inside a page that already
 /// does. Nesting two scroll views breaks the outer one's gestures.
 struct TileWrap: View {
+    @Bindable var session: Session
     let items: [CatalogItem]
+    let origin: PlaybackOrigin
     let onPlay: (CatalogItem) -> Void
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
             ForEach(items, id: \.id) { item in
-                if item.id.kind == .song {
-                    Button { onPlay(item) } label: { Tile(item: item) }
-                        .buttonStyle(.plain)
-                } else {
-                    NavigationLink(value: item) { Tile(item: item) }
-                        .buttonStyle(.plain)
-                }
+                TileCell(session: session, item: item, origin: origin, onPlay: onPlay)
             }
         }
         .padding(.horizontal)
@@ -498,7 +599,9 @@ struct TileWrap: View {
 
 /// Big, square, tappable. Sized for a finger that is not very accurate yet.
 struct TileGrid: View {
+    @Bindable var session: Session
     let items: [CatalogItem]
+    let origin: PlaybackOrigin
     let onPlay: (CatalogItem) -> Void
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
@@ -507,17 +610,7 @@ struct TileGrid: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(items, id: \.id) { item in
-                    // A song is a play; a container is a push. Deciding that
-                    // here rather than in a tap handler means the navigation
-                    // destination is the enclosing stack's, so browsing nests
-                    // without every screen owning a path.
-                    if item.id.kind == .song {
-                        Button { onPlay(item) } label: { Tile(item: item) }
-                            .buttonStyle(.plain)
-                    } else {
-                        NavigationLink(value: item) { Tile(item: item) }
-                            .buttonStyle(.plain)
-                    }
+                    TileCell(session: session, item: item, origin: origin, onPlay: onPlay)
                 }
             }
             .padding()
@@ -540,7 +633,9 @@ struct TileGrid: View {
 /// view. That has to live inside this scroll view, not below it, so the list
 /// owns the scrolling and lends out the bottom.
 struct SongList<Footer: View>: View {
+    @Bindable var session: Session
     let items: [CatalogItem]
+    let origin: PlaybackOrigin
     let onPlay: (CatalogItem) -> Void
     @ViewBuilder var footer: () -> Footer
 
@@ -557,10 +652,14 @@ struct SongList<Footer: View>: View {
                     if index > 0 {
                         // Inset past the artwork, so the rule reads as a break
                         // between titles rather than a line across the page.
-                        Divider().padding(.leading, SongRow.textInset)
+                        Divider().padding(.leading, SongRowMetrics.textInset)
                     }
-                    Button { onPlay(item) } label: { SongRow(item: item) }
-                        .buttonStyle(.plain)
+                    SongRow(item: item) {
+                        onPlay(item)
+                    } accessory: {
+                        HeartButton(session: session, item: item, origin: origin)
+                        AddToPlaylistButton(session: session, item: item, origin: origin)
+                    }
                 }
             }
             footer()
@@ -569,56 +668,98 @@ struct SongList<Footer: View>: View {
 }
 
 extension SongList where Footer == EmptyView {
-    init(items: [CatalogItem], onPlay: @escaping (CatalogItem) -> Void) {
-        self.init(items: items, onPlay: onPlay, footer: { EmptyView() })
+    init(
+        session: Session,
+        items: [CatalogItem],
+        origin: PlaybackOrigin,
+        onPlay: @escaping (CatalogItem) -> Void
+    ) {
+        self.init(
+            session: session,
+            items: items,
+            origin: origin,
+            onPlay: onPlay,
+            footer: { EmptyView() }
+        )
     }
 }
 
-/// One song: artwork, what it is, and the play button at the end.
-struct SongRow: View {
-    let item: CatalogItem
-
-    private static let artworkSize: CGFloat = 56
-    private static let margin: CGFloat = 16
-    private static let gap: CGFloat = 12
+/// A song row's measurements.
+///
+/// Outside ``SongRow`` because it is generic now, and a static on a generic type
+/// cannot be named without supplying the parameter — `SongRow.textInset` stops
+/// compiling the moment the row gains an accessory slot.
+enum SongRowMetrics {
+    static let artworkSize: CGFloat = 56
+    static let margin: CGFloat = 16
+    static let gap: CGFloat = 12
 
     /// Where the text starts, which is where a separator should too.
     static var textInset: CGFloat { margin + artworkSize + gap }
+}
+
+/// One song: artwork, what it is, and the controls at the end.
+///
+/// **Three sibling controls, not one with others inside it.** Tapping the title
+/// plays, tapping the heart favorites, tapping the menu adds to a playlist — and
+/// a button inside another button's label is dead, so the row cannot be one big
+/// button with the rest laid on top. The play target is the artwork, the titles
+/// and the gap between them and the heart, which is most of the row.
+struct SongRow<Accessory: View>: View {
+    let item: CatalogItem
+    let onPlay: () -> Void
+    @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
-        HStack(spacing: Self.gap) {
-            artwork
-            VStack(alignment: .leading, spacing: 2) {
-                // Two lines, not truncated to one. Rows in a list are allowed
-                // to differ in height — the grid's alignment problem does not
-                // exist here — and cutting off the title of the thing being
-                // chosen is the worse trade.
-                Text(item.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                if let subtitle = item.subtitle {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        HStack(spacing: 4) {
+            Button(action: onPlay) {
+                HStack(spacing: SongRowMetrics.gap) {
+                    artwork
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Two lines, not truncated to one. Rows in a list are
+                        // allowed to differ in height — the grid's alignment
+                        // problem does not exist here — and cutting off the
+                        // title of the thing being chosen is the worse trade.
+                        Text(item.title)
+                            .font(.headline)
+                            .lineLimit(2)
+                        if let subtitle = item.subtitle {
+                            Text(subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: SongRowMetrics.gap)
                 }
+                // The whole of it, including the gap the Spacer opens up, not
+                // just the parts with something drawn on them.
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: Self.gap)
-            // At the end of the row, never on the artwork — the same rule the
-            // tiles follow. Clipping is ours to do; compositing onto Apple's
-            // pixels is not. See `Tile.artwork`.
-            Image(systemName: "play.circle.fill")
-                .font(.title)
-                .foregroundStyle(.tint)
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                Text([item.title, item.subtitle].compactMap { $0 }.joined(separator: ", "))
+            )
+            .accessibilityHint(Text("Plays"))
+
+            // The heart at the leading edge of the trailing controls, beside the
+            // play button — never on the artwork. Clipping is ours to do;
+            // compositing onto Apple's pixels is not. See `Tile.artwork`.
+            accessory()
+
+            Button(action: onPlay) {
+                Image(systemName: "play.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.tint)
+                    .frame(width: HeartButton.size, height: HeartButton.size)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Play")
         }
-        .padding(.horizontal, Self.margin)
+        .padding(.horizontal, SongRowMetrics.margin)
         .padding(.vertical, 10)
-        // The whole row, including the gap the Spacer opens up, not just the
-        // parts with something drawn on them.
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text([item.title, item.subtitle].compactMap { $0 }.joined(separator: ", ")))
-        .accessibilityHint(Text("Plays"))
     }
 
     private var artwork: some View {
@@ -631,13 +772,25 @@ struct SongRow: View {
             }
             .aspectRatio(1, contentMode: .fit)
         }
-        .frame(width: Self.artworkSize, height: Self.artworkSize)
+        .frame(width: SongRowMetrics.artworkSize, height: SongRowMetrics.artworkSize)
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
 struct Tile: View {
     let item: CatalogItem
+
+    /// Whether to leave a gap on the subtitle line for a heart.
+    ///
+    /// Space rather than the control itself: the heart has to be a sibling of
+    /// whatever makes the tile tappable, not a button inside another button's
+    /// label, so ``TileCell`` lays it into this gap from outside. A tile with no
+    /// gap and a tile with one are otherwise identical, which is what keeps a
+    /// grid of both lined up.
+    var hasHeart = false
+
+    /// The tile's own inset. ``TileCell`` matches it when placing the heart.
+    static let padding: CGFloat = 8
 
     /// Songs play where they stand; everything else opens. That is the only
     /// distinction a kid needs from a tile, and it is the one the tile draws.
@@ -655,7 +808,7 @@ struct Tile: View {
         }
         // Padded whatever the kind, so every tile is the same size and a grid
         // of mixed kinds still lines up. Only the fill behind it differs.
-        .padding(8)
+        .padding(Self.padding)
         .background {
             if opens {
                 RoundedRectangle(cornerRadius: 16).fill(.quaternary)
@@ -724,6 +877,14 @@ struct Tile: View {
     /// the kind, where it reads as "and this takes you there" instead.
     private var subtitleRow: some View {
         HStack(spacing: 4) {
+            if hasHeart {
+                // The gap the heart is laid into, and the reason this line has a
+                // minimum height: the tile must be the same size whether or not
+                // one is coming, or a grid of shelves and search results ends up
+                // ragged.
+                Color.clear
+                    .frame(width: HeartButton.size, height: HeartButton.size)
+            }
             Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -735,6 +896,7 @@ struct Tile: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .frame(minHeight: HeartButton.size)
     }
 
     private var titleRow: some View {

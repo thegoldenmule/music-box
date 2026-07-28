@@ -43,6 +43,15 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \WeeklySummaryRecord.kid)
     public private(set) var summaries: [WeeklySummaryRecord] = []
 
+    // The kid's own library. Not events, and deliberately not touched by
+    // ``deleteHistory()`` — see the note there.
+
+    @Relationship(deleteRule: .cascade, inverse: \FavoriteRecord.kid)
+    public private(set) var favorites: [FavoriteRecord] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \PlaylistRecord.kid)
+    public private(set) var playlists: [PlaylistRecord] = []
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -146,6 +155,102 @@ public final class Kid {
         record.kid = self
     }
 
+    // MARK: - The kid's library
+    //
+    // Awaited and surfaced by the caller, like the lists above and unlike the
+    // events below: a heart that fills over a write that did not land is a lie.
+    //
+    // These deliberately do **not** stamp `modifiedAt`. That field describes the
+    // kid record itself — their name, mode, unrated behavior — and is what an
+    // entry-level sync merge compares. A kid favoriting forty songs is not a
+    // parent editing settings, and should not churn the one record sync most
+    // needs to be quiet.
+
+    /// Adds a favorite, or refreshes the one already there.
+    ///
+    /// An upsert rather than an insert, because the same favorite can arrive
+    /// twice — tapped twice, or adopted from the Apple Music library while being
+    /// tapped. Two rows for one heart would show the same tile twice and take
+    /// two taps to undo.
+    ///
+    /// Refuses a playlist: a playlist is not favorited, it is owned.
+    @discardableResult
+    public func addFavorite(
+        id catalogID: CatalogID,
+        displayName: String,
+        artworkURL: URL? = nil,
+        origin: LibraryOrigin = .kid,
+        at: Date = .now
+    ) -> FavoriteRecord? {
+        guard catalogID.kind != .playlist else { return nil }
+
+        if let existing = favoriteRecord(for: catalogID) {
+            existing.refresh(
+                displayName: displayName,
+                artworkURL: artworkURL,
+                origin: origin,
+                at: at
+            )
+            return existing
+        }
+
+        let record = FavoriteRecord(
+            catalogID: catalogID,
+            displayName: displayName,
+            artworkURL: artworkURL,
+            origin: origin,
+            at: at
+        )
+        attach(record)
+        return record
+    }
+
+    func attach(_ record: FavoriteRecord) {
+        favorites.append(record)
+        record.kid = self
+    }
+
+    /// Removes every row for this item.
+    ///
+    /// Every, not the first: nothing in the schema stops two rows existing —
+    /// CloudKit rejects unique constraints — and leaving one behind would look
+    /// like the heart refused to empty.
+    public func removeFavorite(_ catalogID: CatalogID) {
+        favorites.removeAll {
+            $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
+        }
+    }
+
+    public func favoriteRecord(for catalogID: CatalogID) -> FavoriteRecord? {
+        favorites.first {
+            $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
+        }
+    }
+
+    @discardableResult
+    public func addPlaylist(
+        named name: String,
+        origin: LibraryOrigin = .kid,
+        at: Date = .now
+    ) -> PlaylistRecord {
+        let record = PlaylistRecord(name: name, origin: origin, at: at)
+        attach(record)
+        return record
+    }
+
+    func attach(_ record: PlaylistRecord) {
+        playlists.append(record)
+        record.kid = self
+    }
+
+    public func removePlaylist(_ record: PlaylistRecord) {
+        playlists.removeAll { $0.id == record.id }
+    }
+
+    public func playlistRecord(for local: UUID) -> PlaylistRecord? {
+        playlists.first { $0.id == local }
+    }
+
     // MARK: - History
 
     /// Deletes this kid's history and nothing else.
@@ -154,6 +259,12 @@ public final class Kid {
     /// record the parent asked us to destroy. Lists, mode and unrated behavior
     /// stay — curation is not history, and a parent deleting a month of logs is
     /// not asking to rebuild their allow list.
+    ///
+    /// **Favorites and playlists stay for the same reason and then some.** They
+    /// are not events: they are the records in this store with the most of a
+    /// child's own work in them, and nothing about "delete my history" asks for
+    /// a playlist to disappear. Whatever retention window is eventually chosen
+    /// for event data must exempt them too.
     public func deleteHistory(at: Date = .now) {
         searches.removeAll()
         plays.removeAll()

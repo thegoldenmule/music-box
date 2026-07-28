@@ -1,4 +1,5 @@
 import CatalogKit
+import FamilyStore
 import SwiftUI
 
 /// Everything this kid has played, most recent first, a page at a time.
@@ -32,7 +33,7 @@ struct HistoryView: View {
                 // line of text with a picture beside it. Twice as many fit the
                 // screen, which is what a history is for — the same reasoning as
                 // the Songs tab in search, and the same rows.
-                SongList(items: items) { item in
+                SongList(session: session, items: items, origin: .home) { item in
                     Task { await play(item) }
                 } footer: {
                     if hasMore {

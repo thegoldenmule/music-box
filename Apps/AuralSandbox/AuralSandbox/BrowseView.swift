@@ -1,4 +1,5 @@
 import CatalogKit
+import FamilyStore
 import SwiftUI
 
 /// Inside an artist or an album.
@@ -29,7 +30,7 @@ struct BrowseView: View {
                     Label("Nothing to play here", systemImage: "music.note")
                 }
             } else {
-                TileGrid(items: items) { item in
+                TileGrid(session: session, items: items, origin: .browse(container.id)) { item in
                     Task { await playSong(item) }
                 }
             }

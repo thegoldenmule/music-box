@@ -17,6 +17,9 @@ public enum FamilyStore {
         PlayEventRecord.self,
         BlockEventRecord.self,
         WeeklySummaryRecord.self,
+        FavoriteRecord.self,
+        PlaylistRecord.self,
+        PlaylistEntryRecord.self,
     ])
 
     /// Opens the store on disk.

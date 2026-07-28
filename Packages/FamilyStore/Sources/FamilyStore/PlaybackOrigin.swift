@@ -1,3 +1,4 @@
+import Foundation
 import PolicyEngine
 
 /// Where a play or a block came from.
@@ -15,10 +16,23 @@ public enum PlaybackOrigin: Hashable, Sendable {
     /// Browsing a container: an artist's albums, or an album's tracks.
     case browse(CatalogID)
 
-    /// A playlist. Kept distinct from ``browse(_:)`` because a playlist is part
-    /// of a track's lineage when the track is played from it, and a deny on the
-    /// playlist has to reach it.
+    /// A catalog playlist. Kept distinct from ``browse(_:)`` because a playlist
+    /// is part of a track's lineage when the track is played from it, and a deny
+    /// on the playlist has to reach it.
     case playlist(CatalogID)
+
+    /// One of the kid's own playlists, by its local identifier.
+    ///
+    /// A separate case rather than a ``playlist(_:)`` with a made-up identifier
+    /// inside it, because a kid's playlist has no catalog identifier — it did
+    /// not exist until they made it — and every other identifier this store
+    /// keeps is an Apple Music one. Folding a UUID into that namespace would
+    /// break the rule that makes a deny on an artist reach their tracks.
+    ///
+    /// It is also not lineage. A parent cannot deny their kid's own playlist;
+    /// they deny what is in it. So this origin says where a play came from and
+    /// nothing more, which is exactly what the report wants of it.
+    case kidPlaylist(UUID)
 }
 
 // MARK: - Storage form
@@ -45,6 +59,7 @@ extension PlaybackOrigin {
         static let search = "search"
         static let browse = "browse"
         static let playlist = "playlist"
+        static let kidPlaylist = "kidPlaylist"
     }
 
     var stored: StoredOrigin {
@@ -57,6 +72,10 @@ extension PlaybackOrigin {
             StoredOrigin(name: Name.browse, kind: id.kind.rawValue, id: id.rawValue)
         case .playlist(let id):
             StoredOrigin(name: Name.playlist, kind: id.kind.rawValue, id: id.rawValue)
+        case .kidPlaylist(let local):
+            // No `kind`: the identifier is ours, not the catalog's, and there is
+            // no `ItemKind` that honestly describes it.
+            StoredOrigin(name: Name.kidPlaylist, id: local.uuidString)
         }
     }
 
@@ -80,6 +99,9 @@ extension PlaybackOrigin {
             else { return nil }
             let id = CatalogID(kind, raw)
             self = stored.name == Name.browse ? .browse(id) : .playlist(id)
+        case Name.kidPlaylist:
+            guard let raw = stored.id, let local = UUID(uuidString: raw) else { return nil }
+            self = .kidPlaylist(local)
         default:
             return nil
         }

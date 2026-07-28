@@ -1,0 +1,351 @@
+import Foundation
+import PolicyEngine
+import SwiftData
+
+/// A song, album or artist this kid marked.
+///
+/// **Never a playlist**: a playlist is not favorited, it is owned. See
+/// ``PlaylistRecord``.
+///
+/// Keyed by `(kid, catalogID, itemKind)` and written as an upsert, so the same
+/// favorite arriving twice — tapped twice, or adopted from the Apple Music
+/// library while being tapped — collapses to one row. There is no unique
+/// constraint doing that work: CloudKit rejects those outright, so the upsert is
+/// in ``Kid/addFavorite(id:displayName:artworkURL:origin:at:)`` instead.
+///
+/// **Not an event.** A retention sweep written against "child data older than 90
+/// days" must not reach this table. Plays and searches roll into summaries;
+/// favorites are durable user data, deleted only by the kid or with the kid.
+@Model
+public final class FavoriteRecord {
+    public private(set) var id: UUID = UUID()
+    public private(set) var modifiedAt: Date = Date.distantPast
+
+    /// Always an Apple Music catalog identifier. Library picks are resolved to
+    /// their catalog equivalents before they reach here.
+    public private(set) var catalogID: String = ""
+
+    /// `ItemKind.rawValue` — `"song"`, `"album"` or `"artist"`. Part of the
+    /// identity, because MusicKit identifiers are only unique within a type.
+    public private(set) var itemKind: String = ItemKind.song.rawValue
+
+    /// Copied at write time and never refreshed, so a shelf renders offline and
+    /// a delisted item still reads as a name instead of an identifier.
+    public private(set) var displayName: String = ""
+
+    /// A reference only. Artwork bytes are never copied into our storage.
+    public private(set) var artworkURL: URL?
+
+    public private(set) var favoritedAt: Date = Date.distantPast
+
+    /// `LibraryOrigin.rawValue`.
+    public private(set) var origin: String = LibraryOrigin.kid.rawValue
+
+    public var kid: Kid?
+
+    public init(
+        id: UUID = UUID(),
+        catalogID: CatalogID,
+        displayName: String,
+        artworkURL: URL? = nil,
+        origin: LibraryOrigin = .kid,
+        at: Date = .now
+    ) {
+        self.id = id
+        self.catalogID = catalogID.rawValue
+        self.itemKind = catalogID.kind.rawValue
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        self.origin = origin.rawValue
+        self.favoritedAt = at
+        self.modifiedAt = at
+    }
+
+    /// Builds a row straight from stored strings, bypassing the typed enums.
+    ///
+    /// Internal, and the only way to produce a row this version cannot read —
+    /// which is what the drop-it path in ``row`` has to be tested against.
+    init(
+        id: UUID = UUID(),
+        rawItemKind: String,
+        catalogID: String,
+        displayName: String,
+        rawOrigin: String = LibraryOrigin.kid.rawValue,
+        at: Date = .now
+    ) {
+        self.id = id
+        self.catalogID = catalogID
+        self.itemKind = rawItemKind
+        self.displayName = displayName
+        self.origin = rawOrigin
+        self.favoritedAt = at
+        self.modifiedAt = at
+    }
+
+    /// The upsert half: a second tap refreshes the copied metadata rather than
+    /// making a second row.
+    ///
+    /// `favoritedAt` deliberately does **not** move. It is when the kid said so,
+    /// and a shelf ordered most-recent-first should not reshuffle because
+    /// something was adopted again on a later read.
+    func refresh(
+        displayName: String,
+        artworkURL: URL?,
+        origin: LibraryOrigin,
+        at: Date = .now
+    ) {
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        // A row the kid tapped never degrades to an adopted one. The reverse is
+        // allowed: adopting something already on the shelf leaves it the kid's.
+        if origin == .kid {
+            self.origin = origin.rawValue
+        }
+        self.modifiedAt = at
+    }
+
+    /// The typed identifier, or `nil` if the stored strings do not make one.
+    public var itemID: CatalogID? {
+        guard let kind = ItemKind(rawValue: itemKind) else { return nil }
+        return CatalogID(kind, catalogID)
+    }
+
+    /// Unreadable is `nil` here rather than a fallback, and the row is dropped
+    /// by ``row``. Nothing fails closed on this table: a favorite is not a
+    /// permission, so losing one costs a tile and costs safety nothing.
+    public var libraryOrigin: LibraryOrigin? { LibraryOrigin(rawValue: origin) }
+
+    /// The value form, or `nil` for a row this version cannot read.
+    public var row: FavoriteRow? {
+        guard let itemID, let libraryOrigin else { return nil }
+        return FavoriteRow(
+            id: id,
+            catalogID: itemID,
+            displayName: displayName,
+            artworkURL: artworkURL,
+            favoritedAt: favoritedAt,
+            origin: libraryOrigin
+        )
+    }
+}
+
+/// A playlist the kid owns. Order is the content.
+///
+/// Not an event, for the same reason ``FavoriteRecord`` is not: these are the
+/// records in the whole store with the most work in them, and a retention sweep
+/// that reached them would delete a kid's playlists silently, months later.
+@Model
+public final class PlaylistRecord {
+    public private(set) var id: UUID = UUID()
+    public private(set) var modifiedAt: Date = Date.distantPast
+
+    /// Free text a child typed. It reaches their Apple Music library and the
+    /// parent's report, both of which are worth knowing before the field is
+    /// built rather than after.
+    public private(set) var name: String = ""
+
+    public private(set) var createdAt: Date = Date.distantPast
+
+    /// The Apple Music library playlist this is the same playlist as.
+    ///
+    /// `nil` means no counterpart: never created there, or the provider was not
+    /// live at the time.
+    public private(set) var appleLibraryID: String?
+
+    /// True **only** when this app created the Apple counterpart.
+    ///
+    /// MusicKit refuses to edit a playlist the app did not create and exposes no
+    /// way to ask whether it did. Recorded at creation because it is otherwise
+    /// unrecoverable: a playlist read back later is indistinguishable from one
+    /// Apple made. Never inferred.
+    public private(set) var appleIsOurs: Bool = false
+
+    /// `LibraryOrigin.rawValue`.
+    public private(set) var origin: String = LibraryOrigin.kid.rawValue
+
+    public var kid: Kid?
+
+    @Relationship(deleteRule: .cascade, inverse: \PlaylistEntryRecord.playlist)
+    public private(set) var entries: [PlaylistEntryRecord] = []
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        origin: LibraryOrigin = .kid,
+        at: Date = .now
+    ) {
+        self.id = id
+        self.name = name
+        self.origin = origin.rawValue
+        self.createdAt = at
+        self.modifiedAt = at
+    }
+
+    // MARK: - Mutation
+    //
+    // Every stored property is `private(set)` and changed only through these,
+    // which stamp `modifiedAt` — the same contract every other record in this
+    // store keeps, and the one an entry-level sync merge will depend on.
+
+    public func rename(to newName: String, at: Date = .now) {
+        name = newName
+        modifiedAt = at
+    }
+
+    /// Records the Apple counterpart, at the one moment it is knowable.
+    ///
+    /// Takes both fields together because they are one fact. An identifier
+    /// without `appleIsOurs` is a playlist we will read back and never dare
+    /// edit; `appleIsOurs` without an identifier is nothing at all.
+    public func linkToAppleLibrary(id appleID: String, createdByUs: Bool, at: Date = .now) {
+        appleLibraryID = appleID
+        appleIsOurs = createdByUs
+        modifiedAt = at
+    }
+
+    /// Appends a song, or does nothing if it is already here.
+    ///
+    /// Silently, rather than as a failure: a kid adding the same song twice from
+    /// two screens meant it once, and an error message about it would be the app
+    /// telling them off for something that is not a mistake.
+    @discardableResult
+    public func addSong(
+        id catalogID: CatalogID,
+        displayName: String,
+        artworkURL: URL? = nil,
+        at: Date = .now
+    ) -> PlaylistEntryRecord? {
+        guard catalogID.kind == .song else { return nil }
+        guard !entries.contains(where: { $0.catalogID == catalogID.rawValue }) else { return nil }
+
+        let record = PlaylistEntryRecord(
+            catalogID: catalogID,
+            displayName: displayName,
+            artworkURL: artworkURL,
+            position: entries.count,
+            at: at
+        )
+        entries.append(record)
+        record.playlist = self
+        renumber(at: at)
+        modifiedAt = at
+        return record
+    }
+
+    public func removeSong(_ catalogID: CatalogID, at: Date = .now) {
+        entries.removeAll { $0.catalogID == catalogID.rawValue }
+        renumber(at: at)
+        modifiedAt = at
+    }
+
+    /// Reorders to exactly this sequence of songs.
+    ///
+    /// Takes the whole order rather than a from/to pair because that is what a
+    /// drag hands back after the fact, and because an identifier that is no
+    /// longer here — a race with a removal on another screen — then simply does
+    /// not appear rather than shifting everything below it by one.
+    ///
+    /// Anything absent from `order` keeps its relative position at the end, so a
+    /// partial order is a reorder rather than a deletion.
+    public func reorder(to order: [CatalogID], at: Date = .now) {
+        let rank = Dictionary(
+            order.enumerated().map { ($0.element.rawValue, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let sorted = entries.enumerated().sorted { left, right in
+            let a = rank[left.element.catalogID] ?? (order.count + left.offset)
+            let b = rank[right.element.catalogID] ?? (order.count + right.offset)
+            return a < b
+        }
+        for (position, entry) in sorted.enumerated() {
+            entry.element.move(to: position, at: at)
+        }
+        modifiedAt = at
+    }
+
+    /// Contiguous from zero after every edit. Gaps are not a supported state:
+    /// two racing edits produce a consistent order rather than a hole.
+    private func renumber(at: Date) {
+        for (position, entry) in entries.sorted(by: { $0.position < $1.position }).enumerated() {
+            entry.move(to: position, at: at)
+        }
+    }
+
+    // MARK: - Reading
+
+    public var libraryOrigin: LibraryOrigin? { LibraryOrigin(rawValue: origin) }
+
+    public var handle: PlaylistHandle {
+        PlaylistHandle(local: id, appleLibraryID: appleLibraryID)
+    }
+
+    /// The value form. Unreadable rows are dropped from `entries` rather than
+    /// renumbering around them — the positions stored are still the truth.
+    public var row: PlaylistRow {
+        PlaylistRow(
+            handle: handle,
+            name: name,
+            createdAt: createdAt,
+            modifiedAt: modifiedAt,
+            appleIsOurs: appleIsOurs,
+            origin: libraryOrigin ?? .kid,
+            entries: entries.sorted { $0.position < $1.position }.map(\.row)
+        )
+    }
+}
+
+/// One song in one playlist.
+@Model
+public final class PlaylistEntryRecord {
+    public private(set) var id: UUID = UUID()
+    public private(set) var modifiedAt: Date = Date.distantPast
+
+    /// **Always a song.** There is no `itemKind` column because there is no
+    /// other kind this can be.
+    public private(set) var catalogID: String = ""
+
+    public private(set) var displayName: String = ""
+    public private(set) var artworkURL: URL?
+
+    /// 0-based, contiguous after any edit.
+    public private(set) var position: Int = 0
+    public private(set) var addedAt: Date = Date.distantPast
+
+    public var playlist: PlaylistRecord?
+
+    public init(
+        id: UUID = UUID(),
+        catalogID: CatalogID,
+        displayName: String,
+        artworkURL: URL? = nil,
+        position: Int,
+        at: Date = .now
+    ) {
+        self.id = id
+        self.catalogID = catalogID.rawValue
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        self.position = position
+        self.addedAt = at
+        self.modifiedAt = at
+    }
+
+    func move(to newPosition: Int, at: Date = .now) {
+        guard position != newPosition else { return }
+        position = newPosition
+        modifiedAt = at
+    }
+
+    public var itemID: CatalogID { CatalogID(.song, catalogID) }
+
+    public var row: PlaylistEntryRow {
+        PlaylistEntryRow(
+            id: id,
+            catalogID: itemID,
+            displayName: displayName,
+            artworkURL: artworkURL,
+            position: position,
+            addedAt: addedAt
+        )
+    }
+}

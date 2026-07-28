@@ -2,6 +2,7 @@ import AdminGate
 import CatalogKit
 import FamilyStore
 import Foundation
+import KidLibrary
 import SwiftData
 
 /// Everything one run of the app needs, wired together once.
@@ -44,10 +45,37 @@ final class Session {
     /// the lists once, so it is per-policy rather than per-search.
     private(set) var catalog: FilteredCatalog
 
+    /// The kid's own favorites and playlists, across every provider holding
+    /// them. Rebuilt alongside ``catalog`` and for the same reason.
+    private(set) var library: MergedLibrary
+
+    /// What the heart draws from.
+    ///
+    /// Held here rather than asked for per row: a search page of twenty-four
+    /// songs asks this twenty-four times as it scrolls, and it has to be a set
+    /// lookup against rows already in memory rather than anything that touches
+    /// the store. Refreshed after every write and on every kid switch.
+    ///
+    /// **Not policy filtered.** It answers "is this favorited", and a blocked
+    /// item never reaches a screen that could ask.
+    private(set) var favoriteIDs: Set<CatalogID> = []
+
+    /// Every playlist, most recently touched first. Names and counts only —
+    /// the songs are resolved by the screen that shows them.
+    private(set) var playlists: [PlaylistRow] = []
+
     private let family: Family
     private let context: ModelContext
     private let musicAccess = MusicKitAccess()
     private let source: any CatalogSource
+
+    /// Whether the Apple Music library on this device is the kid's own.
+    ///
+    /// Device-local and never synced. Nothing reads it yet beyond
+    /// ``MergedLibrary`` deciding which providers are live, because the only
+    /// provider that exists is ours — the toggle and the onboarding question
+    /// that sets it arrive with the Apple Music provider.
+    private let deviceLibrary: any DeviceLibraryStateStore = UserDefaultsDeviceLibraryState()
 
     init(passcodes: any PasscodeStore = KeychainPasscodeStore()) throws {
         container = try FamilyStore.container()
@@ -66,6 +94,14 @@ final class Session {
         )
         self.source = source
         catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
+        library = MergedLibrary(
+            // One provider, and it is always live. The Apple Music provider is
+            // the next stage; nothing above this line changes when it arrives.
+            providers: [CloudKitLibraryProvider(kid: kid, context: context)],
+            catalog: source,
+            engine: kid.makeEngine(),
+            device: deviceLibrary
+        )
         kids = family.kids
     }
 
@@ -431,6 +467,120 @@ final class Session {
         try await catalog.children(of: id)
     }
 
+    // MARK: - The kid's library
+    //
+    // Everything here goes through ``MergedLibrary``. Nothing on this side names
+    // a provider, learns that one failed, or discovers that one cannot do
+    // something — those are admin-facing and this is the kid's app.
+
+    func isFavorite(_ id: CatalogID) -> Bool { favoriteIDs.contains(id) }
+
+    /// Fills or empties the heart. Returns a message on failure, `nil` on
+    /// success — the same contract a parent's list edit keeps, and for the same
+    /// reason: a heart that fills over a write that did not land is a lie.
+    ///
+    /// A refusal is **not** a failure to report. The engine turned it down, the
+    /// block goes to the parent's report, and the kid is told nothing: the item
+    /// was on their screen because a policy edit landed between the draw and the
+    /// tap, and there is nothing they did wrong to explain.
+    func toggleFavorite(_ item: CatalogItem, origin: PlaybackOrigin) async -> String? {
+        do {
+            if isFavorite(item.id) {
+                try await library.removeFavorite(item.id)
+            } else {
+                try await library.addFavorite(item)
+            }
+        } catch let refusal as LibraryRefused {
+            log(refusal.item, blockedFor: BlockReason(refusal.reason), origin: origin)
+            await refreshLibrary()
+            return nil
+        } catch {
+            return Self.message(for: error)
+        }
+        await refreshLibrary()
+        return nil
+    }
+
+    /// Re-reads what the heart and the shelves draw from.
+    ///
+    /// Cheap by construction: rows are already in memory and the catalog is not
+    /// consulted, which is why it is safe to call after every write.
+    func refreshLibrary() async {
+        favoriteIDs = await library.favoriteIDs()
+        playlists = await library.playlists()
+    }
+
+    /// The "Yours" shelf: every favorite this kid may still see.
+    ///
+    /// **The blocked half is deliberately not logged here**, which is the one
+    /// place in the app that is true. Everywhere else a block is a transient
+    /// result of something a kid just did — a search, a browse — and logging it
+    /// is the only way it survives to reach a parent. A blocked favorite is a
+    /// stored row that is still there, so the report can find it whenever it is
+    /// asked. Logging on every redraw would write the same block once per home
+    /// screen appearance and drown the report in it.
+    func favoriteItems() async throws -> [CatalogItem] {
+        try await library.favorites().items
+    }
+
+    /// One playlist's songs, in the order the kid put them in. Blocks are not
+    /// logged, for the same reason.
+    func playlistSongs(_ handle: PlaylistHandle) async throws -> [CatalogItem] {
+        try await library.songs(in: handle).items
+    }
+
+    /// A local predicate over the kid's own rows. Never a catalog search, and
+    /// never `MusicLibrarySearchRequest`.
+    func searchLibrary(_ term: String) async throws -> [CatalogItem] {
+        try await library.searchLibrary(term).items
+    }
+
+    func createPlaylist(named name: String, songs: [CatalogItem] = []) async -> String? {
+        await libraryEdit { try await self.library.createPlaylist(named: name, songs: songs) }
+    }
+
+    func addToPlaylist(_ handle: PlaylistHandle, song: CatalogItem, origin: PlaybackOrigin) async
+        -> String?
+    {
+        do {
+            try await library.addToPlaylist(handle, song: song)
+        } catch let refusal as LibraryRefused {
+            log(refusal.item, blockedFor: BlockReason(refusal.reason), origin: origin)
+            return nil
+        } catch {
+            return Self.message(for: error)
+        }
+        await refreshLibrary()
+        return nil
+    }
+
+    func removeFromPlaylist(_ handle: PlaylistHandle, song: CatalogID) async -> String? {
+        await libraryEdit { try await self.library.removeFromPlaylist(handle, song: song) }
+    }
+
+    func reorderPlaylist(_ handle: PlaylistHandle, to order: [CatalogID]) async -> String? {
+        await libraryEdit { try await self.library.reorderPlaylist(handle, to: order) }
+    }
+
+    func renamePlaylist(_ handle: PlaylistHandle, to name: String) async -> String? {
+        await libraryEdit { try await self.library.renamePlaylist(handle, to: name) }
+    }
+
+    func deletePlaylist(_ handle: PlaylistHandle) async -> String? {
+        await libraryEdit { try await self.library.deletePlaylist(handle) }
+    }
+
+    /// Runs one library write and refreshes what the screens read.
+    private func libraryEdit(_ body: () async throws -> Void) async -> String? {
+        do {
+            try await body()
+        } catch {
+            return Self.message(for: error)
+        }
+        await refreshLibrary()
+        return nil
+    }
+
     func stop() async {
         logCurrentPlay()
         try? await player.stop()
@@ -566,8 +716,22 @@ final class Session {
         return nil
     }
 
+    /// Rebuilds everything that holds a policy engine.
+    ///
+    /// Both, always. A policy edit that reached the catalog but not the library
+    /// would leave a denied artist off search results and still on the kid's
+    /// shelf — the one screen a parent is least likely to check.
     private func rebuildCatalog() {
         catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
+        library = MergedLibrary(
+            providers: [CloudKitLibraryProvider(kid: kid, context: context)],
+            catalog: source,
+            engine: kid.makeEngine(),
+            device: deviceLibrary
+        )
+        // The heart and the shelves read from a different kid's rows now, or from
+        // the same kid's under a new policy. Neither is what is on screen.
+        Task { await refreshLibrary() }
     }
 
     static func message(for error: any Error) -> String {

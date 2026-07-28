@@ -59,8 +59,9 @@ spec-restatement), not appended to a README.
 Packages/
   PolicyEngine/   what a kid may see or play — pure logic, no MusicKit, no UI
   CatalogKit/     the only layer that imports MusicKit
-  FamilyStore/    SwiftData persistence — kids, lists, activity log
+  FamilyStore/    SwiftData persistence — kids, lists, activity log, the library
   AdminGate/      admin passcode and session backoff — Keychain, no UI
+  KidLibrary/     the kid's favorites and playlists — the provider seam
 Apps/
   AuralSandbox/  one Xcode project, iOS + Mac — currently a thin debug slice
 Tools/           spikes and throwaway probes — nothing yet
@@ -69,7 +70,15 @@ Tools/           spikes and throwaway probes — nothing yet
 `CatalogKit` and `FamilyStore` each depend on `PolicyEngine` and on nothing
 else. `FamilyStore` deliberately does not depend on `CatalogKit`: catalog
 metadata arrives as values a caller passes in, so storage builds and tests with
-no MusicKit and no device. Nothing depends on `CatalogKit` yet.
+no MusicKit and no device.
+
+`KidLibrary` is the one package that depends on all three. It exists because the
+kid's library is the one feature whose data lives in two stores at once — ours
+and the account's real Apple Music library — and `LibraryProvider` is the seam
+that makes those the same shape. Callers hold `MergedLibrary` and never name a
+provider. The Apple Music provider does not exist yet; the whole feature is
+tested against stubs with no network and no device, which is why the seam went in
+before it.
 Packages are plain SwiftPM, Swift 6 language mode, and build from the command
 line. Anything needing entitlements, signing, or an Info.plist goes under
 `Apps/`.
@@ -170,7 +179,16 @@ search 400'd on the first device run, and neither the tests nor the macOS build
 could have caught it.
 
 **Blocked items are kept, never dropped.** The activity report is built from them
-with their reasons, including results the kid never saw.
+with their reasons, including results the kid never saw. They are *logged* only
+where the block is transient — a search, a browse. A blocked favorite is a stored
+row that is still there, so logging it on every redraw would write the same block
+once per screen appearance.
+
+**Nothing in the kid's library is a permission.** A favorite or a playlist entry
+never creates a `PolicyEntry` and never changes a verdict. A kid may only keep
+what they may currently play, and everything read back is filtered at render
+time — a parent may deny tomorrow what the kid favorited today, and the row
+survives while the tile does not.
 
 **Logging is fire-and-forget and never on the playback path.** A dropped log line
 is acceptable; a stalled player is not. No safety decision reads from the log.
@@ -180,9 +198,20 @@ Policy-entry writes are the opposite: awaited, with failures surfaced.
 no PII to third parties. This is a legal position (COPPA and friends), not just
 an architecture preference — the app records a child's search history.
 
-**Four MusicKit affordances are deliberately never used**: personalized
-recommendations, autoplay past the end of a queue, radio and stations, and the
-user's own library as a browsing source. Each reaches unvetted material.
+**Three MusicKit affordances are deliberately never used**: personalized
+recommendations, autoplay past the end of a queue, and radio and stations. Each
+reaches unvetted material.
+
+A fourth used to be on that list and is now conditional. **The user's own library
+is not a browsing source unless the library is the kid's own**, which is what
+`isSharedDevice == false` asserts — and that is the default, so the amendment is
+in force from first launch. Three things carry the original protection across:
+onboarding asks before the Apple provider's first read, the policy engine judges
+every item read back, and the read happens only through `LibraryProvider`, so
+there is one place the door opens rather than a call site per screen. The
+library as a *seeding input* for a parent building lists is untouched — that is
+still `LibrarySource`, still ISRC/UPC matching, and no part of it runs through
+`KidLibrary`.
 
 **Containment fails open.** Screen Time, Guided Access and Family Controls all
 live outside our process and can be off without telling us. The app must work
@@ -213,6 +242,18 @@ choices are expensive to reverse:
   `deniedByKind` — MusicKit identifiers are only unique within a type.
 - The admin passcode lives in the **Keychain**, not the app store, so it
   survives a reinstall.
+- **Favorites and playlists are not events and must be exempt from whatever
+  retention window ships.** A sweep written against "child data older than 90
+  days" would delete a kid's playlists silently, months later, and they are the
+  records in the store with the most of a child's own work in them.
+- `PlaybackOrigin.kidPlaylist` carries a **local UUID, not a catalog
+  identifier** — a kid's playlist did not exist until they made it. It is the one
+  deliberate exception to the one-namespace rule, and it is a separate case
+  rather than a UUID smuggled into `playlist(_:)` precisely so the rule holds
+  everywhere else.
+- `DeviceLibraryState` is **device-local and never syncs**. It describes a device
+  and the Apple Music library signed in on it, not the family, so it lives in
+  `UserDefaults` rather than the CloudKit zone.
 
 ## Known unknowns
 

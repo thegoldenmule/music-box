@@ -147,9 +147,13 @@ final class KidPlayerModel {
         } catch is Session.Refused {
             // Already logged by Session.play, with its reason. Skipped rather
             // than surfaced, except from a playlist where the kid was already
-            // promised the playlist and a silent gap reads as a fault.
-            if case .playlist = entry.origin {
+            // promised the playlist and a silent gap reads as a fault. Their own
+            // playlist counts double: they put the song there themselves.
+            switch entry.origin {
+            case .playlist, .kidPlaylist:
                 message = "Skipping this one — let's try the next."
+            case .home, .search, .browse:
+                break
             }
             await skip()
         } catch CatalogError.itemUnavailable {

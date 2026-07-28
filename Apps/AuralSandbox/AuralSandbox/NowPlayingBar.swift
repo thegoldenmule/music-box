@@ -1,4 +1,5 @@
 import CatalogKit
+import FamilyStore
 import SwiftUI
 
 /// What is playing, and the only three controls there are.
@@ -51,12 +52,25 @@ struct NowPlayingBar: View {
 
                     Spacer()
 
+                    // Keeping what is playing, and putting it on a playlist.
+                    // Not doors: both act on the song already in the bar rather
+                    // than leading anywhere, which is the line this bar draws.
+                    // It is also the screen the spec names as one of the two
+                    // places a playlist gets made.
+                    HeartButton(session: session, item: entry.item, origin: entry.origin)
+                    AddToPlaylistButton(
+                        session: session,
+                        item: entry.item,
+                        origin: entry.origin
+                    )
+
                     Button {
                         Task { await player.togglePlayPause() }
                     } label: {
                         Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title)
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
                     Button {
@@ -64,9 +78,9 @@ struct NowPlayingBar: View {
                     } label: {
                         Image(systemName: "forward.fill").font(.title2)
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Skip")
                 }
-                .buttonStyle(.plain)
                 .padding()
             }
             .background(.bar)

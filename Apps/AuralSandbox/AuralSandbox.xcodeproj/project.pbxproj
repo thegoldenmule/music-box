@@ -11,6 +11,7 @@
 		AA0000000000000000000017 /* CatalogKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000014 /* CatalogKit */; };
 		AA0000000000000000000018 /* FamilyStore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000015 /* FamilyStore */; };
 		AA000000000000000000001B /* AdminGate in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001A /* AdminGate */; };
+		AA000000000000000000001E /* KidLibrary in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001D /* KidLibrary */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 				AA0000000000000000000017 /* CatalogKit in Frameworks */,
 				AA0000000000000000000018 /* FamilyStore in Frameworks */,
 				AA000000000000000000001B /* AdminGate in Frameworks */,
+				AA000000000000000000001E /* KidLibrary in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +82,7 @@
 				AA0000000000000000000014 /* CatalogKit */,
 				AA0000000000000000000015 /* FamilyStore */,
 				AA000000000000000000001A /* AdminGate */,
+				AA000000000000000000001D /* KidLibrary */,
 			);
 			productName = AuralSandbox;
 			productReference = AA0000000000000000000005 /* AuralSandbox.app */;
@@ -114,6 +117,7 @@
 				AA0000000000000000000011 /* XCLocalSwiftPackageReference "../../Packages/CatalogKit" */,
 				AA0000000000000000000012 /* XCLocalSwiftPackageReference "../../Packages/FamilyStore" */,
 				AA0000000000000000000019 /* XCLocalSwiftPackageReference "../../Packages/AdminGate" */,
+				AA000000000000000000001C /* XCLocalSwiftPackageReference "../../Packages/KidLibrary" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA0000000000000000000003 /* Products */;
@@ -306,6 +310,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/AdminGate;
 		};
+		AA000000000000000000001C /* XCLocalSwiftPackageReference "../../Packages/KidLibrary" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../Packages/KidLibrary;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -324,6 +332,10 @@
 		AA000000000000000000001A /* AdminGate */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AdminGate;
+		};
+		AA000000000000000000001D /* KidLibrary */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KidLibrary;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
