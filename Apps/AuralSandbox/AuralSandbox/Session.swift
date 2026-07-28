@@ -472,6 +472,11 @@ final class Session {
         try await catalog.children(of: id)
     }
 
+    /// An artist's best-known songs, filtered.
+    func topSongs(of id: CatalogID) async throws -> FilteredResults {
+        try await catalog.topSongs(of: id)
+    }
+
     /// Who made this, as items a screen can link to — and only the ones this kid
     /// is allowed to reach.
     func artists(of id: CatalogID) async throws -> [CatalogItem] {

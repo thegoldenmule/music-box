@@ -53,6 +53,18 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
     /// renumber the record.
     public let trackNumber: Int?
 
+    /// Whether the catalog calls this release a single.
+    ///
+    /// **Three states, not two.** MusicKit's `Album.isSingle` is itself
+    /// optional, so `nil` means "the catalog did not say" and never "no" — the
+    /// same shape as `rating`, and the same trap. ``isSingleRelease`` is what
+    /// decides; nothing should read this directly.
+    public let isSingle: Bool?
+
+    /// How many tracks the catalog says a release has, whatever the kid may
+    /// actually see of it.
+    public let trackCount: Int?
+
     public init(
         id: CatalogID,
         title: String,
@@ -61,7 +73,9 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
         rating: ContentRating? = nil,
         ancestors: [Ancestor] = [],
         duration: TimeInterval? = nil,
-        trackNumber: Int? = nil
+        trackNumber: Int? = nil,
+        isSingle: Bool? = nil,
+        trackCount: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -71,6 +85,25 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
         self.ancestors = ancestors
         self.duration = duration
         self.trackNumber = trackNumber
+        self.isSingle = isSingle
+        self.trackCount = trackCount
+    }
+
+    /// Whether to treat this as a single rather than a record.
+    ///
+    /// The catalog's own flag when there is one. When there is not, two tracks or
+    /// fewer stands in for it — a fallback, and one worth naming as such: which
+    /// of the two branches actually decides on a real artist page is
+    /// **unmeasured**, because nothing Apple-facing has run yet. If the flag
+    /// turns out to arrive on every album, the second line is dead code and can
+    /// go; if it never arrives on a relationship fetch, the count is the whole
+    /// rule.
+    ///
+    /// False for anything that is not an album, which carries neither field.
+    public var isSingleRelease: Bool {
+        if let isSingle { return isSingle }
+        if let trackCount { return trackCount <= 2 }
+        return false
     }
 
     /// The view of this item that the policy engine takes.
@@ -88,7 +121,9 @@ public struct CatalogItem: Sendable, Hashable, Identifiable {
             rating: rating,
             ancestors: ancestors,
             duration: duration,
-            trackNumber: trackNumber
+            trackNumber: trackNumber,
+            isSingle: isSingle,
+            trackCount: trackCount
         )
     }
 }

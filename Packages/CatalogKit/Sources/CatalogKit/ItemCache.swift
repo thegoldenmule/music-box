@@ -125,8 +125,15 @@ public struct CachingCatalogSource: CatalogSource {
         return children
     }
 
+    public func topSongs(of id: CatalogID) async throws -> [CatalogItem] {
+        let songs = try await wrapped.topSongs(of: id)
+        await cache.store(songs)
+        return songs
+    }
+
     /// Not served from the cache, only stored into it: the cache is keyed by
-    /// item, and nothing in it records *whose* credit an artist was.
+    /// item, and nothing in it records *whose* credit an artist was — or whose
+    /// ranking a song appeared in.
     public func artists(of id: CatalogID) async throws -> [CatalogItem] {
         let artists = try await wrapped.artists(of: id)
         await cache.store(artists)

@@ -86,12 +86,16 @@ struct KidHomeView: View {
             .navigationTitle(session.kid.name)
             // Every container push in the app lands here — from search, from a
             // shelf, from a playlist, from an artist's page — because they all
-            // sit inside this stack. An album gets its own screen; an artist and
-            // a playlist are grids of pictures, which is what browsing is.
+            // sit inside this stack. An album and an artist each get a screen
+            // shaped like what they are; a playlist is a grid of pictures, which
+            // is what browsing was before either of them existed.
             .navigationDestination(for: CatalogItem.self) { container in
-                if container.id.kind == .album {
+                switch container.id.kind {
+                case .album:
                     AlbumView(session: session, player: player, album: container)
-                } else {
+                case .artist:
+                    ArtistView(session: session, player: player, artist: container)
+                default:
                     BrowseView(session: session, player: player, container: container)
                 }
             }
@@ -649,28 +653,45 @@ struct SongList<Footer: View>: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
-                // Indexed, so the separator is decided by position rather than
-                // by comparing against the last item's identifier. That
-                // comparison drops the rule under any row that happens to share
-                // an id with the last one — which is only ever the case when
-                // something upstream has leaked a duplicate, but it turns one
-                // bug into two and hides the shape of the first.
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 {
-                        // Inset past the artwork, so the rule reads as a break
-                        // between titles rather than a line across the page.
-                        Divider().padding(.leading, SongRowMetrics.textInset)
-                    }
-                    SongRow(item: item) {
-                        onPlay(item)
-                    } accessory: {
-                        HeartButton(session: session, item: item, origin: origin)
-                        AddToPlaylistButton(session: session, item: item, origin: origin)
-                    }
+            SongRows(session: session, items: items, origin: origin, onPlay: onPlay)
+            footer()
+        }
+    }
+}
+
+/// The rows on their own, for a page that already scrolls.
+///
+/// Split out of ``SongList`` rather than copied: an artist's page stacks a header
+/// and a shelf above its songs, and nesting a second scroll view inside that one
+/// breaks the outer one's gestures — the same reason ``TileWrap`` exists beside
+/// ``TileGrid``.
+struct SongRows: View {
+    @Bindable var session: Session
+    let items: [CatalogItem]
+    let origin: PlaybackOrigin
+    let onPlay: (CatalogItem) -> Void
+
+    var body: some View {
+        LazyVStack(spacing: 0) {
+            // Indexed, so the separator is decided by position rather than by
+            // comparing against the last item's identifier. That comparison drops
+            // the rule under any row that happens to share an id with the last
+            // one — which is only ever the case when something upstream has
+            // leaked a duplicate, but it turns one bug into two and hides the
+            // shape of the first.
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 {
+                    // Inset past the artwork, so the rule reads as a break
+                    // between titles rather than a line across the page.
+                    Divider().padding(.leading, SongRowMetrics.textInset)
+                }
+                SongRow(item: item) {
+                    onPlay(item)
+                } accessory: {
+                    HeartButton(session: session, item: item, origin: origin)
+                    AddToPlaylistButton(session: session, item: item, origin: origin)
                 }
             }
-            footer()
         }
     }
 }

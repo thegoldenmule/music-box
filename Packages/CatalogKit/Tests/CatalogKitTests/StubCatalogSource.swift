@@ -23,6 +23,7 @@ actor StubCatalogSource: CatalogSource {
     private var children: [CatalogID: [CatalogItem]]
     private var items: [CatalogID: CatalogItem]
     private var artists: [CatalogID: [CatalogItem]]
+    private var topSongs: [CatalogID: [CatalogItem]]
 
     private(set) var searchCalls: [SearchCall] = []
     private(set) var ancestryCallCount = 0
@@ -39,7 +40,8 @@ actor StubCatalogSource: CatalogSource {
         ancestry: [CatalogID: [Ancestor]] = [:],
         children: [CatalogID: [CatalogItem]] = [:],
         items: [CatalogID: CatalogItem] = [:],
-        artists: [CatalogID: [CatalogItem]] = [:]
+        artists: [CatalogID: [CatalogItem]] = [:],
+        topSongs: [CatalogID: [CatalogItem]] = [:]
     ) {
         self.pages = pages
         self.pagesByKind = pagesByKind
@@ -47,6 +49,7 @@ actor StubCatalogSource: CatalogSource {
         self.children = children
         self.items = items
         self.artists = artists
+        self.topSongs = topSongs
     }
 
     func search(
@@ -85,6 +88,10 @@ actor StubCatalogSource: CatalogSource {
 
     func artists(of id: CatalogID) async throws -> [CatalogItem] {
         artists[id] ?? []
+    }
+
+    func topSongs(of id: CatalogID) async throws -> [CatalogItem] {
+        topSongs[id] ?? []
     }
 
     func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
@@ -178,14 +185,18 @@ enum Fix {
     static func albumItem(
         _ n: Int,
         rating: SandboxContentRating? = .clean,
-        ancestors: [Ancestor] = []
+        ancestors: [Ancestor] = [],
+        isSingle: Bool? = nil,
+        trackCount: Int? = nil
     ) -> CatalogItem {
         CatalogItem(
             id: CatalogID(.album, "album-\(n)"),
             title: "Album \(n)",
             subtitle: "Artist A",
             rating: rating,
-            ancestors: ancestors
+            ancestors: ancestors,
+            isSingle: isSingle,
+            trackCount: trackCount
         )
     }
 

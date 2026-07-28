@@ -33,6 +33,15 @@ public protocol CatalogSource: Sendable {
     /// playlist's entries.
     func children(of id: CatalogID) async throws -> [CatalogItem]
 
+    /// An artist's best-known songs, as the catalog ranks them.
+    ///
+    /// Not ``children(of:)``, which for an artist is their albums. A screen that
+    /// shows both wants them apart, and merging them would make "what is inside
+    /// this container" mean two different things depending on who asked.
+    ///
+    /// Empty for anything that is not an artist.
+    func topSongs(of id: CatalogID) async throws -> [CatalogItem]
+
     /// Who is credited on an album or a song, as items in their own right.
     ///
     /// Distinct from ancestry, and deliberately so. ``resolveAncestry(for:)``
@@ -71,6 +80,12 @@ extension CatalogSource {
     /// Sources whose reads already include lineage can skip this.
     public func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
         items
+    }
+
+    /// No top songs, for sources with no notion of ranking. A screen that gets
+    /// nothing back simply has no songs section.
+    public func topSongs(of id: CatalogID) async throws -> [CatalogItem] {
+        []
     }
 
     /// No credits, for sources that cannot supply them. A screen that gets

@@ -518,6 +518,43 @@ struct ChildrenTests {
         #expect(results.blocked.count == 3)
     }
 
+    @Test("An artist's top songs are filtered like anything else they are handed")
+    func filtersTopSongs() async throws {
+        let source = StubCatalogSource(
+            topSongs: [
+                Fix.artist: (0..<4).map {
+                    Fix.songItem($0, rating: $0.isMultiple(of: 2) ? .clean : .explicit)
+                }
+            ]
+        )
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.topSongs(of: Fix.artist)
+
+        #expect(results.items.count == 2)
+        #expect(results.blocked.count == 2)
+    }
+
+    /// Ancestry is resolved before judging here too. A kid on an artist's own
+    /// page is the one place a deny on that artist most obviously has to bite,
+    /// and their top songs arrive from the catalog with no lineage attached.
+    @Test("A deny on the artist reaches their top songs")
+    func topSongsRespectArtistDeny() async throws {
+        let source = StubCatalogSource(
+            ancestry: [Fix.song(0): [Ancestor(id: Fix.artist)]],
+            topSongs: [Fix.artist: [Fix.songItem(0)]]
+        )
+        let sut = FilteredCatalog(
+            source: source,
+            engine: Fix.engine(.denyPlusAuto, [.deny(Fix.artist)])
+        )
+
+        let results = try await sut.topSongs(of: Fix.artist)
+
+        #expect(results.items.isEmpty)
+        #expect(results.blocked.first?.reason == .deniedByParent(Fix.artist))
+    }
+
     @Test("Album credits come back whole when nothing is denied")
     func creditsAreReturned() async throws {
         let source = StubCatalogSource(
@@ -690,5 +727,48 @@ struct CachingTests {
         _ = try await sut.search(term: "x", kinds: [.song], limit: 4, offset: 0)
 
         #expect(await source.searchCalls.count == 2)
+    }
+}
+
+/// The rule an artist's shelf of records is built on.
+///
+/// Worth its own tests because it is the one place in this package that guesses:
+/// the catalog's own flag is optional, and what an absent flag means is a
+/// decision rather than a fact. Whether the fallback ever fires is unmeasured —
+/// see ``CatalogItem/isSingleRelease``.
+@Suite("Singles and records")
+struct SingleReleaseTests {
+    @Test(
+        "The catalog's flag decides whenever there is one",
+        arguments: [
+            (true, 1, true),
+            (true, 12, true),
+            // A flagged single with a record's worth of tracks is still a
+            // single. The flag wins outright rather than being second-guessed.
+            (false, 1, false),
+            (false, 12, false),
+        ]
+    )
+    func flagWins(isSingle: Bool, trackCount: Int, expected: Bool) {
+        let album = Fix.albumItem(1, isSingle: isSingle, trackCount: trackCount)
+        #expect(album.isSingleRelease == expected)
+    }
+
+    @Test(
+        "With no flag, two tracks or fewer stands in for one",
+        arguments: [(1, true), (2, true), (3, false), (12, false)]
+    )
+    func countStandsIn(trackCount: Int, expected: Bool) {
+        let album = Fix.albumItem(1, isSingle: nil, trackCount: trackCount)
+        #expect(album.isSingleRelease == expected)
+    }
+
+    /// Neither field, so nothing to go on — and the shelf shows it. Failing this
+    /// way round is deliberate: a single that slips onto the shelf is untidy,
+    /// where a record wrongly hidden is unreachable.
+    @Test("Knowing nothing means it is a record")
+    func unknownIsARecord() {
+        #expect(!Fix.albumItem(1).isSingleRelease)
+        #expect(!Fix.songItem(1).isSingleRelease)
     }
 }

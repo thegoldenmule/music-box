@@ -2,7 +2,12 @@ import CatalogKit
 import FamilyStore
 import SwiftUI
 
-/// Inside an artist or an album.
+/// Inside a container that has no screen of its own — a playlist, today.
+///
+/// Albums and artists have since grown their own, shaped like what they are:
+/// ``AlbumView`` and ``ArtistView``. This is the general case they were both
+/// carved out of, and it stays because the next kind to arrive will land here
+/// first and look right enough while it waits.
 ///
 /// Everything here has already been through the policy engine. A blocked track
 /// is **absent**, not greyed out and not shown with a lock — in levels 1 and 2 a

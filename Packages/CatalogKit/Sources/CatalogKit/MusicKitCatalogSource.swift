@@ -176,6 +176,23 @@ public struct MusicKitCatalogSource: CatalogSource {
         }
     }
 
+    /// Asked for as a property of the lookup rather than by fetching the artist
+    /// and asking again with `with(_:)` — one request instead of two, which is
+    /// what the rest of ``children(of:)`` still costs and should probably learn.
+    public func topSongs(of id: CatalogID) async throws -> [CatalogItem] {
+        guard id.kind == .artist, !id.rawValue.isEmpty else { return [] }
+
+        var request = MusicCatalogResourceRequest<Artist>(
+            matching: \.id,
+            equalTo: MusicItemID(id.rawValue)
+        )
+        request.properties = [.topSongs]
+
+        let response = try await mapErrors { try await request.response() }
+        guard let artist = response.items.first else { return [] }
+        return (artist.topSongs ?? []).map(item(from:))
+    }
+
     // MARK: - Credits
 
     /// Everyone credited, not just the first one.
@@ -320,7 +337,13 @@ public struct MusicKitCatalogSource: CatalogSource {
             title: album.title,
             subtitle: album.artistName,
             artworkURL: artworkURL(album.artwork),
-            rating: rating(from: album.contentRating)
+            rating: rating(from: album.contentRating),
+            // `isSingle` is optional in MusicKit too, and the optionality is
+            // carried rather than flattened here — see
+            // ``CatalogItem/isSingleRelease``, which is the one place that
+            // decides what an absent flag means.
+            isSingle: album.isSingle,
+            trackCount: album.trackCount
         )
     }
 
@@ -599,7 +622,9 @@ public struct MusicKitLibrarySource: LibrarySource {
             subtitle: album.artistName,
             artworkURL: artworkURL(album.artwork),
             rating: rating(from: album.contentRating),
-            ancestors: ancestors
+            ancestors: ancestors,
+            isSingle: album.isSingle,
+            trackCount: album.trackCount
         )
     }
 }

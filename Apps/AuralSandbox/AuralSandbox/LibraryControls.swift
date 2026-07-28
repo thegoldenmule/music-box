@@ -44,6 +44,43 @@ struct HeartButton: View {
     }
 }
 
+/// The same heart, with its name beside it.
+///
+/// A glyph is enough on a row or a tile, where it sits next to the title it
+/// belongs to and every row has one. At the top of an artist's page there is no
+/// column of hearts to read it against and nothing next to it to belong to, so
+/// the word does the work the pattern usually does — and the tap target stops
+/// being 28 points of empty header.
+///
+/// Same call, same silence on failure, same rule about never touching the
+/// artwork: it sits under the picture, not on it.
+struct FavoriteButton: View {
+    @Bindable var session: Session
+    let item: CatalogItem
+    let origin: PlaybackOrigin
+
+    private var isOn: Bool { session.isFavorite(item.id) }
+
+    var body: some View {
+        Button {
+            Task { _ = await session.toggleFavorite(item, origin: origin) }
+        } label: {
+            Label(isOn ? "In your library" : "Add to your library",
+                  systemImage: isOn ? "heart.fill" : "heart")
+                .font(.headline)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+        .background(Capsule().fill(.quaternary))
+        // The label already says which state it is in, so a hint would be the
+        // same sentence twice.
+        .accessibilityLabel(isOn ? "Remove from your library" : "Add to your library")
+    }
+}
+
 /// Put this song on a playlist.
 ///
 /// A menu of the kid's playlists plus one way to make another, which is what

@@ -391,8 +391,25 @@ public struct FilteredCatalog: Sendable {
     /// Used for browsing an album or artist, and for playing a playlist — the
     /// blocked entries are what the player skips rather than stopping on.
     public func children(of id: CatalogID) async throws -> FilteredResults {
-        let children = try await source.children(of: id)
-        let resolved = try await source.resolveAncestry(for: children)
+        try await judge(source.children(of: id))
+    }
+
+    /// An artist's top songs, filtered.
+    ///
+    /// The same treatment their albums get, and for the same reason: this is a
+    /// list a kid is handed, so a denied track is absent from it rather than
+    /// shown and refused. The blocked half comes back for the report.
+    public func topSongs(of id: CatalogID) async throws -> FilteredResults {
+        try await judge(source.topSongs(of: id))
+    }
+
+    /// Resolve lineage for a list, then run the whole of it past the engine.
+    ///
+    /// Ancestry first — a song cannot be judged against a denied artist without
+    /// knowing who its artist is, and on a page that *is* an artist that is not a
+    /// hypothetical.
+    private func judge(_ items: [CatalogItem]) async throws -> FilteredResults {
+        let resolved = try await source.resolveAncestry(for: items)
 
         var allowed: [CatalogItem] = []
         var blocked: [BlockedItem] = []
