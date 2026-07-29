@@ -93,6 +93,60 @@ struct WalkingDown {
     }
 }
 
+// MARK: - What the Songs column holds
+
+@Suite("Chosen songs and indexed ones are different lists")
+@MainActor
+struct ChosenSongs {
+    @Test("An artist's tracks are in the library but not in the Songs column")
+    func indexedIsNotChosen() async throws {
+        let harness = try Harness()
+        try await harness.library.addFavorite(Fix.item(Fix.band))
+        await harness.library.expand(Fix.item(Fix.band))
+
+        let contents = await harness.library.contents()
+        // In the library, and reachable by opening the artist or the record.
+        #expect(contents.songItems.count == 2)
+        // Not in the column a kid scans for what they picked out.
+        #expect(contents.chosenSongItems.isEmpty)
+    }
+
+    @Test("A hearted song is chosen, and stays chosen when its artist is kept too")
+    func heartedStaysChosen() async throws {
+        let harness = try Harness()
+        try await harness.library.addFavorite(Fix.item(Fix.clean))
+        try await harness.library.addFavorite(Fix.item(Fix.band))
+        await harness.library.expand(Fix.item(Fix.band))
+
+        let contents = await harness.library.contents()
+        #expect(contents.songItems.count == 2)
+        // The walk indexed this song as well, and the hand-picked row wins the
+        // duplicate — so keeping the artist does not quietly demote it.
+        #expect(contents.chosenSongItems.map(\.id) == [Fix.clean])
+    }
+
+    @Test("A song on the kid's own playlist counts as chosen")
+    func playlistEntriesAreChosen() async throws {
+        let harness = try Harness()
+        try await harness.library.createPlaylist(named: "Mix", songs: [Fix.item(Fix.other)])
+        try await harness.library.addFavorite(Fix.item(Fix.band))
+        await harness.library.expand(Fix.item(Fix.band))
+
+        #expect(await harness.library.contents().chosenSongItems.map(\.id) == [Fix.other])
+    }
+
+    @Test("Drilling in still shows everything, which is the point of the split")
+    func drillInIsUnaffected() async throws {
+        let harness = try Harness()
+        try await harness.library.addFavorite(Fix.item(Fix.band))
+        await harness.library.expand(Fix.item(Fix.band))
+
+        let contents = await harness.library.contents()
+        #expect(LibraryBrowse.songs(from: contents.songs, on: Fix.record).count == 2)
+        #expect(LibraryBrowse.songs(from: contents.songs, by: Fix.band).count == 2)
+    }
+}
+
 // MARK: - Cost
 
 @Suite("The walk happens once, not on every read")

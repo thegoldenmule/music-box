@@ -13,11 +13,27 @@ public struct LibrarySong: Sendable, Hashable, Identifiable {
     public let item: CatalogItem
     public let ancestry: LibraryAncestry
 
+    /// Whether the kid picked **this song**, rather than getting it because they
+    /// kept the record or the artist it is on.
+    ///
+    /// True for a heart and for anything on one of their own playlists. False for
+    /// everything a walk brought in — which is most of the library once an artist
+    /// has been kept, and is why the distinction has to exist at all: a Songs
+    /// column of everything buries the dozen songs a child chose under the
+    /// thousand that arrived behind them.
+    ///
+    /// It changes what is *listed*, never what is reachable or playable. An
+    /// indexed song is a library song in every other respect: it is judged the
+    /// same way, it is found by drilling into its artist or its record, and it
+    /// queues like any other.
+    public let isChosen: Bool
+
     public var id: CatalogID { item.id }
 
-    public init(item: CatalogItem, ancestry: LibraryAncestry = .none) {
+    public init(item: CatalogItem, ancestry: LibraryAncestry = .none, isChosen: Bool = true) {
         self.item = item
         self.ancestry = ancestry
+        self.isChosen = isChosen
     }
 }
 
@@ -77,8 +93,17 @@ public struct LibraryContents: Sendable {
         isResolved: true
     )
 
-    /// The songs, as the player wants them.
+    /// Every song, as the player wants them. What a drill-in shows.
     public var songItems: [CatalogItem] { songs.map(\.item) }
+
+    /// Only the songs the kid picked out. What the Songs column shows.
+    ///
+    /// The two lists are deliberately different, and this is the one place in the
+    /// browser where the library is not shown whole: everything a walk indexed is
+    /// still there, still judged, still playable, and reached by opening the
+    /// artist or the record it came in under — where a child looking for it would
+    /// go anyway.
+    public var chosenSongItems: [CatalogItem] { songs.lazy.filter(\.isChosen).map(\.item) }
 }
 
 /// Turns the kid's kept songs into the artist and album columns above them.

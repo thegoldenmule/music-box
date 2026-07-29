@@ -250,7 +250,10 @@ public final class MergedLibrary {
             switch engine.evaluate(row.policyItem) {
             case .allowed:
                 switch row.catalogID.kind {
-                case .song: songs.append(LibrarySong(item: row.item, ancestry: row.ancestry))
+                case .song:
+                    songs.append(
+                        LibrarySong(item: row.item, ancestry: row.ancestry, isChosen: false)
+                    )
                 case .album: indexedAlbums.append(row.item)
                 default: break
                 }

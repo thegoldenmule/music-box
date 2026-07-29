@@ -69,7 +69,12 @@ struct LibraryView: View {
             Spacer()
         } else if rows.isEmpty && playlists.isEmpty {
             Spacer()
-            LibraryEmpty(filter: filter, isSearching: !term.isEmpty)
+            LibraryEmpty(
+                filter: filter,
+                isSearching: !term.isEmpty,
+                hasLibrary: !session.libraryContents.albums.isEmpty
+                    || !session.libraryContents.artists.isEmpty
+            )
             Spacer()
         } else if filter == .playlists {
             ScrollView {
@@ -98,10 +103,16 @@ struct LibraryView: View {
         return switch filter {
         case .artists: LibraryBrowse.filter(contents.artists, by: term)
         case .albums: LibraryBrowse.filter(contents.albums, by: term)
+        // **Only what the kid picked.** Keeping an artist can bring a thousand
+        // tracks in, and a Songs column holding all of them buries the dozen a
+        // child actually chose. The rest is not hidden — it is one level in,
+        // under the artist or the record it arrived with, which is where someone
+        // looking for it would go.
+        //
         // Sorted here and not upstream: `LibraryContents.songs` is in fold order,
         // which is what decides where a container's artwork comes from, and a
         // column is read by name.
-        case .songs: LibraryBrowse.filter(LibraryBrowse.sorted(contents.songItems), by: term)
+        case .songs: LibraryBrowse.filter(LibraryBrowse.sorted(contents.chosenSongItems), by: term)
         case .playlists: []
         }
     }
@@ -340,28 +351,46 @@ struct LibraryPlaylistRow: View {
 
 /// What an empty column says.
 ///
-/// Two different sentences, because the two states are different problems: a kid
-/// who has kept nothing needs to be told how to keep something, and a kid whose
-/// filter matched nothing needs to be told to try a different word. The old
-/// screen said "Nothing kept yet" to both.
+/// Three different sentences, because they are three different problems. A kid
+/// whose filter matched nothing should try another word. A kid who has kept
+/// nothing should be told how to keep something. And a kid whose Songs column is
+/// empty **while their library plainly is not** — which is what keeping an artist
+/// and no individual songs looks like — must not be told to tap a heart they just
+/// tapped; they should be pointed one level in, where everything that artist
+/// brought with them is.
 struct LibraryEmpty: View {
     let filter: LibraryFilter
     let isSearching: Bool
 
+    /// Whether anything at all is kept, whatever this column shows.
+    var hasLibrary = false
+
     var body: some View {
         ContentUnavailableView {
-            Label(
-                isSearching ? "Nothing found" : "Nothing kept yet",
-                systemImage: isSearching ? "magnifyingglass" : "heart"
-            )
+            Label(title, systemImage: glyph)
         } description: {
-            if isSearching {
-                Text("Try a different word.")
-            } else if filter == .playlists {
-                Text("Make a playlist with the + button.")
-            } else {
-                Text("Tap a heart to keep something.")
-            }
+            Text(detail)
         }
+    }
+
+    private var isFullElsewhere: Bool { hasLibrary && !isSearching && filter == .songs }
+
+    private var title: String {
+        if isSearching { return "Nothing found" }
+        if isFullElsewhere { return "No songs kept on their own" }
+        return "Nothing kept yet"
+    }
+
+    private var glyph: String {
+        if isSearching { return "magnifyingglass" }
+        if isFullElsewhere { return "music.note.list" }
+        return "heart"
+    }
+
+    private var detail: String {
+        if isSearching { return "Try a different word." }
+        if isFullElsewhere { return "Open an artist or a record to find their songs." }
+        if filter == .playlists { return "Make a playlist with the + button." }
+        return "Tap a heart to keep something."
     }
 }
