@@ -270,6 +270,14 @@ public final class MergedLibrary {
                 indexedAlbums,
                 LibraryBrowse.albums(from: songs)
             ),
+            // Neither the records a walk brought in nor the ones folded out of
+            // the tracks it brought with them. What is left is what the kid
+            // pointed at: a record they hearted, or one a song they hearted sits
+            // on.
+            chosenAlbums: LibraryBrowse.merged(
+                favoritedAlbums,
+                LibraryBrowse.albums(from: songs.filter(\.isChosen))
+            ),
             blocked: blocked,
             isResolved: judged.isResolved
         )

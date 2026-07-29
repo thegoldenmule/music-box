@@ -144,6 +144,45 @@ struct ChosenSongs {
         let contents = await harness.library.contents()
         #expect(LibraryBrowse.songs(from: contents.songs, on: Fix.record).count == 2)
         #expect(LibraryBrowse.songs(from: contents.songs, by: Fix.band).count == 2)
+        #expect(LibraryBrowse.albums(contents.albums, by: Fix.band).map(\.title) == ["The Record"])
+    }
+
+    @Test("An artist's records are in the library but not in the Albums column")
+    func indexedAlbumsAreNotChosen() async throws {
+        let harness = try Harness()
+        try await harness.library.addFavorite(Fix.item(Fix.band))
+        await harness.library.expand(Fix.item(Fix.band))
+
+        let contents = await harness.library.contents()
+        #expect(contents.albums.map(\.title) == ["The Record"])
+        #expect(contents.chosenAlbums.isEmpty)
+    }
+
+    @Test("A record hearted on its own is chosen; so is one a hearted song sits on")
+    func chosenAlbumsAreWhatWasPointedAt() async throws {
+        let hearted = try Harness()
+        try await hearted.library.addFavorite(Fix.item(Fix.record))
+        #expect(await hearted.library.contents().chosenAlbums.map(\.title) == ["The Record"])
+
+        // Hearting a song has put its record on this list since before walks
+        // existed, and that is a fact about the song the kid picked.
+        let viaSong = try Harness()
+        try await viaSong.library.addFavorite(Fix.item(Fix.clean))
+        #expect(await viaSong.library.contents().chosenAlbums.map(\.title) == ["The Record"])
+    }
+
+    @Test("A record a walk indexed but could not fill is still under its artist")
+    func trackless() async throws {
+        let harness = try Harness()
+        harness.catalog.breakChildren(of: Fix.record)
+        try await harness.library.addFavorite(Fix.item(Fix.band))
+        await harness.library.expand(Fix.item(Fix.band))
+
+        let contents = await harness.library.contents()
+        #expect(contents.songs.isEmpty)
+        // Nothing can fold it out of a song, because there is no song. Reading
+        // the album list rather than folding is what keeps it reachable.
+        #expect(LibraryBrowse.albums(contents.albums, by: Fix.band).map(\.title) == ["The Record"])
     }
 }
 

@@ -58,11 +58,27 @@ public struct LibraryContents: Sendable {
     /// sorts them itself; see ``LibraryBrowse/sorted(_:)``.
     public let songs: [LibrarySong]
 
-    /// Every artist, alphabetical. Favorited ones and ones folded from `songs`.
+    /// Every artist, alphabetical.
+    ///
+    /// No chosen/indexed split here, and none is needed: a walk only ever
+    /// produces records and tracks, so the only artist it can put on this list is
+    /// the one the kid hearted to start it.
     public let artists: [CatalogItem]
 
-    /// Every album, alphabetical. Favorited ones and ones folded from `songs`.
+    /// Every album in the library, alphabetical. What a drill-in shows.
     public let albums: [CatalogItem]
+
+    /// Only the albums the kid picked out. What the Albums column shows.
+    ///
+    /// The same split ``chosenSongItems`` makes and for the same reason: keeping
+    /// an artist brings their whole catalogue in, and a column holding forty
+    /// records the kid never chose is not a column they can scan.
+    ///
+    /// A record hearted on its own belongs here, and so does one a **chosen**
+    /// song sits on — hearting a song has put its record on this list since
+    /// before walks existed, and that is a fact about the song the kid picked
+    /// rather than about a catalogue that arrived behind an artist.
+    public let chosenAlbums: [CatalogItem]
 
     /// What the engine turned down, kept for the report the way it is everywhere.
     public let blocked: [BlockedItem]
@@ -75,12 +91,14 @@ public struct LibraryContents: Sendable {
         songs: [LibrarySong],
         artists: [CatalogItem],
         albums: [CatalogItem],
+        chosenAlbums: [CatalogItem],
         blocked: [BlockedItem],
         isResolved: Bool
     ) {
         self.songs = songs
         self.artists = artists
         self.albums = albums
+        self.chosenAlbums = chosenAlbums
         self.blocked = blocked
         self.isResolved = isResolved
     }
@@ -89,6 +107,7 @@ public struct LibraryContents: Sendable {
         songs: [],
         artists: [],
         albums: [],
+        chosenAlbums: [],
         blocked: [],
         isResolved: true
     )
@@ -192,6 +211,22 @@ public enum LibraryBrowse {
     /// The albums under one artist.
     public static func albums(from songs: [LibrarySong], by artist: CatalogID) -> [CatalogItem] {
         albums(from: songs.filter { $0.ancestry.artist == artist })
+    }
+
+    /// The records in a list of albums that belong to one artist.
+    ///
+    /// Over albums rather than over songs, and the artist column needs both. A
+    /// record indexed by a walk whose tracks never loaded — the network went, or
+    /// that one request failed — has no songs to be folded from and would be
+    /// invisible to a fold, while being plainly present in the library. This
+    /// finds it.
+    ///
+    /// Every album this browser produces carries its artist: one the kid hearted
+    /// had ancestry resolved before it was judged, one a walk indexed was handed
+    /// the artist it was walked from, and one folded from a song was built with
+    /// it.
+    public static func albums(_ albums: [CatalogItem], by artist: CatalogID) -> [CatalogItem] {
+        albums.filter { album in album.ancestors.contains { $0.id == artist } }
     }
 
     /// The songs on one album, in track order where the catalog numbered them.

@@ -72,8 +72,11 @@ struct LibraryView: View {
             LibraryEmpty(
                 filter: filter,
                 isSearching: !term.isEmpty,
+                // The *whole* library, not this column's slice of it — which is
+                // the distinction the third sentence exists to draw.
                 hasLibrary: !session.libraryContents.albums.isEmpty
                     || !session.libraryContents.artists.isEmpty
+                    || !session.libraryContents.songs.isEmpty
             )
             Spacer()
         } else if filter == .playlists {
@@ -102,7 +105,9 @@ struct LibraryView: View {
         let contents = session.libraryContents
         return switch filter {
         case .artists: LibraryBrowse.filter(contents.artists, by: term)
-        case .albums: LibraryBrowse.filter(contents.albums, by: term)
+        // Only what the kid picked, the same way Songs is — see `chosenAlbums`.
+        // A record that came in behind an artist is one level in, under them.
+        case .albums: LibraryBrowse.filter(contents.chosenAlbums, by: term)
         // **Only what the kid picked.** Keeping an artist can bring a thousand
         // tracks in, and a Songs column holding all of them buries the dozen a
         // child actually chose. The rest is not hidden — it is one level in,
@@ -176,13 +181,25 @@ struct LibraryArtistView: View {
 
     private var songs: [LibrarySong] { session.libraryContents.songs }
 
+    /// **The whole library's albums, not the Albums column's.** This is the
+    /// screen the column's exclusions point at: everything a walk brought in
+    /// under this artist lives here, which is the only reason it is safe to keep
+    /// it off the top level.
+    ///
+    /// Taken from the album list rather than folded out of songs so that a record
+    /// whose tracks failed to load is still here. A fold would have no song to
+    /// build it from and would silently drop it.
+    private var everyAlbum: [CatalogItem] {
+        LibraryBrowse.albums(session.libraryContents.albums, by: artist)
+    }
+
     private var albums: [CatalogItem] {
-        LibraryBrowse.filter(LibraryBrowse.albums(from: songs, by: artist), by: term)
+        LibraryBrowse.filter(everyAlbum, by: term)
     }
 
     /// This artist's songs that no album in `albums` accounts for.
     private var loose: [CatalogItem] {
-        let covered = Set(LibraryBrowse.albums(from: songs, by: artist).map(\.id))
+        let covered = Set(everyAlbum.map(\.id))
         let orphans = songs
             .filter { $0.ancestry.artist == artist }
             .filter { $0.ancestry.album.map { !covered.contains($0) } ?? true }
@@ -353,11 +370,11 @@ struct LibraryPlaylistRow: View {
 ///
 /// Three different sentences, because they are three different problems. A kid
 /// whose filter matched nothing should try another word. A kid who has kept
-/// nothing should be told how to keep something. And a kid whose Songs column is
-/// empty **while their library plainly is not** — which is what keeping an artist
-/// and no individual songs looks like — must not be told to tap a heart they just
-/// tapped; they should be pointed one level in, where everything that artist
-/// brought with them is.
+/// nothing should be told how to keep something. And a kid whose Songs or Albums
+/// column is empty **while their library plainly is not** — which is exactly what
+/// keeping an artist and nothing else looks like — must not be told to tap a
+/// heart they just tapped; they should be pointed one level in, where everything
+/// that artist brought with them is.
 struct LibraryEmpty: View {
     let filter: LibraryFilter
     let isSearching: Bool
@@ -373,12 +390,16 @@ struct LibraryEmpty: View {
         }
     }
 
-    private var isFullElsewhere: Bool { hasLibrary && !isSearching && filter == .songs }
+    /// This column is empty and the library is not — the state only the two
+    /// filtered columns can be in.
+    private var isFullElsewhere: Bool {
+        hasLibrary && !isSearching && (filter == .songs || filter == .albums)
+    }
 
     private var title: String {
         if isSearching { return "Nothing found" }
-        if isFullElsewhere { return "No songs kept on their own" }
-        return "Nothing kept yet"
+        guard isFullElsewhere else { return "Nothing kept yet" }
+        return filter == .songs ? "No songs kept on their own" : "No records kept on their own"
     }
 
     private var glyph: String {
@@ -389,7 +410,11 @@ struct LibraryEmpty: View {
 
     private var detail: String {
         if isSearching { return "Try a different word." }
-        if isFullElsewhere { return "Open an artist or a record to find their songs." }
+        if isFullElsewhere {
+            return filter == .songs
+                ? "Open an artist or a record to find their songs."
+                : "Open an artist to find their records."
+        }
         if filter == .playlists { return "Make a playlist with the + button." }
         return "Tap a heart to keep something."
     }
