@@ -27,7 +27,13 @@ struct LibraryView: View {
     @Bindable var session: Session
     @Bindable var player: KidPlayerModel
 
-    @State private var filter = LibraryFilter.songs
+    /// Artists, which is the top of the tree and the shortest list of the four.
+    ///
+    /// It is also the column least changed by how the library was filled. Songs
+    /// and Albums show only what the kid picked out, so a library built by
+    /// keeping one artist opens on an empty column and an explanation; Artists
+    /// has the artist in it either way.
+    @State private var filter = LibraryFilter.artists
     @State private var term = ""
     @State private var isNaming = false
 
