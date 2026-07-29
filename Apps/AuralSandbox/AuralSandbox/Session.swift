@@ -1016,7 +1016,7 @@ final class Session {
         playlists = await library.playlists()
     }
 
-    /// The "Library" shelf: every favorite this kid may still see.
+    /// The "Library" shelf: the kid's most recent favorites, newest first.
     ///
     /// **The blocked half is deliberately not logged here**, which is the one
     /// place in the app that is true. Everywhere else a block is a transient
@@ -1025,8 +1025,19 @@ final class Session {
     /// stored row that is still there, so the report can find it whenever it is
     /// asked. Logging on every redraw would write the same block once per home
     /// screen appearance and drown the report in it.
-    func favoriteItems() async throws -> [CatalogItem] {
-        try await library.favorites().items
+    ///
+    /// **Capped, like Recent beside it.** ``TileShelf`` is a plain `HStack` and
+    /// not a lazy one, so every tile it is handed is built whether or not it is
+    /// ever scrolled to — a kid with four hundred favorites was building four
+    /// hundred tiles and four hundred artwork loads on every draw of the home
+    /// screen. A shelf is what fits on a line and a bit; the chevron beside it
+    /// opens the browser, which is where all of them live.
+    ///
+    /// The limit is applied **after** filtering, for the reason
+    /// ``homeItems(limit:)`` records: taking it first lets a denied favorite eat
+    /// one of the slots and the shelf comes back short.
+    func favoriteItems(limit: Int = 24) async throws -> [CatalogItem] {
+        Array(try await library.favorites().items.prefix(limit))
     }
 
     /// One playlist's songs, in the order the kid put them in. Blocks are not
