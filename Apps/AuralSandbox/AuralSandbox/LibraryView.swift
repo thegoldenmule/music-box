@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Everything the kid has kept, and a way to find one of it.
 ///
-/// Reached from the "Yours" shelf rather than from the main search field, and
+/// Reached from the "Library" shelf rather than from the main search field, and
 /// searched by a **local predicate over rows already in hand** — never
 /// `MusicLibrarySearchRequest`, which searches the whole signed-in library
 /// rather than the kid's own records.
@@ -54,7 +54,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .navigationTitle("Yours")
+        .navigationTitle("Library")
         .searchable(text: $term, prompt: "Find something you kept")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

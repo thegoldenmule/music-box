@@ -14,10 +14,10 @@ struct KidHomeView: View {
     @State private var player: KidPlayerModel
 
     @State private var recents: [CatalogItem] = []
-    /// The parent's allow list — level 1 only, and no longer called "Yours".
+    /// The parent's allow list — level 1 only, and no longer called "Library".
     @State private var fromTheGrownUp: [CatalogItem] = []
     /// The kid's own favorites, which is what that word describes now.
-    @State private var yours: [CatalogItem] = []
+    @State private var libraryItems: [CatalogItem] = []
     @State private var term = ""
     @State private var search: SearchState = .home
     /// Held so a second search cancels the first. Without it the slower of two
@@ -46,6 +46,18 @@ struct KidHomeView: View {
     /// that closure, so this is how a press out in the bottom bar reaches it.
     @State private var scrollHomeToTop = 0
     @State private var showingAdmin = false
+    /// How tall the two bottom bars are, measured rather than guessed.
+    ///
+    /// Guessing is not available: the row is 52 points plus padding, the
+    /// now-playing bar is there or not, it grows a line when it has something to
+    /// say, and every one of those is a different number. Measuring is also what
+    /// keeps this honest when the bars change — nothing here has to be updated
+    /// when one of them grows a control.
+    ///
+    /// It exists because of ``KidHomeView/bottomBars``: the inset that reserves
+    /// this space does not reach the pushed screens, so they are handed the
+    /// height and reserve it themselves.
+    @State private var barHeight: CGFloat = 0
     /// The path lives in a ``KidRouter`` rather than in a plain `@State` for two
     /// reasons. ``NowPlayingView`` covers this stack rather than living in it,
     /// and therefore sits outside it, so it needs a way to push onto it. And
@@ -89,7 +101,7 @@ struct KidHomeView: View {
     /// The *visible* results, not every result: a kid looking at Songs should
     /// get a queue of the songs they can see, not one silently padded out of a
     /// tab they are not on.
-    private var shown: [CatalogItem] { visible ?? (recents + yours + fromTheGrownUp) }
+    private var shown: [CatalogItem] { visible ?? (recents + libraryItems + fromTheGrownUp) }
 
     /// What the results grid is showing, once the filter has had its say.
     private var visible: [CatalogItem]? {
@@ -133,11 +145,36 @@ struct KidHomeView: View {
             // `NavigationPath`; that is what lets ``KidRouter`` see what is
             // already open and refuse to open it twice.
             .navigationDestination(for: KidRoute.self) { route in
-                switch route {
-                case .container(let container):
-                    browse(container)
-                case .home(let destination):
-                    screen(for: destination)
+                Group {
+                    switch route {
+                    case .container(let container):
+                        browse(container)
+                    case .home(let destination):
+                        screen(for: destination)
+                    }
+                }
+                // **The bars are drawn once, out there; the room for them is
+                // reserved twice, and it has to be.** A `safeAreaInset` on a
+                // `NavigationStack` insets the stack's *root* and does not
+                // reach anything pushed onto it — Apple's, filed as
+                // FB23732628 — so every screen past the home screen laid out
+                // as if the bottom of the window were empty and drew its last
+                // row underneath what is playing.
+                //
+                // A clear spacer rather than a copy of the bars: the height is
+                // the only part of them a pushed screen needs, and drawing
+                // them a second time is exactly the doubling that moved them
+                // out of the stack in the first place. It is a `safeAreaInset`
+                // rather than padding or `contentMargins` so that it is the
+                // same kind of thing the root gets — a scroll view insets its
+                // content by it, and a screen that is not scrolling (a
+                // "Nothing to play here", a spinner) centers itself in what is
+                // left rather than behind the bar.
+                //
+                // The window's own bottom inset is already in these screens'
+                // safe area, which is why this adds the bars' height alone.
+                .safeAreaInset(edge: .bottom) {
+                    Color.clear.frame(height: barHeight)
                 }
             }
             .toolbar {
@@ -170,13 +207,7 @@ struct KidHomeView: View {
         // This is also the only place ``NowPlayingBar`` is drawn now. It used to
         // be a `safeAreaInset` repeated on all eight kid screens, and every one
         // of those repeats was a chance for exactly this bug.
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                // What is playing sits above what to do next.
-                NowPlayingBar(session: session, player: player)
-                KidSearchBar(canSearch: canSearch, term: $term, onSubmit: runSearch, onHome: goHome)
-            }
-        }
+        .safeAreaInset(edge: .bottom) { bottomBars }
         // The full-screen player, over the stack rather than modally in front of
         // it — the one thing a modal cannot be is half open, and this one is
         // dragged. It covers the bar and the toolbar because it is applied out
@@ -258,6 +289,30 @@ struct KidHomeView: View {
                 reload()
             }
         }
+    }
+
+    /// The two bars at the bottom of the kid's app, and the one measurement
+    /// every screen behind them depends on.
+    ///
+    /// The height goes out through ``barHeight``, taken from a
+    /// `GeometryReader` in the background so that measuring costs the bars no
+    /// height of their own and cannot feed a size back into the thing being
+    /// sized. Through a preference rather than written from inside the reader's
+    /// body — that is a mutation during layout, which SwiftUI is entitled to
+    /// complain about or to loop on. The same shape as ``WidthKey`` on the album
+    /// screen, for the same reason.
+    private var bottomBars: some View {
+        VStack(spacing: 0) {
+            // What is playing sits above what to do next.
+            NowPlayingBar(session: session, player: player)
+            KidSearchBar(canSearch: canSearch, term: $term, onSubmit: runSearch, onHome: goHome)
+        }
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: BarHeightKey.self, value: proxy.size.height)
+            }
+        }
+        .onPreferenceChange(BarHeightKey.self) { barHeight = $0 }
     }
 
     // MARK: - Destinations
@@ -463,16 +518,16 @@ struct KidHomeView: View {
                 }
             }
 
-            // "Yours" means the kid's own favorites now. It used to
+            // "Library" means the kid's own favorites. It used to
             // label the list a parent built, which was the app telling a
             // kid that someone else's choices were their own.
-            if !yours.isEmpty {
+            if !libraryItems.isEmpty {
                 Section {
-                    TileShelf(session: session, items: yours, origin: .home) { item in
+                    TileShelf(session: session, items: libraryItems, origin: .home) { item in
                         Task { await playSong(item) }
                     }
                 } header: {
-                    ShelfHeader(title: "Yours", route: .library)
+                    ShelfHeader(title: "Library", route: .library)
                 }
             }
 
@@ -504,7 +559,7 @@ struct KidHomeView: View {
     private static let homeTop = "home-top"
 
     private var isHomeEmpty: Bool {
-        recents.isEmpty && yours.isEmpty && fromTheGrownUp.isEmpty
+        recents.isEmpty && libraryItems.isEmpty && fromTheGrownUp.isEmpty
             && session.playlists.isEmpty
     }
 
@@ -540,7 +595,7 @@ struct KidHomeView: View {
                 async let recentItems = session.homeItems()
                 async let favorites = session.favoriteItems()
                 async let grownUp = session.grownUpItems()
-                (recents, yours, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
+                (recents, libraryItems, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
             } catch {
                 trouble = Session.message(for: error)
             }
@@ -621,6 +676,20 @@ struct KidHomeView: View {
     private func playSong(_ item: CatalogItem) async {
         let origin: PlaybackOrigin = isHome ? .home : .search(term: term)
         await player.play(item, from: shown.filter { $0.id.kind == .song }, origin: origin)
+    }
+}
+
+/// Carries the measured height of the bottom bars up out of the inset that
+/// draws them, so the screens pushed over the top of it can leave room.
+///
+/// `max` rather than last-writer-wins: there is one bar stack and so one value,
+/// and taking the larger of any two is the reading that cannot end up reserving
+/// less room than something on screen occupies.
+struct BarHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

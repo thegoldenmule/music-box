@@ -1016,7 +1016,7 @@ final class Session {
         playlists = await library.playlists()
     }
 
-    /// The "Yours" shelf: every favorite this kid may still see.
+    /// The "Library" shelf: every favorite this kid may still see.
     ///
     /// **The blocked half is deliberately not logged here**, which is the one
     /// place in the app that is true. Everywhere else a block is a transient
