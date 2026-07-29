@@ -354,6 +354,10 @@ struct KidHomeView: View {
             HistoryView(session: session, player: player)
         case .library:
             LibraryView(session: session, player: player)
+        case .libraryArtist(let id):
+            LibraryArtistView(session: session, player: player, artist: id)
+        case .libraryAlbum(let id):
+            LibraryAlbumView(session: session, player: player, album: id)
         case .playlist(let handle):
             PlaylistView(session: session, player: player, handle: handle)
         }
@@ -759,8 +763,20 @@ enum SearchFilter: Hashable, Identifiable, CaseIterable {
 /// Where the home screen can go. A `CatalogItem` push is browsing; these are not.
 enum HomeRoute: Hashable {
     case history
-    /// Everything the kid has kept, with a search over it.
+    /// Everything the kid has kept, by kind, with a filter over each.
     case library
+
+    /// One artist's albums **as they exist in the library**.
+    ///
+    /// Not `.container(artist)`, and the difference is the whole feature: that
+    /// route opens the artist's catalog page and everything they ever released.
+    /// This one is closed over what the kid has kept, which is what makes the
+    /// browser a library browser rather than a second way into the catalog.
+    case libraryArtist(CatalogID)
+
+    /// One album's songs, again only the ones in the library.
+    case libraryAlbum(CatalogID)
+
     case playlist(PlaylistHandle)
 }
 

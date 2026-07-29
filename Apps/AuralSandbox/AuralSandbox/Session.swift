@@ -1041,6 +1041,28 @@ final class Session {
         try await library.searchLibrary(term).items
     }
 
+    /// The whole library, resolved and judged, for the browser to filter.
+    ///
+    /// **Held here rather than in the view** for the same reason `favoriteIDs`
+    /// and `playlists` are: the browser's columns are pushed screens, rebuilt
+    /// from a route every time the stack changes, and a column that fetched on
+    /// appearance would put a spinner between a tap and the albums it opened.
+    /// One read fills every column and every drill-in below it.
+    ///
+    /// Blocks are not logged, for the reason on ``favoriteItems()``.
+    private(set) var libraryContents = LibraryContents.empty
+
+    /// Whether ``libraryContents`` has ever been filled. What tells an empty
+    /// library apart from one that has not been read yet — the difference
+    /// between "nothing kept" and a blank screen.
+    private(set) var hasLoadedLibrary = false
+
+    /// Reads the library for the browser. Safe to call again; it replaces.
+    func loadLibrary() async {
+        libraryContents = await library.contents()
+        hasLoadedLibrary = true
+    }
+
     func createPlaylist(named name: String, songs: [CatalogItem] = []) async -> String? {
         await libraryEdit { try await self.library.createPlaylist(named: name, songs: songs) }
     }
@@ -1274,7 +1296,23 @@ final class Session {
         )
         // The heart and the shelves read from a different kid's rows now, or from
         // the same kid's under a new policy. Neither is what is on screen.
-        Task { await refreshLibrary() }
+        //
+        // The browser's copy goes with them, and has to be dropped rather than
+        // left to refresh: it was judged by the engine that just stopped being
+        // the policy, and every column and drill-in below it is a filter of that
+        // one value. A parent denying an artist with the library open would
+        // otherwise leave them sitting there, on the one screen a kid is most
+        // likely to be looking at.
+        let wasBrowsing = hasLoadedLibrary
+        libraryContents = .empty
+        hasLoadedLibrary = false
+        Task {
+            await refreshLibrary()
+            // Only for a screen that already had it. Reading it for a kid who
+            // has never opened the library would spend a request on a screen
+            // nobody is looking at.
+            if wasBrowsing { await loadLibrary() }
+        }
     }
 
     static func message(for error: any Error) -> String {

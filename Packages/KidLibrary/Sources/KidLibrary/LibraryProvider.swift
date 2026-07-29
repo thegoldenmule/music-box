@@ -80,13 +80,23 @@ public protocol LibraryProvider: Sendable {
         _ id: CatalogID,
         displayName: String,
         artworkURL: URL?,
-        origin: LibraryOrigin
+        origin: LibraryOrigin,
+        ancestry: LibraryAncestry
     ) async throws
     func removeFavorite(_ id: CatalogID) async throws
 
+    /// Records lineage for rows that were written without it.
+    ///
+    /// Separate from every other write because it is not something the kid did:
+    /// it is a row catching up. Defaulted to a no-op, because a provider may have
+    /// nowhere to put this — MusicKit's library has no field for it — and a
+    /// provider that cannot store lineage is not a broken provider, it is one
+    /// whose rows get folded from whatever ``MergedLibrary`` resolves on the pass.
+    func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws
+
     func playlists() async throws -> [PlaylistRow]
-    func createPlaylist(named name: String, songs: [CatalogItem]) async throws -> PlaylistRow
-    func addToPlaylist(_ handle: PlaylistHandle, song: CatalogItem) async throws
+    func createPlaylist(named name: String, songs: [LibrarySong]) async throws -> PlaylistRow
+    func addToPlaylist(_ handle: PlaylistHandle, song: LibrarySong) async throws
     func removeFromPlaylist(_ handle: PlaylistHandle, song: CatalogID) async throws
 
     /// Reorders a playlist to exactly this sequence.
@@ -101,6 +111,8 @@ public protocol LibraryProvider: Sendable {
 }
 
 extension LibraryProvider {
+    public func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws {}
+
     /// Whether this provider can favorite this kind of thing at all.
     public func canFavorite(_ kind: ItemKind) -> Bool {
         guard let flag = LibraryCapabilities.favoriting(kind) else { return false }

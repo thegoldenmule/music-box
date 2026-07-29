@@ -60,14 +60,45 @@ public final class CloudKitLibraryProvider: LibraryProvider {
         _ id: CatalogID,
         displayName: String,
         artworkURL: URL?,
-        origin: LibraryOrigin
+        origin: LibraryOrigin,
+        ancestry: LibraryAncestry
     ) async throws {
         kid.addFavorite(
             id: id,
             displayName: displayName,
             artworkURL: artworkURL,
-            origin: origin
+            origin: origin,
+            ancestry: ancestry
         )
+        try context.save()
+    }
+
+    /// Fills in lineage on rows written before the catalog could be asked.
+    ///
+    /// Touches both tables, because a song can be in the library twice — hearted
+    /// and on a playlist — and a top-up that reached only one of them would leave
+    /// the other asking again on every read.
+    ///
+    /// One save for the whole batch. Nothing here is a fresh fact about the kid,
+    /// so a failure is dropped by the caller and retried on the next read.
+    public func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws {
+        guard !ancestry.isEmpty else { return }
+
+        var touched = false
+        for record in kid.favorites {
+            guard let id = record.itemID, let found = ancestry[id] else { continue }
+            record.record(ancestry: found)
+            touched = true
+        }
+        for playlist in kid.playlists {
+            for entry in playlist.entries {
+                guard let found = ancestry[entry.itemID] else { continue }
+                entry.record(ancestry: found)
+                touched = true
+            }
+        }
+
+        guard touched else { return }
         try context.save()
     }
 
@@ -89,23 +120,29 @@ public final class CloudKitLibraryProvider: LibraryProvider {
             .sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
-    public func createPlaylist(named name: String, songs: [CatalogItem]) async throws -> PlaylistRow
+    public func createPlaylist(named name: String, songs: [LibrarySong]) async throws -> PlaylistRow
     {
         let record = kid.addPlaylist(named: name)
         for song in songs {
             record.addSong(
-                id: song.id,
-                displayName: song.title,
-                artworkURL: song.artworkURL
+                id: song.item.id,
+                displayName: song.item.title,
+                artworkURL: song.item.artworkURL,
+                ancestry: song.ancestry
             )
         }
         try context.save()
         return record.row
     }
 
-    public func addToPlaylist(_ handle: PlaylistHandle, song: CatalogItem) async throws {
+    public func addToPlaylist(_ handle: PlaylistHandle, song: LibrarySong) async throws {
         let record = try playlist(handle)
-        record.addSong(id: song.id, displayName: song.title, artworkURL: song.artworkURL)
+        record.addSong(
+            id: song.item.id,
+            displayName: song.item.title,
+            artworkURL: song.item.artworkURL,
+            ancestry: song.ancestry
+        )
         try context.save()
     }
 

@@ -56,9 +56,23 @@ struct ContainerRow: View {
     @Bindable var session: Session
     let item: CatalogItem
 
+    /// Where this row goes. `nil` — the default — is the catalog page for the
+    /// thing itself, which is what every caller but the library browser wants.
+    ///
+    /// Optional rather than defaulted to `.container(item)` because a stored
+    /// property cannot refer to another one; ``destination`` closes the gap.
+    ///
+    /// The browser's columns are the exception and the reason this exists at
+    /// all: tapping an artist there opens *their albums in the library* rather
+    /// than their catalog page, and the row is otherwise identical. A second row
+    /// type would have been these forty lines again with one value changed.
+    var route: KidRoute?
+
+    private var destination: KidRoute { route ?? .container(item) }
+
     var body: some View {
         HStack(spacing: 4) {
-            NavigationLink(value: KidRoute.container(item)) {
+            NavigationLink(value: destination) {
                 HStack(spacing: SongRowMetrics.gap) {
                     artwork
                     VStack(alignment: .leading, spacing: 2) {

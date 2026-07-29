@@ -209,6 +209,7 @@ public final class Kid {
         displayName: String,
         artworkURL: URL? = nil,
         origin: LibraryOrigin = .kid,
+        ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) -> FavoriteRecord? {
         guard catalogID.kind != .playlist else { return nil }
@@ -218,6 +219,7 @@ public final class Kid {
                 displayName: displayName,
                 artworkURL: artworkURL,
                 origin: origin,
+                ancestry: ancestry,
                 at: at
             )
             return existing
@@ -228,6 +230,7 @@ public final class Kid {
             displayName: displayName,
             artworkURL: artworkURL,
             origin: origin,
+            ancestry: ancestry,
             at: at
         )
         attach(record)

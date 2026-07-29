@@ -193,31 +193,61 @@ public final class MergedLibrary {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .empty }
 
-        var stored: [Stored] = []
-        var seen: Set<CatalogID> = []
-        for row in await mergedFavoriteRows() where seen.insert(row.catalogID).inserted {
-            stored.append(
-                Stored(id: row.catalogID, name: row.displayName, artworkURL: row.artworkURL)
-            )
-        }
-        for playlist in await playlists() {
-            for entry in playlist.entries where seen.insert(entry.catalogID).inserted {
-                stored.append(
-                    Stored(
-                        id: entry.catalogID,
-                        name: entry.displayName,
-                        artworkURL: entry.artworkURL
-                    )
-                )
-            }
-        }
-
         // Filter first, match second. Matching on the resolved item means the
         // subtitle — the artist name — is searchable, which is most of what a kid
         // types, and the copied `displayName` is only ever the title.
-        let judged = await judge(stored)
+        let judged = await judge(await mergedRows())
         return LibraryResults(
-            items: judged.items.filter { $0.matches(trimmed) },
+            items: LibraryBrowse.filter(judged.items, by: trimmed),
+            blocked: judged.blocked,
+            isResolved: judged.isResolved
+        )
+    }
+
+    // MARK: - Reading, for the browser
+
+    /// The whole library, resolved and judged once, ready to be filtered.
+    ///
+    /// **The browser's only request.** Everything the four columns and their
+    /// drill-ins show is computed from this one value, which is what makes
+    /// filtering as a child types synchronous and tapping an artist instant.
+    ///
+    /// Three passes over the catalog at most, and usually one: the batch that
+    /// resolves the rows, the batch that names any ancestors the rows do not
+    /// already carry, and the write that records those names so the second batch
+    /// does not happen again. Steady state is the first alone.
+    public func contents() async -> LibraryContents {
+        let stored = await mergedRows()
+        guard !stored.isEmpty else { return .empty }
+
+        let judged = await judge(stored)
+        let ancestry = await toppedUpAncestry(for: stored, judged: judged)
+
+        var songs: [LibrarySong] = []
+        var favoritedAlbums: [CatalogItem] = []
+        var favoritedArtists: [CatalogItem] = []
+        for item in judged.items {
+            switch item.id.kind {
+            case .song: songs.append(LibrarySong(item: item, ancestry: ancestry[item.id] ?? .none))
+            case .album: favoritedAlbums.append(item)
+            case .artist: favoritedArtists.append(item)
+            // Not reachable: a playlist is owned, never favorited, and never a
+            // playlist entry. Dropped rather than asserted on — an unreadable row
+            // costs a tile and costs safety nothing.
+            case .playlist: break
+            }
+        }
+
+        return LibraryContents(
+            songs: songs,
+            artists: LibraryBrowse.merged(
+                favorited: favoritedArtists,
+                folded: LibraryBrowse.artists(from: songs)
+            ),
+            albums: LibraryBrowse.merged(
+                favorited: favoritedAlbums,
+                folded: LibraryBrowse.albums(from: songs)
+            ),
             blocked: judged.blocked,
             isResolved: judged.isResolved
         )
@@ -366,13 +396,19 @@ public final class MergedLibrary {
             throw LibraryRefused(item: resolved, reason: reason)
         }
 
+        // Named here rather than on the way back out: this is the one moment the
+        // kid is waiting on a network call anyway, and doing it now is what keeps
+        // it out of every subsequent library open.
+        let lineage = await ancestry(for: resolved)
+
         for provider in writers(favoriting: item.id.kind) {
             try await write(to: provider) {
                 try await $0.addFavorite(
                     item.id,
                     displayName: item.title,
                     artworkURL: item.artworkURL,
-                    origin: origin
+                    origin: origin,
+                    ancestry: lineage
                 )
             }
         }
@@ -431,7 +467,8 @@ public final class MergedLibrary {
             throw LibraryRefused(item: resolved, reason: reason)
         }
 
-        try await edit(handle) { try await $0.addToPlaylist(handle, song: song) }
+        let kept = LibrarySong(item: song, ancestry: await ancestry(for: resolved))
+        try await edit(handle) { try await $0.addToPlaylist(handle, song: kept) }
     }
 
     public func removeFromPlaylist(_ handle: PlaylistHandle, song: CatalogID) async throws {
@@ -533,12 +570,51 @@ public final class MergedLibrary {
         let name: String
         let artworkURL: URL?
 
+        /// Copied at write time like the other two, and for the same reason: the
+        /// artist and album columns are folded from it without a request. See
+        /// ``LibraryAncestry``.
+        var ancestry: LibraryAncestry = .none
+
         /// The copy made at write time. What a shelf draws when the catalog is
         /// not reachable — `displayName` and `artworkURL` are copied for exactly
         /// this, so a list renders offline.
         var fallback: CatalogItem {
             CatalogItem(id: id, title: name, artworkURL: artworkURL)
         }
+    }
+
+    /// Every row in the library, favorites and playlist entries together, deduped.
+    ///
+    /// The union ``searchLibrary(_:)`` was already building, lifted out because
+    /// the browser needs the same one. Favorites lead, so the fold's
+    /// first-one-wins keeps a container's artwork from the most recently hearted
+    /// song on it.
+    private func mergedRows() async -> [Stored] {
+        var stored: [Stored] = []
+        var seen: Set<CatalogID> = []
+        for row in await mergedFavoriteRows() where seen.insert(row.catalogID).inserted {
+            stored.append(
+                Stored(
+                    id: row.catalogID,
+                    name: row.displayName,
+                    artworkURL: row.artworkURL,
+                    ancestry: row.ancestry
+                )
+            )
+        }
+        for playlist in await playlists() {
+            for entry in playlist.entries where seen.insert(entry.catalogID).inserted {
+                stored.append(
+                    Stored(
+                        id: entry.catalogID,
+                        name: entry.displayName,
+                        artworkURL: entry.artworkURL,
+                        ancestry: entry.ancestry
+                    )
+                )
+            }
+        }
+        return stored
     }
 
     /// Resolves stored rows against the catalog and applies the kid's policy.
@@ -589,11 +665,27 @@ public final class MergedLibrary {
         return LibraryResults(items: allowed, blocked: blocked, isResolved: isResolved)
     }
 
-    /// Everything in this batch the kid may currently play.
-    private func allowedSongs(_ songs: [CatalogItem]) async throws -> [CatalogItem] {
+    /// Everything in this batch the kid may currently play, lineage named.
+    ///
+    /// One naming request for the whole playlist rather than one per song — the
+    /// same batch-before-judge shape everything else in this file keeps.
+    private func allowedSongs(_ songs: [CatalogItem]) async throws -> [LibrarySong] {
         guard !songs.isEmpty else { return [] }
         let resolved = try await catalog.resolveAncestry(for: songs)
-        return resolved.filter { $0.id.kind == .song && engine.evaluate($0.policyItem).isAllowed }
+        let allowed = resolved.filter {
+            $0.id.kind == .song && engine.evaluate($0.policyItem).isAllowed
+        }
+
+        let parents = allowed.flatMap { $0.ancestors.map(\.id) }
+            .filter { $0.kind == .album || $0.kind == .artist }
+        let names = await named(Array(Set(parents)))
+
+        return allowed.map {
+            LibrarySong(
+                item: $0,
+                ancestry: Self.ancestry(from: $0.ancestors.map(\.id), naming: names)
+            )
+        }
     }
 
     /// Lineage for one item, if it arrived without any.
@@ -610,13 +702,105 @@ public final class MergedLibrary {
         }
         return resolved
     }
-}
 
-extension CatalogItem {
-    /// Case- and diacritic-insensitive substring match over what is on screen.
-    fileprivate func matches(_ term: String) -> Bool {
-        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-        if title.range(of: term, options: options) != nil { return true }
-        return subtitle?.range(of: term, options: options) != nil
+    // MARK: - Naming lineage
+
+    /// The lineage to write down beside an item, names and all.
+    ///
+    /// `Ancestor` carries `{id, rating}` and no title, so naming the parents is a
+    /// second lookup — one that happens **here, at the moment the kid keeps
+    /// something**, rather than every time they open their library. That is the
+    /// whole trade ``LibraryAncestry`` exists to make.
+    ///
+    /// A failure returns nothing and the write still happens. A heart must not
+    /// fail because the network did; ``toppedUpAncestry(for:judged:)`` fills the
+    /// gap on a later read.
+    private func ancestry(for item: CatalogItem) async -> LibraryAncestry {
+        let ids = item.ancestors.map(\.id).filter { $0.kind == .album || $0.kind == .artist }
+        guard !ids.isEmpty else { return .none }
+        return Self.ancestry(from: ids, naming: await named(ids))
+    }
+
+    /// Lineage for every row on this pass, topping up whatever has none.
+    ///
+    /// **Only rows the catalog answered for are candidates.** An artist favorite
+    /// has no ancestors and must never look like a row waiting to be filled, or
+    /// every read would ask about it again forever.
+    ///
+    /// The write back is deliberately not the kid's: it carries no new fact about
+    /// them, so a provider that cannot store it declines by default and one that
+    /// fails is simply asked again next time.
+    private func toppedUpAncestry(
+        for stored: [Stored],
+        judged: LibraryResults
+    ) async -> [CatalogID: LibraryAncestry] {
+        var out: [CatalogID: LibraryAncestry] = [:]
+        for row in stored where !row.ancestry.isEmpty { out[row.id] = row.ancestry }
+
+        let resolved = Dictionary(judged.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var parents: [CatalogID: [CatalogID]] = [:]
+        var wanted: Set<CatalogID> = []
+        for row in stored where row.ancestry.isEmpty {
+            guard let item = resolved[row.id] else { continue }
+            let ids = item.ancestors.map(\.id).filter { $0.kind == .album || $0.kind == .artist }
+            guard !ids.isEmpty else { continue }
+            parents[row.id] = ids
+            wanted.formUnion(ids)
+        }
+        guard !wanted.isEmpty else { return out }
+
+        let names = await named(Array(wanted))
+        var learned: [CatalogID: LibraryAncestry] = [:]
+        for (id, ids) in parents {
+            let built = Self.ancestry(from: ids, naming: names)
+            guard !built.isEmpty else { continue }
+            learned[id] = built
+            out[id] = built
+        }
+
+        guard !learned.isEmpty else { return out }
+        for provider in liveProviders {
+            try? await provider.recordAncestry(learned)
+        }
+        return out
+    }
+
+    /// Resolves identifiers to items purely to read their titles.
+    private func named(_ ids: [CatalogID]) async -> [CatalogID: CatalogItem] {
+        guard !ids.isEmpty, let items = try? await catalog.items(for: ids) else { return [:] }
+        return Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// **An identifier is only recorded together with its name.**
+    ///
+    /// A lineage of bare identifiers would satisfy ``LibraryAncestry/isEmpty`` and
+    /// so never be topped up again, while the fold — which needs a name to draw a
+    /// row — would skip it. The column would be permanently short and nothing
+    /// would ever try to fix it.
+    ///
+    /// Nearest first, so the first album and the first artist win. That is the
+    /// order `resolveAncestry` builds and the order the engine reads for
+    /// ``UnratedBehavior/inheritFromAncestor``; relying on kind rather than
+    /// position keeps this correct if that ever changes.
+    private static func ancestry(
+        from ids: [CatalogID],
+        naming names: [CatalogID: CatalogItem]
+    ) -> LibraryAncestry {
+        var out = LibraryAncestry()
+        for id in ids {
+            guard let named = names[id] else { continue }
+            switch id.kind {
+            case .album where out.albumID == nil:
+                out.albumID = id.rawValue
+                out.albumName = named.title
+            case .artist where out.artistID == nil:
+                out.artistID = id.rawValue
+                out.artistName = named.title
+                out.artistArtworkURL = named.artworkURL
+            default:
+                break
+            }
+        }
+        return out
     }
 }

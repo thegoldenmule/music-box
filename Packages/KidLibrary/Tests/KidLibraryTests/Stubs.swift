@@ -16,9 +16,18 @@ enum Fix {
     static let unrated = CatalogID(.song, "song-unrated")
     static let other = CatalogID(.song, "song-other")
 
+    // A second act, so the fold has two of everything to keep apart. Named to
+    // sort before the first once its article is dropped — "The Record" files
+    // under R and "Antics" under A — which is what makes the ordering tests
+    // about the sort key rather than about insertion order.
+    static let duo = CatalogID(.artist, "artist-duo")
+    static let sophomore = CatalogID(.album, "album-sophomore")
+    static let ballad = CatalogID(.song, "song-ballad")
+    static let encore = CatalogID(.song, "song-encore")
+
     static let t0 = Date(timeIntervalSince1970: 1_700_000_000)
 
-    /// A small catalog: one band, one record, and four songs on it.
+    /// A small catalog: two acts, one record each, six songs between them.
     static let catalog: [CatalogItem] = [
         CatalogItem(id: band, title: "Café Band"),
         CatalogItem(
@@ -28,19 +37,39 @@ enum Fix {
             rating: .clean,
             ancestors: [Ancestor(id: band)]
         ),
-        song(clean, "Sunshine", rating: .clean),
-        song(explicit, "Swearing", rating: .explicit),
-        song(unrated, "Nobody Rated This", rating: nil),
-        song(other, "Something Else", rating: .clean),
+        song(clean, "Sunshine", rating: .clean, track: 1),
+        song(explicit, "Swearing", rating: .explicit, track: 2),
+        song(unrated, "Nobody Rated This", rating: nil, track: 3),
+        song(other, "Something Else", rating: .clean, track: 4),
+
+        CatalogItem(id: duo, title: "The Duo"),
+        CatalogItem(
+            id: sophomore,
+            title: "Antics",
+            subtitle: "The Duo",
+            rating: .clean,
+            ancestors: [Ancestor(id: duo)]
+        ),
+        song(ballad, "Zither", rating: .clean, track: 1, on: sophomore, by: duo, named: "The Duo"),
+        song(encore, "Applause", rating: .clean, track: 2, on: sophomore, by: duo, named: "The Duo"),
     ]
 
-    static func song(_ id: CatalogID, _ title: String, rating: ContentRating?) -> CatalogItem {
+    static func song(
+        _ id: CatalogID,
+        _ title: String,
+        rating: ContentRating?,
+        track: Int? = nil,
+        on album: CatalogID = record,
+        by artist: CatalogID = band,
+        named artistName: String = "Café Band"
+    ) -> CatalogItem {
         CatalogItem(
             id: id,
             title: title,
-            subtitle: "Café Band",
+            subtitle: artistName,
             rating: rating,
-            ancestors: [Ancestor(id: record, rating: .clean), Ancestor(id: band)]
+            ancestors: [Ancestor(id: album, rating: .clean), Ancestor(id: artist)],
+            trackNumber: track
         )
     }
 
@@ -170,11 +199,15 @@ final class StubProvider: LibraryProvider {
         return favoriteRows
     }
 
+    /// Lineage this provider was told about after the fact, by row.
+    private(set) var recorded: [CatalogID: LibraryAncestry] = [:]
+
     func addFavorite(
         _ id: CatalogID,
         displayName: String,
         artworkURL: URL?,
-        origin: LibraryOrigin
+        origin: LibraryOrigin,
+        ancestry: LibraryAncestry
     ) async throws {
         try note("addFavorite(\(id))")
         favoriteRows.append(
@@ -184,9 +217,15 @@ final class StubProvider: LibraryProvider {
                 displayName: displayName,
                 artworkURL: artworkURL,
                 favoritedAt: Fix.t0,
-                origin: origin
+                origin: origin,
+                ancestry: ancestry
             )
         )
+    }
+
+    func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws {
+        try note("recordAncestry(\(ancestry.count))")
+        recorded.merge(ancestry) { _, new in new }
     }
 
     func removeFavorite(_ id: CatalogID) async throws {
@@ -199,7 +238,7 @@ final class StubProvider: LibraryProvider {
         return playlistRows
     }
 
-    func createPlaylist(named name: String, songs: [CatalogItem]) async throws -> PlaylistRow {
+    func createPlaylist(named name: String, songs: [LibrarySong]) async throws -> PlaylistRow {
         try note("createPlaylist(\(name))")
         let row = PlaylistRow(
             handle: PlaylistHandle(local: UUID(), appleLibraryID: "p.\(name)"),
@@ -214,7 +253,7 @@ final class StubProvider: LibraryProvider {
         return row
     }
 
-    func addToPlaylist(_ handle: PlaylistHandle, song: CatalogItem) async throws {
+    func addToPlaylist(_ handle: PlaylistHandle, song: LibrarySong) async throws {
         try note("addToPlaylist(\(song.id))")
     }
 

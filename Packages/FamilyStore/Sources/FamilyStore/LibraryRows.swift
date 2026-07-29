@@ -31,6 +31,64 @@ public struct PlaylistHandle: Hashable, Sendable {
     }
 }
 
+/// Where a kept item came from, copied at write time.
+///
+/// **The reason this is stored rather than derived.** `Ancestor` — what a
+/// `CatalogItem` carries — is `{id, rating}` and has no title in it. A row that
+/// stored only ancestry identifiers could not draw an artist named *Adele*
+/// without asking the catalog, which would put a network round trip in front of
+/// every library open. Copying the names down at insert is the same trade
+/// ``FavoriteRow/displayName`` already makes, and buys the same two things: the
+/// fold needs no request, and a delisted item still reads as a name.
+///
+/// It does **not** on its own make the columns draw offline. A row the catalog
+/// did not answer for carries no rating, and `UnratedBehavior.block` — the
+/// default — turns that down before the fold is reached. What is stored here
+/// survives that rule rather than overriding it.
+///
+/// Five fields and not six: an album's artwork **is** the song's artwork in
+/// Apple Music, so ``FavoriteRow/artworkURL`` serves the album row. An artist's
+/// is a different image and needs its own.
+///
+/// Every field is optional and an empty value is a supported state. A heart must
+/// not fail because the network did, so a write with nothing resolved still
+/// happens and the top-up fills it in on a later read.
+public struct LibraryAncestry: Sendable, Hashable, Codable {
+    public var albumID: String?
+    public var albumName: String?
+    public var artistID: String?
+    public var artistName: String?
+    public var artistArtworkURL: URL?
+
+    public init(
+        albumID: String? = nil,
+        albumName: String? = nil,
+        artistID: String? = nil,
+        artistName: String? = nil,
+        artistArtworkURL: URL? = nil
+    ) {
+        self.albumID = albumID
+        self.albumName = albumName
+        self.artistID = artistID
+        self.artistName = artistName
+        self.artistArtworkURL = artistArtworkURL
+    }
+
+    public static let none = LibraryAncestry()
+
+    /// Nothing was resolved. What the top-up looks for.
+    ///
+    /// Judged on the identifiers alone: a name without an identifier cannot be
+    /// navigated to and is not worth keeping a row out of the top-up for.
+    public var isEmpty: Bool { albumID == nil && artistID == nil }
+
+    /// The album as an identifier, when there is one to build.
+    public var album: CatalogID? { albumID.map { CatalogID(.album, $0) } }
+
+    /// The artist as an identifier, when there is one to build.
+    public var artist: CatalogID? { artistID.map { CatalogID(.artist, $0) } }
+}
+
 /// One favorited song, album or artist, as a value.
 ///
 /// Rows rather than records cross the storage boundary for the same reason
@@ -48,13 +106,18 @@ public struct FavoriteRow: Sendable, Hashable, Identifiable {
     public let favoritedAt: Date
     public let origin: LibraryOrigin
 
+    /// Empty for an artist, which has none — and for anything written before the
+    /// catalog could be asked, until the top-up reaches it.
+    public let ancestry: LibraryAncestry
+
     public init(
         id: UUID,
         catalogID: CatalogID,
         displayName: String,
         artworkURL: URL? = nil,
         favoritedAt: Date,
-        origin: LibraryOrigin
+        origin: LibraryOrigin,
+        ancestry: LibraryAncestry = .none
     ) {
         self.id = id
         self.catalogID = catalogID
@@ -62,6 +125,7 @@ public struct FavoriteRow: Sendable, Hashable, Identifiable {
         self.artworkURL = artworkURL
         self.favoritedAt = favoritedAt
         self.origin = origin
+        self.ancestry = ancestry
     }
 }
 
@@ -76,13 +140,18 @@ public struct PlaylistEntryRow: Sendable, Hashable, Identifiable {
     public let position: Int
     public let addedAt: Date
 
+    /// See ``FavoriteRow/ancestry``. A playlist entry is always a song, so this
+    /// being empty always means it has not been resolved yet.
+    public let ancestry: LibraryAncestry
+
     public init(
         id: UUID,
         catalogID: CatalogID,
         displayName: String,
         artworkURL: URL? = nil,
         position: Int,
-        addedAt: Date
+        addedAt: Date,
+        ancestry: LibraryAncestry = .none
     ) {
         self.id = id
         self.catalogID = catalogID
@@ -90,6 +159,7 @@ public struct PlaylistEntryRow: Sendable, Hashable, Identifiable {
         self.artworkURL = artworkURL
         self.position = position
         self.addedAt = addedAt
+        self.ancestry = ancestry
     }
 }
 

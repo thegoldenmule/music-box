@@ -41,6 +41,20 @@ public final class FavoriteRecord {
     /// `LibraryOrigin.rawValue`.
     public private(set) var origin: String = LibraryOrigin.kid.rawValue
 
+    // MARK: - Ancestry
+    //
+    // Five flat columns rather than one embedded value, the way `StoredOrigin`
+    // is spread across the event tables: SwiftData stores a struct as an opaque
+    // blob, and a blob cannot be predicated on. These can be, and a library that
+    // grows will want that. See ``LibraryAncestry`` for why the names are copied
+    // here at all.
+
+    public private(set) var albumID: String?
+    public private(set) var albumName: String?
+    public private(set) var artistID: String?
+    public private(set) var artistName: String?
+    public private(set) var artistArtworkURL: URL?
+
     public var kid: Kid?
 
     public init(
@@ -49,6 +63,7 @@ public final class FavoriteRecord {
         displayName: String,
         artworkURL: URL? = nil,
         origin: LibraryOrigin = .kid,
+        ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) {
         self.id = id
@@ -59,6 +74,7 @@ public final class FavoriteRecord {
         self.origin = origin.rawValue
         self.favoritedAt = at
         self.modifiedAt = at
+        apply(ancestry)
     }
 
     /// Builds a row straight from stored strings, bypassing the typed enums.
@@ -92,6 +108,7 @@ public final class FavoriteRecord {
         displayName: String,
         artworkURL: URL?,
         origin: LibraryOrigin,
+        ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) {
         self.displayName = displayName
@@ -101,7 +118,33 @@ public final class FavoriteRecord {
         if origin == .kid {
             self.origin = origin.rawValue
         }
+        // Only ever an improvement. A second tap while the network is down
+        // arrives with nothing resolved, and letting that overwrite a lineage we
+        // already hold would empty the artist column for a song the kid liked
+        // twice.
+        if !ancestry.isEmpty {
+            apply(ancestry)
+        }
         self.modifiedAt = at
+    }
+
+    /// Records lineage learned after the fact.
+    ///
+    /// The top-up's write. Separate from ``refresh(displayName:artworkURL:origin:ancestry:at:)``
+    /// because it is not a second tap and must not touch the copied metadata —
+    /// the name on the row is what the kid saw when they kept it.
+    public func record(ancestry: LibraryAncestry, at: Date = .now) {
+        guard !ancestry.isEmpty else { return }
+        apply(ancestry)
+        modifiedAt = at
+    }
+
+    private func apply(_ ancestry: LibraryAncestry) {
+        albumID = ancestry.albumID
+        albumName = ancestry.albumName
+        artistID = ancestry.artistID
+        artistName = ancestry.artistName
+        artistArtworkURL = ancestry.artistArtworkURL
     }
 
     /// The typed identifier, or `nil` if the stored strings do not make one.
@@ -115,6 +158,16 @@ public final class FavoriteRecord {
     /// permission, so losing one costs a tile and costs safety nothing.
     public var libraryOrigin: LibraryOrigin? { LibraryOrigin(rawValue: origin) }
 
+    public var ancestry: LibraryAncestry {
+        LibraryAncestry(
+            albumID: albumID,
+            albumName: albumName,
+            artistID: artistID,
+            artistName: artistName,
+            artistArtworkURL: artistArtworkURL
+        )
+    }
+
     /// The value form, or `nil` for a row this version cannot read.
     public var row: FavoriteRow? {
         guard let itemID, let libraryOrigin else { return nil }
@@ -124,7 +177,8 @@ public final class FavoriteRecord {
             displayName: displayName,
             artworkURL: artworkURL,
             favoritedAt: favoritedAt,
-            origin: libraryOrigin
+            origin: libraryOrigin,
+            ancestry: ancestry
         )
     }
 }
@@ -213,6 +267,7 @@ public final class PlaylistRecord {
         id catalogID: CatalogID,
         displayName: String,
         artworkURL: URL? = nil,
+        ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) -> PlaylistEntryRecord? {
         guard catalogID.kind == .song else { return nil }
@@ -223,6 +278,7 @@ public final class PlaylistRecord {
             displayName: displayName,
             artworkURL: artworkURL,
             position: entries.count,
+            ancestry: ancestry,
             at: at
         )
         entries.append(record)
@@ -311,6 +367,13 @@ public final class PlaylistEntryRecord {
     public private(set) var position: Int = 0
     public private(set) var addedAt: Date = Date.distantPast
 
+    /// See the same five on ``FavoriteRecord``.
+    public private(set) var albumID: String?
+    public private(set) var albumName: String?
+    public private(set) var artistID: String?
+    public private(set) var artistName: String?
+    public private(set) var artistArtworkURL: URL?
+
     public var playlist: PlaylistRecord?
 
     public init(
@@ -319,6 +382,7 @@ public final class PlaylistEntryRecord {
         displayName: String,
         artworkURL: URL? = nil,
         position: Int,
+        ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) {
         self.id = id
@@ -328,6 +392,7 @@ public final class PlaylistEntryRecord {
         self.position = position
         self.addedAt = at
         self.modifiedAt = at
+        apply(ancestry)
     }
 
     func move(to newPosition: Int, at: Date = .now) {
@@ -336,7 +401,32 @@ public final class PlaylistEntryRecord {
         modifiedAt = at
     }
 
+    /// Records lineage learned after the fact. See ``FavoriteRecord/record(ancestry:at:)``.
+    public func record(ancestry: LibraryAncestry, at: Date = .now) {
+        guard !ancestry.isEmpty else { return }
+        apply(ancestry)
+        modifiedAt = at
+    }
+
+    private func apply(_ ancestry: LibraryAncestry) {
+        albumID = ancestry.albumID
+        albumName = ancestry.albumName
+        artistID = ancestry.artistID
+        artistName = ancestry.artistName
+        artistArtworkURL = ancestry.artistArtworkURL
+    }
+
     public var itemID: CatalogID { CatalogID(.song, catalogID) }
+
+    public var ancestry: LibraryAncestry {
+        LibraryAncestry(
+            albumID: albumID,
+            albumName: albumName,
+            artistID: artistID,
+            artistName: artistName,
+            artistArtworkURL: artistArtworkURL
+        )
+    }
 
     public var row: PlaylistEntryRow {
         PlaylistEntryRow(
@@ -345,7 +435,8 @@ public final class PlaylistEntryRecord {
             displayName: displayName,
             artworkURL: artworkURL,
             position: position,
-            addedAt: addedAt
+            addedAt: addedAt,
+            ancestry: ancestry
         )
     }
 }

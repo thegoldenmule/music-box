@@ -314,3 +314,92 @@ struct KidPlaylistOrigin {
         #expect(PlaybackOrigin(stored: stored) == nil)
     }
 }
+
+// MARK: - Ancestry
+
+@Suite("Lineage on a stored row")
+@MainActor
+struct StoredLineage {
+    private let lineage = LibraryAncestry(
+        albumID: "album-A",
+        albumName: "The Record",
+        artistID: "artist-A",
+        artistName: "Café Band",
+        artistArtworkURL: URL(string: "https://example.invalid/a.jpg")
+    )
+
+    @Test("Round-trips through the five columns, on a favorite and on an entry")
+    func roundTrips() throws {
+        let (_, kid) = try newKid()
+        kid.addFavorite(id: Fix.song, displayName: "Sunshine", ancestry: lineage, at: Fix.t0)
+        let playlist = kid.addPlaylist(named: "Mix", at: Fix.t0)
+        playlist.addSong(id: Fix.song, displayName: "Sunshine", ancestry: lineage, at: Fix.t0)
+
+        #expect(kid.favorites.first?.row?.ancestry == lineage)
+        #expect(playlist.row.entries.first?.ancestry == lineage)
+    }
+
+    @Test("Absent by default, and that is a supported state rather than a broken row")
+    func defaultsToNothing() throws {
+        let (_, kid) = try newKid()
+        kid.addFavorite(id: Fix.song, displayName: "Sunshine", at: Fix.t0)
+
+        let row = try #require(kid.favorites.first?.row)
+        #expect(row.ancestry == .none)
+        #expect(row.ancestry.isEmpty)
+        // Everything else about the row still reads.
+        #expect(row.displayName == "Sunshine")
+    }
+
+    @Test("An identifier alone does not count as recorded")
+    func idWithoutNameIsEmpty() {
+        // What the top-up looks for. A row holding identifiers it cannot name
+        // draws nothing, so it has to stay a candidate.
+        #expect(LibraryAncestry(albumName: "The Record").isEmpty)
+        #expect(LibraryAncestry(albumID: "album-A").isEmpty == false)
+    }
+
+    @Test("Typed identifiers are built from the stored strings")
+    func typedIdentifiers() {
+        #expect(lineage.album == CatalogID(.album, "album-A"))
+        #expect(lineage.artist == CatalogID(.artist, "artist-A"))
+        #expect(LibraryAncestry.none.album == nil)
+    }
+
+    @Test("A second tap while offline does not erase lineage already stored")
+    func refreshNeverDowngrades() throws {
+        let (_, kid) = try newKid()
+        kid.addFavorite(id: Fix.song, displayName: "Sunshine", ancestry: lineage, at: Fix.t0)
+        kid.addFavorite(id: Fix.song, displayName: "Sunshine", at: Fix.t1)
+
+        #expect(kid.favorites.first?.ancestry == lineage)
+    }
+
+    @Test("Catching up records lineage without touching the copied metadata")
+    func recordLeavesTheNameAlone() throws {
+        let (_, kid) = try newKid()
+        kid.addFavorite(id: Fix.song, displayName: "Sunshine", at: Fix.t0)
+
+        let record = try #require(kid.favorites.first)
+        record.record(ancestry: lineage, at: Fix.t1)
+
+        #expect(record.ancestry == lineage)
+        // The name on the row is what the kid saw when they kept it, and a
+        // top-up is not a second tap.
+        #expect(record.displayName == "Sunshine")
+        #expect(record.favoritedAt == Fix.t0)
+        #expect(record.modifiedAt == Fix.t1)
+    }
+
+    @Test("Recording nothing is not a write")
+    func recordingNothingIsNoop() throws {
+        let (_, kid) = try newKid()
+        kid.addFavorite(id: Fix.song, displayName: "Sunshine", ancestry: lineage, at: Fix.t0)
+
+        let record = try #require(kid.favorites.first)
+        record.record(ancestry: .none, at: Fix.t1)
+
+        #expect(record.ancestry == lineage)
+        #expect(record.modifiedAt == Fix.t0)
+    }
+}
