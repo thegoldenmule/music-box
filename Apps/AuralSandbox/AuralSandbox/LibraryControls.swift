@@ -213,6 +213,17 @@ struct TileCell: View {
     let origin: PlaybackOrigin
     let onPlay: (CatalogItem) -> Void
 
+    /// "No thanks", for a tile a parent suggested. `nil` everywhere else.
+    ///
+    /// **Drawn on the tile, not hidden in the context menu.** It started in the
+    /// menu, on the reasoning that the long-press was a gesture the kid already
+    /// had and that a shelf should stay uncluttered. That was wrong in the way
+    /// undiscoverable affordances are always wrong: a six-year-old does not
+    /// long-press to find out what happens, so the feature was there and might
+    /// as well not have been. It stays in the menu too, for whoever finds it
+    /// that way.
+    var onDismiss: (() -> Void)?
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             Group {
@@ -232,11 +243,55 @@ struct TileCell: View {
                 .padding(.leading, Tile.padding)
                 .padding(.bottom, Tile.padding)
         }
+        // Outside the tap target's label, for the same reason the heart is: a
+        // button inside another button's label is dead. An overlay rather than a
+        // third child of the `ZStack` above, because reaching the far corner
+        // from a `.bottomLeading` stack means a child that fills the frame, and
+        // a child that fills the frame is a child that can grow it.
+        //
+        // Opposite corner from the heart, so "keep this" and "no thanks" are
+        // never adjacent under the same thumb.
+        .overlay(alignment: .topTrailing) {
+            if let onDismiss {
+                DismissButton(action: onDismiss).padding(Tile.padding)
+            }
+        }
         .contextMenu {
             if item.id.kind == .song {
                 PlaylistMenuItems(session: session, item: item, origin: origin)
             }
+            if let onDismiss {
+                Button("No thanks", systemImage: "xmark", role: .destructive, action: onDismiss)
+            }
         }
+    }
+}
+
+/// "No thanks" on a suggested tile.
+///
+/// Drawn over the artwork's top corner rather than beside the title, because the
+/// title line is already carrying a kind glyph and a heart's worth of reserved
+/// space. Over artwork it needs its own backing to stay visible on a bright
+/// album cover — a bare glyph disappears against half the catalog.
+///
+/// **Nothing is clipped or composited into the artwork.** This sits above it in
+/// the stack, the way the heart does; the pixels underneath are untouched, which
+/// is the same reading of License §3.3.6(D) the rest of the app works to.
+struct DismissButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: HeartButton.size, height: HeartButton.size)
+                .background(Circle().fill(.black.opacity(0.45)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("No thanks")
+        .accessibilityHint("Takes this off your shelf")
     }
 }
 

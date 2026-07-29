@@ -14,12 +14,21 @@ struct AdminView: View {
     @State private var newKidName = ""
     @State private var message: String?
     @State private var editing: PolicyEntry.Kind?
+    @State private var suggesting = false
+
+    /// The suggestion a swipe is proposing to delete, held until it is
+    /// confirmed. See ``withdrawConfirmation``.
+    @State private var withdrawing: SuggestionRow?
 
     var body: some View {
         Form {
             kidsSection
             reviewSection
             sandboxSection
+            // Above the lists, and grouped with them rather than with the
+            // report: a suggestion widens what the kid reaches, so it belongs
+            // beside the other things that do.
+            suggestionsSection
             listSection(.allow)
             listSection(.deny)
             deviceSection
@@ -43,6 +52,12 @@ struct AdminView: View {
                 ListEditorView(session: session, kind: kind) { editing = nil }
             }
         }
+        .sheet(isPresented: $suggesting) {
+            NavigationStack {
+                SuggestionEditorView(session: session) { suggesting = false }
+            }
+        }
+        .modifier(withdrawConfirmation)
         .alert(
             "Couldn't save",
             isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } }),
@@ -170,6 +185,73 @@ struct AdminView: View {
 
     // MARK: - Lists
 
+    // MARK: - Suggestions
+
+    /// What the parent has put in front of this kid, and what the kid passed on.
+    ///
+    /// The two groups are the whole feedback loop. A dismissal is otherwise
+    /// invisible — the tile simply stops being there — and a parent left
+    /// re-suggesting blindly cannot tell "they said no" from "I never got round
+    /// to it."
+    @ViewBuilder
+    private var suggestionsSection: some View {
+        Section {
+            if session.suggestions.isEmpty {
+                Text("Nothing suggested yet.").foregroundStyle(.secondary)
+            }
+            ForEach(session.suggestions) { row in
+                SuggestionRowLabel(row: row)
+                    .swipeActions {
+                        Button("Remove", role: .destructive) { withdrawing = row }
+                    }
+            }
+
+            Button("Suggest something") { suggesting = true }
+        } header: {
+            Text("Suggested")
+        } footer: {
+            Text(
+                "Anything you suggest becomes reachable for \(session.kid.name), whatever level they are on. A deny still wins."
+            )
+        }
+
+        if !session.dismissedSuggestions.isEmpty {
+            Section {
+                ForEach(session.dismissedSuggestions) { row in
+                    SuggestionRowLabel(row: row)
+                        .swipeActions {
+                            Button("Remove", role: .destructive) { withdrawing = row }
+                            Button("Suggest again") {
+                                show(session.restoreSuggestion(row))
+                            }
+                        }
+                }
+            } header: {
+                Text("Passed on")
+            } footer: {
+                Text(
+                    "\(session.kid.name) said no thanks to these, so they are not reachable through a suggestion any more. Swipe to offer one again."
+                )
+            }
+        }
+    }
+
+    /// Confirms a withdrawal before it happens.
+    ///
+    /// Withdrawing is not the opposite of suggesting — it is a delete. The row
+    /// goes, and with it the note the parent wrote, the fact that the kid passed
+    /// on it, and every track of a snapshotted playlist, which can be forty rows
+    /// that took a round trip each to resolve. "Suggest again" is the undo for a
+    /// dismissal; there is no undo for this.
+    ///
+    /// A single modifier rather than one per section, so the two lists cannot
+    /// end up asking differently.
+    private var withdrawConfirmation: some ViewModifier {
+        WithdrawConfirmation(row: $withdrawing) { row in
+            show(session.withdrawSuggestion(row))
+        }
+    }
+
     private func listSection(_ kind: PolicyEntry.Kind) -> some View {
         let entries = session.kid.entries.filter { $0.kind == kind.rawValue }
 
@@ -252,4 +334,80 @@ struct AdminView: View {
 
 extension PolicyEntry.Kind: @retroactive Identifiable {
     public var id: String { rawValue }
+}
+
+/// Asks before deleting a suggestion, and says what goes with it.
+///
+/// A modifier rather than an inline `confirmationDialog` because both lists in
+/// the suggestions section feed it, and a swipe in either should get the same
+/// question.
+struct WithdrawConfirmation: ViewModifier {
+    @Binding var row: SuggestionRow?
+    let onConfirm: (SuggestionRow) -> Void
+
+    /// One verb, everywhere. The swipe says Remove, the question asks Remove and
+    /// the button that answers it says Remove — on this screen and on the kid's.
+    /// It said "Take back" here, which is a better description of withdrawing a
+    /// suggestion and a worse thing to read on a button under a row labelled
+    /// something else.
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            row.map { "Remove “\($0.displayName)”?" } ?? "",
+            isPresented: Binding(get: { row != nil }, set: { if !$0 { row = nil } }),
+            titleVisibility: .visible,
+            presenting: row
+        ) { row in
+            Button("Remove", role: .destructive) {
+                onConfirm(row)
+                self.row = nil
+            }
+            Button("Cancel", role: .cancel) { self.row = nil }
+        } message: { row in
+            Text(message(for: row))
+        }
+    }
+
+    private func message(for row: SuggestionRow) -> String {
+        var parts = ["This deletes the suggestion and takes back the reach it granted."]
+        // The count is the part a parent cannot see coming. Forty resolved
+        // tracks look like one row in this list.
+        if row.itemKind == .playlist, row.entries.count > 1 {
+            parts.append("The \(row.entries.count) songs matched for it go too.")
+        }
+        if row.isDismissed {
+            parts.append("“Suggest again” keeps it instead.")
+        }
+        return parts.joined(separator: " ")
+    }
+}
+
+/// One suggestion, as the parent sees it in a list.
+///
+/// A snapshot playlist reads as its track count rather than its kind, because
+/// "playlist" is the least interesting true thing about it: the parent knows
+/// what they picked, and what they cannot see from the name is how much of it
+/// survived being matched against the catalog.
+struct SuggestionRowLabel: View {
+    let row: SuggestionRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(row.displayName)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var detail: String {
+        var parts: [String] = []
+        if row.itemKind == .playlist, !row.entries.isEmpty {
+            parts.append(row.entries.count == 1 ? "1 song" : "\(row.entries.count) songs")
+        } else {
+            parts.append(row.itemKind.rawValue)
+        }
+        if let subtitle = row.subtitle { parts.append(subtitle) }
+        if let note = row.note, !note.isEmpty { parts.append("“\(note)”") }
+        return parts.joined(separator: " · ")
+    }
 }

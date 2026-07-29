@@ -77,6 +77,10 @@ final class ReviewModel {
     private(set) var names: [CatalogID: String] = [:]
     private(set) var kidPlaylistNames: [UUID: String] = [:]
 
+    /// Names of the playlists the parent suggested, for a `suggestedPlaylist`
+    /// origin. A separate table from the kid's own, so a separate lookup.
+    private(set) var suggestedPlaylistNames: [UUID: String] = [:]
+
     init(session: Session, kid: Kid) {
         self.session = session
         self.kid = kid
@@ -108,6 +112,7 @@ final class ReviewModel {
             let engine = PolicyEngine(policy: policy)
             let heard = try await reader.previouslyHeard(for: kidID, before: interval.start)
             kidPlaylistNames = try await reader.kidPlaylistNames(for: kidID)
+            suggestedPlaylistNames = try await reader.suggestedPlaylistNames(for: kidID)
 
             self.window = window
             plays = window.plays.map { ReviewAnnotator.annotate($0, knowing: $0.knowledge, with: engine) }
@@ -165,6 +170,7 @@ final class ReviewModel {
     func described(_ origin: PlaybackOrigin) -> OriginDescription {
         origin.described(
             kidPlaylistName: { [kidPlaylistNames] in kidPlaylistNames[$0] },
+            suggestionName: { [suggestedPlaylistNames] in suggestedPlaylistNames[$0] },
             catalogName: { [names] in names[$0] }
         )
     }

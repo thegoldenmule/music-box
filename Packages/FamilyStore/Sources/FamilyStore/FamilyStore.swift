@@ -25,6 +25,11 @@ public enum FamilyStore {
         FavoriteRecord.self,
         PlaylistRecord.self,
         PlaylistEntryRecord.self,
+        // The parent's shelf, not the kid's. Beside the library rather than in
+        // it — see SuggestionRecord for why a suggestion is never merged into
+        // what the kid kept.
+        SuggestionRecord.self,
+        SuggestionEntryRecord.self,
         // The second projection, and the first whose source is the library
         // rather than the event log — which is what decides that it survives
         // `deleteHistory` and goes with `deleteEverything`.

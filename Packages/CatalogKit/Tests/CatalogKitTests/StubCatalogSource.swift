@@ -111,14 +111,48 @@ actor StubCatalogSource: CatalogSource {
 actor StubLibrarySource: LibrarySource {
     private var library: [LibraryItem]
     private var catalogMatches: [String: CatalogItem]
+    private var playlists: [LibraryPlaylist]
+    private var playlistTracks: [String: [LibraryItem]]
 
     private(set) var resolveCallCount = 0
 
     /// - Parameter catalogMatches: keyed by ISRC or UPC. Anything absent is
     ///   treated as not being on Apple Music.
-    init(library: [LibraryItem] = [], catalogMatches: [String: CatalogItem] = [:]) {
+    init(
+        library: [LibraryItem] = [],
+        catalogMatches: [String: CatalogItem] = [:],
+        playlists: [LibraryPlaylist] = [],
+        playlistTracks: [String: [LibraryItem]] = [:]
+    ) {
         self.library = library
         self.catalogMatches = catalogMatches
+        self.playlists = playlists
+        self.playlistTracks = playlistTracks
+    }
+
+    func libraryPlaylists(limit: Int) async throws -> [LibraryPlaylist] {
+        Array(playlists.prefix(limit))
+    }
+
+    func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryItem] {
+        playlistTracks[playlist.id] ?? []
+    }
+
+    func libraryArtists(limit: Int) async throws -> [LibraryItem] {
+        Array(library.filter { $0.kind == .artist }.prefix(limit))
+    }
+
+    /// The real one's shape without MusicKit: sample the artist's songs by name,
+    /// resolve them, and let ``ArtistVote`` decide.
+    func resolveArtist(_ artist: LibraryItem) async throws -> ArtistResolution {
+        guard artist.kind == .artist else { return .notInAppleMusic }
+        let songs = try await searchLibrary(
+            term: artist.title, kinds: [.song], limit: ArtistVote.sample
+        )
+        let matched = try await resolveToCatalog(songs)
+        guard !matched.resolved.isEmpty else { return .notInAppleMusic }
+        guard let winner = ArtistVote.winner(among: matched.resolved) else { return .ambiguous }
+        return .resolved(CatalogItem(id: winner, title: artist.title))
     }
 
     func libraryItems(kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem] {

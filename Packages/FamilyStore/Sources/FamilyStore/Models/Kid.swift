@@ -31,6 +31,15 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \PolicyEntryRecord.kid)
     public private(set) var entries: [PolicyEntryRecord] = []
 
+    /// What a parent has put in front of this kid.
+    ///
+    /// Grouped with ``entries`` rather than with the library below, because a
+    /// live suggestion is folded into the policy as an allow by
+    /// ``buildPolicy()`` — it is a thing that changes what the kid can reach,
+    /// which is what the lists are and what the library deliberately is not.
+    @Relationship(deleteRule: .cascade, inverse: \SuggestionRecord.kid)
+    public private(set) var suggestions: [SuggestionRecord] = []
+
     @Relationship(deleteRule: .cascade, inverse: \SearchEventRecord.kid)
     public private(set) var searches: [SearchEventRecord] = []
 
@@ -144,6 +153,130 @@ public final class Kid {
     public func removeEntry(_ record: PolicyEntryRecord, at: Date = .now) {
         entries.removeAll { $0.id == record.id }
         modifiedAt = at
+    }
+
+    // MARK: - Suggestions
+    //
+    // Awaited and surfaced like the lists above, and for a stronger version of
+    // the same reason: these grant reach. A parent who suggests an album and
+    // gets silence must not be left believing their kid can now play it.
+    //
+    // They stamp `modifiedAt` — a parent curating is exactly what that field is
+    // for — and so does dismissal, which is the one kid-side write in this store
+    // that does. See ``SuggestionRecord/dismiss(at:)``.
+
+    /// Suggests something, or refreshes what is already there.
+    ///
+    /// An upsert, like ``addFavorite(id:displayName:artworkURL:origin:ancestry:at:)``:
+    /// the same album suggested twice is one shelf tile, not two.
+    ///
+    /// The two collision cases are deliberately different. A **live** row is
+    /// refreshed in place and keeps its position — suggesting something already
+    /// on the shelf is usually a parent forgetting they did, and reshuffling a
+    /// kid's screen for that helps nobody. A **dismissed** row is restored to the
+    /// front, because offering something again after a kid passed on it is a
+    /// second act and is worth nothing if they never see it.
+    @discardableResult
+    public func addSuggestion(
+        target: SuggestionTarget,
+        displayName: String,
+        subtitle: String? = nil,
+        artworkURL: URL? = nil,
+        note: String? = nil,
+        addedBy: String? = nil,
+        at: Date = .now
+    ) -> SuggestionRecord {
+        if let existing = suggestionRecord(for: target) {
+            existing.refresh(
+                displayName: displayName,
+                subtitle: subtitle,
+                artworkURL: artworkURL,
+                note: note,
+                at: at
+            )
+            if existing.isDismissed {
+                existing.restore(position: nextSuggestionPosition, at: at)
+            }
+            modifiedAt = at
+            return existing
+        }
+
+        let record = SuggestionRecord(
+            target: target,
+            displayName: displayName,
+            subtitle: subtitle,
+            artworkURL: artworkURL,
+            position: nextSuggestionPosition,
+            note: note,
+            addedBy: addedBy,
+            at: at
+        )
+        attach(record, at: at)
+        return record
+    }
+
+    func attach(_ record: SuggestionRecord, at: Date = .now) {
+        suggestions.append(record)
+        record.kid = self
+        modifiedAt = at
+    }
+
+    /// One past the highest in use. See ``SuggestionRecord/position``.
+    private var nextSuggestionPosition: Int {
+        (suggestions.map(\.position).max() ?? -1) + 1
+    }
+
+    /// The parent withdrew it. Gone, along with the reach it granted.
+    ///
+    /// Deletes through the context rather than only detaching — `removeAll()` on
+    /// a relationship leaves the row on disk where no query can see it. See
+    /// ``delete(_:)``.
+    public func removeSuggestion(_ record: SuggestionRecord, at: Date = .now) {
+        delete([record])
+        suggestions.removeAll { $0.id == record.id }
+        modifiedAt = at
+    }
+
+    /// The kid passed on it. The row stays; the allow does not.
+    public func dismissSuggestion(_ record: SuggestionRecord, at: Date = .now) {
+        record.dismiss(at: at)
+        modifiedAt = at
+    }
+
+    /// The parent offered it again, moving it back to the front of the shelf.
+    public func restoreSuggestion(_ record: SuggestionRecord, at: Date = .now) {
+        record.restore(position: nextSuggestionPosition, at: at)
+        modifiedAt = at
+    }
+
+    public func suggestionRecord(for target: SuggestionTarget) -> SuggestionRecord? {
+        switch target {
+        case .catalog(let catalogID):
+            return suggestions.first {
+                $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
+            }
+        case .snapshotPlaylist(let local):
+            return suggestions.first { $0.id == local && $0.catalogID == nil }
+        }
+    }
+
+    /// Live suggestions, newest first. What the shelf draws.
+    ///
+    /// Unreadable rows are dropped rather than denied — see ``SuggestionRecord``.
+    public var liveSuggestions: [SuggestionRow] {
+        suggestions
+            .filter { !$0.isDismissed }
+            .sorted { $0.position > $1.position }
+            .compactMap(\.row)
+    }
+
+    /// What the kid passed on, most recently suggested first. The parent's side
+    /// of the shelf, and the only place a dismissal is visible.
+    public var dismissedSuggestions: [SuggestionRow] {
+        suggestions
+            .filter(\.isDismissed)
+            .sorted { $0.position > $1.position }
+            .compactMap(\.row)
     }
 
     // MARK: - Events
@@ -417,6 +550,16 @@ public final class Kid {
     ///
     /// Lists, mode and unrated behavior stay. A parent erasing what their child
     /// did is not asking to rebuild their allow list.
+    ///
+    /// **Suggestions stay too, dismissals included**, and the second half of that
+    /// is the part worth arguing with. A suggestion is curation — the parent
+    /// built that list, and this screen promises to erase the *child's* data, not
+    /// to make an adult redo their work. The dismissal stamped on one is the
+    /// child's, so clearing it here has a certain logic to it; what stops that is
+    /// that a dismissal withdraws an allow, so wiping the flags would silently
+    /// widen what the kid can reach. A delete must never do that. If a parent
+    /// wants a passed-on suggestion back, the admin screen offers it in one tap
+    /// and says so out loud.
     public func deleteEverything(at: Date = .now) {
         deleteHistory(at: at)
         delete(favorites)

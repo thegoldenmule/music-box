@@ -14,8 +14,9 @@ struct KidHomeView: View {
     @State private var player: KidPlayerModel
 
     @State private var recents: [CatalogItem] = []
-    /// The parent's allow list — level 1 only, and no longer called "Library".
-    @State private var fromTheGrownUp: [CatalogItem] = []
+    /// What the parent suggested, then their allow list where the level shows
+    /// one. See ``Session/grownUpShelf()``.
+    @State private var fromTheGrownUp: [SuggestedTile] = []
     /// The kid's own favorites, which is what that word describes now.
     @State private var libraryItems: [CatalogItem] = []
     @State private var term = ""
@@ -54,9 +55,10 @@ struct KidHomeView: View {
     /// keeps this honest when the bars change — nothing here has to be updated
     /// when one of them grows a control.
     ///
-    /// It exists because of ``KidHomeView/bottomBars``: the inset that reserves
-    /// this space does not reach the pushed screens, so they are handed the
-    /// height and reserve it themselves.
+    /// It exists because of ``KidHomeView/bottomBars``: the inset that draws
+    /// them reserves nothing inside the stack, so every screen in it — the root
+    /// included — is handed the height and reserves it itself. See
+    /// ``View/reservingBottomBars(_:)``.
     @State private var barHeight: CGFloat = 0
     /// The path lives in a ``KidRouter`` rather than in a plain `@State` for two
     /// reasons. ``NowPlayingView`` covers this stack rather than living in it,
@@ -101,7 +103,12 @@ struct KidHomeView: View {
     /// The *visible* results, not every result: a kid looking at Songs should
     /// get a queue of the songs they can see, not one silently padded out of a
     /// tab they are not on.
-    private var shown: [CatalogItem] { visible ?? (recents + libraryItems + fromTheGrownUp) }
+    ///
+    /// A suggested playlist contributes nothing: it is a tile that opens, and
+    /// the screen behind it queues its own songs.
+    private var shown: [CatalogItem] {
+        visible ?? (recents + libraryItems + fromTheGrownUp.compactMap(\.playableItem))
+    }
 
     /// What the results grid is showing, once the filter has had its say.
     private var visible: [CatalogItem]? {
@@ -126,6 +133,11 @@ struct KidHomeView: View {
                     searchFailed.transition(.opacity)
                 }
             }
+            // The root reserves the room itself, exactly as a pushed screen
+            // does. See ``View/reservingBottomBars(_:)`` — the short version is
+            // that the inset out beyond the stack draws the bars and insets
+            // nothing inside it, root included.
+            .reservingBottomBars(barHeight)
             // **No title.** The kid's own name was the one thing on this screen
             // written for somebody who can read, and a large title is a band of
             // it that scrolls away and comes back — which is also what made the
@@ -153,29 +165,8 @@ struct KidHomeView: View {
                         screen(for: destination)
                     }
                 }
-                // **The bars are drawn once, out there; the room for them is
-                // reserved twice, and it has to be.** A `safeAreaInset` on a
-                // `NavigationStack` insets the stack's *root* and does not
-                // reach anything pushed onto it — Apple's, filed as
-                // FB23732628 — so every screen past the home screen laid out
-                // as if the bottom of the window were empty and drew its last
-                // row underneath what is playing.
-                //
-                // A clear spacer rather than a copy of the bars: the height is
-                // the only part of them a pushed screen needs, and drawing
-                // them a second time is exactly the doubling that moved them
-                // out of the stack in the first place. It is a `safeAreaInset`
-                // rather than padding or `contentMargins` so that it is the
-                // same kind of thing the root gets — a scroll view insets its
-                // content by it, and a screen that is not scrolling (a
-                // "Nothing to play here", a spinner) centers itself in what is
-                // left rather than behind the bar.
-                //
-                // The window's own bottom inset is already in these screens'
-                // safe area, which is why this adds the bars' height alone.
-                .safeAreaInset(edge: .bottom) {
-                    Color.clear.frame(height: barHeight)
-                }
+                // The same reservation the root makes, for the same reason.
+                .reservingBottomBars(barHeight)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -207,6 +198,12 @@ struct KidHomeView: View {
         // This is also the only place ``NowPlayingBar`` is drawn now. It used to
         // be a `safeAreaInset` repeated on all eight kid screens, and every one
         // of those repeats was a chance for exactly this bug.
+        //
+        // **This draws the bars and reserves no room for them.** Applied out
+        // here it insets nothing inside the stack — see
+        // ``View/reservingBottomBars(_:)``, which is where the room comes from
+        // and which the root and every pushed screen both call. Adding the
+        // reservation here as well is the doubling to watch for, not the fix.
         .safeAreaInset(edge: .bottom) { bottomBars }
         // The full-screen player, over the stack rather than modally in front of
         // it — the one thing a modal cannot be is half open, and this one is
@@ -383,6 +380,10 @@ struct KidHomeView: View {
             LibraryAlbumView(session: session, player: player, album: id)
         case .playlist(let handle):
             PlaylistView(session: session, player: player, handle: handle)
+        case .suggestions:
+            SuggestionsView(session: session, player: player)
+        case .suggestedPlaylist(let local):
+            SuggestedPlaylistView(session: session, player: player, local: local)
         }
     }
 
@@ -565,17 +566,22 @@ struct KidHomeView: View {
                 }
             }
 
-            // The allow list, under the name it should have had all
-            // along now that the kid has a shelf of their own.
+            // What the parent suggested, then what they allowed and have not
+            // suggested — one shelf, because the kid's question is *what did
+            // they pick for me* and two headings answering it differently is
+            // the app showing its own bookkeeping. A shelf rather than the
+            // wrapping grid this used to be: the allow list was bounded by what
+            // a parent would type into a list editor, and suggestions are not.
             if !fromTheGrownUp.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("From your grown-up")
-                        .font(.title2.bold())
-                        .padding(.horizontal)
-                    TileWrap(session: session, items: fromTheGrownUp, origin: .home) {
-                        item in
-                        Task { await playSong(item) }
-                    }
+                Section {
+                    SuggestedShelf(
+                        session: session,
+                        tiles: fromTheGrownUp,
+                        onPlay: { item in Task { await playSong(item, origin: .suggestion) } },
+                        onDismiss: dismiss
+                    )
+                } header: {
+                    ShelfHeader(title: "From your grown-up", route: .suggestions)
                 }
             }
         }
@@ -643,11 +649,25 @@ struct KidHomeView: View {
             // depends on anything else here.
             async let recentItems = session.homeItems()
             async let favorites = session.favoriteItems()
-            async let grownUp = session.grownUpItems()
+            async let grownUp = session.grownUpShelf()
             (recents, libraryItems, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
         } catch {
             trouble = Session.message(for: error)
         }
+    }
+
+    /// The kid passed on a suggestion.
+    ///
+    /// The tile goes and so does the reach it granted, which is why this
+    /// re-reads the shelf rather than filtering the one tile out of the array
+    /// in hand: a suggested album's allow reached its tracks, and anything else
+    /// on the shelf that was only standing because of it has to go too.
+    private func dismiss(_ row: SuggestionRow) {
+        if let failure = session.dismissSuggestion(row) {
+            trouble = failure
+            return
+        }
+        Task { await loadShelves() }
     }
 
     private func reload() {
@@ -729,14 +749,61 @@ struct KidHomeView: View {
     }
 
     /// Songs play. Containers navigate, which ``TileGrid`` handles itself.
-    private func playSong(_ item: CatalogItem) async {
-        let origin: PlaybackOrigin = isHome ? .home : .search(term: term)
+    /// - Parameter origin: overrides the shelf-or-search default, for a shelf
+    ///   that is neither. The grown-up shelf passes `.suggestion` so the report
+    ///   can answer whether the kid played what the parent picked — folded into
+    ///   `.home` that question has no answer, and it is not one old rows can be
+    ///   taught later.
+    private func playSong(_ item: CatalogItem, origin: PlaybackOrigin? = nil) async {
+        let origin = origin ?? (isHome ? .home : .search(term: term))
         await player.play(item, from: shown.filter { $0.id.kind == .song }, origin: origin)
     }
 }
 
-/// Carries the measured height of the bottom bars up out of the inset that
-/// draws them, so the screens pushed over the top of it can leave room.
+extension View {
+    /// Reserves the room the two bottom bars occupy.
+    ///
+    /// **The bars are drawn once, out beyond the stack; the room for them is
+    /// reserved by every screen, and there are no exceptions.** A
+    /// `safeAreaInset` applied to a `NavigationStack` draws its content and
+    /// insets *nothing inside the stack* — not the pushed screens, and **not the
+    /// root either**. So each screen adds a clear spacer of the measured height.
+    ///
+    /// That the root is included is the part worth writing down, because getting
+    /// it wrong is what kept this bug alive. The first pass at it fixed the
+    /// pushed screens and left a comment saying the inset "insets the stack's
+    /// root and does not reach anything pushed onto it" — half right, and the
+    /// wrong half was the half that told every later reader the home screen was
+    /// already handled. It was not: home had a shelf under the search bar the
+    /// whole time, and the only reason it took this long to be unmissable is
+    /// that the shelf which ended up last used to be there only at level 1.
+    /// A comment asserting something untested is worse than no comment, because
+    /// it stops the next person looking.
+    ///
+    /// A clear spacer rather than a second copy of the bars: the height is the
+    /// only part of them a screen needs, and drawing them twice is exactly the
+    /// doubling that moved them out of the stack to begin with. A
+    /// `safeAreaInset` rather than padding or `contentMargins`, so that a scroll
+    /// view insets its content by it *and* a screen that does not scroll — a
+    /// "Nothing to play here", a spinner — centres itself in what is left rather
+    /// than behind the bar.
+    ///
+    /// The window's own bottom inset is already in every screen's safe area,
+    /// which is why this adds the bars' height alone.
+    ///
+    /// If a new kid-facing screen is ever hosted somewhere other than
+    /// ``KidHomeView``'s stack, it needs this too. Inside that stack it is
+    /// inherited: the root has it, and every pushed screen gets it from the one
+    /// `navigationDestination`.
+    func reservingBottomBars(_ height: CGFloat) -> some View {
+        safeAreaInset(edge: .bottom) {
+            Color.clear.frame(height: height)
+        }
+    }
+}
+
+/// The measured height of the two bottom bars, passed up from where they are
+/// drawn to the screens that have to leave room for them.
 ///
 /// `max` rather than last-writer-wins: there is one bar stack and so one value,
 /// and taking the larger of any two is the reading that cannot end up reserving
@@ -830,6 +897,16 @@ enum HomeRoute: Hashable {
     case libraryAlbum(CatalogID)
 
     case playlist(PlaylistHandle)
+
+    /// Everything the parent suggested, behind the shelf's chevron.
+    case suggestions
+
+    /// One suggested playlist that only exists here, by its local identifier.
+    ///
+    /// Not `.playlist(_:)`, which takes a ``PlaylistHandle`` and means one the
+    /// kid owns — a different table, a different screen, and a different set of
+    /// things the kid may do to it.
+    case suggestedPlaylist(UUID)
 }
 
 /// A shelf's title, and the way into the whole of it.

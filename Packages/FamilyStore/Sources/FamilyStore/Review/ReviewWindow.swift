@@ -230,6 +230,15 @@ public enum OriginDescription: Sendable, Hashable {
     /// than Apple's, and nothing else remembers what it was called.
     case kidPlaylist(UUID, name: String?)
 
+    /// A tile on the shelf the parent filled. The answer to "did they play what
+    /// I suggested?", which is why it is not folded into ``home``.
+    case suggestion
+
+    /// A suggested playlist that only exists here. `name` is `nil` once the
+    /// parent has withdrawn it — same as ``kidPlaylist(_:name:)``, nothing else
+    /// remembers what it was called.
+    case suggestedPlaylist(UUID, name: String?)
+
     /// The stored columns did not read back. Not a guess at `.home` — a report
     /// that silently claims every orphaned row came from the home screen is
     /// worse than one that admits it does not know.
@@ -241,10 +250,14 @@ extension PlaybackOrigin {
     ///
     /// - Parameters:
     ///   - kidPlaylistName: names of the kid's playlists, by local identifier.
+    ///   - suggestionName: names of suggested playlists, by local identifier. A
+    ///     separate lookup from `kidPlaylistName` because the two identifiers
+    ///     live in different tables and a row in one is not a row in the other.
     ///   - catalogName: whatever the caller can supply without waiting — a warm
     ///     cache, typically. Returning `nil` is always acceptable.
     public func described(
         kidPlaylistName: (UUID) -> String? = { _ in nil },
+        suggestionName: (UUID) -> String? = { _ in nil },
         catalogName: (CatalogID) -> String? = { _ in nil }
     ) -> OriginDescription {
         switch self {
@@ -253,6 +266,8 @@ extension PlaybackOrigin {
         case .browse(let id): .browse(id, name: catalogName(id))
         case .playlist(let id): .catalogPlaylist(id, name: catalogName(id))
         case .kidPlaylist(let local): .kidPlaylist(local, name: kidPlaylistName(local))
+        case .suggestion: .suggestion
+        case .suggestedPlaylist(let local): .suggestedPlaylist(local, name: suggestionName(local))
         }
     }
 }

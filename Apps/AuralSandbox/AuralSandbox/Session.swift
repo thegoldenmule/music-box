@@ -85,6 +85,23 @@ final class Session {
     /// the songs are resolved by the screen that shows them.
     private(set) var playlists: [PlaylistRow] = []
 
+    /// Live suggestions, newest first. What the parent's shelf draws from.
+    ///
+    /// Held for the reason ``playlists`` is: the expanded shelf and the detail
+    /// screen behind a suggested playlist are pushed views, rebuilt from a route
+    /// every time the stack changes, and one that fetched on appearance would
+    /// put a spinner between a tap and a list already in memory.
+    ///
+    /// **Not policy filtered.** These are stored rows and the tiles are judged at
+    /// render time by ``suggestionItems()``, the same arrangement the Recent
+    /// trail has — with the twist that a live suggestion is itself part of what
+    /// the engine is judging with.
+    private(set) var suggestions: [SuggestionRow] = []
+
+    /// What the kid passed on. The parent's side of the shelf, and the only
+    /// place in the app a dismissal is visible.
+    private(set) var dismissedSuggestions: [SuggestionRow] = []
+
     /// The Recent shelf, newest first, as the projector last left it.
     ///
     /// **Not policy filtered, and it must never become so.** This is what the
@@ -121,10 +138,35 @@ final class Session {
     /// from the sweep and not from a wipe to avoid.
     private(set) var historyCleared = 0
 
+    /// The active kid's engine, built when their policy changes and not before.
+    ///
+    /// **Held rather than built per call, and that is a correctness matter now
+    /// rather than a saving.** `queuedVerdict` runs on every watchdog poll, and
+    /// the poll tightens to 10Hz in the last five seconds of a track — some
+    /// fifty builds inside the window the two-entry queue exists to protect.
+    /// Building one walks `kid.entries` *and* `kid.suggestions` and every
+    /// snapshot entry under them, and a to-many relationship that has not been
+    /// touched yet faults in with a synchronous read on the main actor. That is
+    /// exactly what ``queuedVerdict(for:)`` promises it does not do.
+    ///
+    /// It also stops being the odd one out: ``FilteredCatalog`` and
+    /// ``MergedLibrary`` have always held a snapshot engine, and the line right
+    /// after `queuedVerdict` in the player goes through one of them. Caching
+    /// here removes an inconsistency rather than adding a stale surface — the
+    /// invalidation set is the same one those two already have, plus dismissal.
+    private var engine: PolicyEngine
+
     private let family: Family
     private let context: ModelContext
     private let musicAccess = MusicKitAccess()
     private let source: any CatalogSource
+
+    /// The parent's own Apple Music library, for seeding suggestions.
+    ///
+    /// Deliberately not a `LibraryProvider` and deliberately not reachable from
+    /// anything the kid touches: this is the seeding seam, and what it hands
+    /// back is resolved to catalog items before a row is written.
+    private let librarySource: any LibrarySource = MusicKitLibrarySource()
 
     /// Where the shared-device answer is kept. Device-local, never synced.
     private let deviceLibraryStore: any DeviceLibraryStateStore = UserDefaultsDeviceLibraryState()
@@ -147,13 +189,15 @@ final class Session {
             cache: InMemoryItemCache()
         )
         self.source = source
-        catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
+        let engine = kid.makeEngine()
+        self.engine = engine
+        catalog = FilteredCatalog(source: source, engine: engine)
         library = MergedLibrary(
             // One provider, and it is always live. The Apple Music provider is
             // the next stage; nothing above this line changes when it arrives.
             providers: [CloudKitLibraryProvider(kid: kid, context: context)],
             catalog: source,
-            engine: kid.makeEngine(),
+            engine: engine,
             device: deviceLibraryStore
         )
         kids = family.kids
@@ -483,11 +527,21 @@ final class Session {
 
         access = .ready
 
-        guard let subscription = try? await musicAccess.subscriptionState(),
-              !subscription.canPlayCatalogContent
-        else { return }
+        guard let subscription = try? await musicAccess.subscriptionState() else { return }
+        hasCloudLibrary = subscription.hasCloudLibraryEnabled
+        guard !subscription.canPlayCatalogContent else { return }
         access = .cannotPlay(subscription)
     }
+
+    /// Whether Sync Library is on for the signed-in account.
+    ///
+    /// `nil` until the subscription check answers, and left `nil` when it cannot
+    /// be reached — the same rule the check itself follows, that a failure to
+    /// reach Apple is not a negative answer. The parent's library picker is
+    /// hidden only on a definite `false`, so an offline admin session shows the
+    /// tab and lets the read fail with its own error rather than telling a
+    /// parent their library is off when nobody asked.
+    private(set) var hasCloudLibrary: Bool?
 
     // MARK: - Searching
 
@@ -784,7 +838,7 @@ final class Session {
     /// indexed lookup and nothing more.
     func queuedVerdict(for item: CatalogItem) -> QueuedVerdict {
         guard !item.ancestors.isEmpty else { return .unknown }
-        switch kid.makeEngine().evaluate(item.policyItem) {
+        switch engine.evaluate(item.policyItem) {
         case .allowed: return QueuedVerdict.allowed
         case .blocked(let reason): return QueuedVerdict.blocked(BlockReason(reason))
         }
@@ -857,6 +911,88 @@ final class Session {
         kid.mode == .allowOnly ? try await allowListItems() : []
     }
 
+    /// The whole of "From your grown-up": what the parent suggested, then what
+    /// they allowed and have not suggested.
+    ///
+    /// One shelf rather than two, because the kid's question is *what did they
+    /// pick for me* and two headings answering it differently is the app showing
+    /// its own bookkeeping. Suggestions lead because they are the deliberate act
+    /// and the dismissible half; the allow-list tail is still level 1 only, for
+    /// the reason ``grownUpItems()`` records.
+    ///
+    /// Anything suggested is dropped from the tail rather than drawn twice —
+    /// suggesting something *is* allowing it, so at level 1 every suggestion
+    /// would otherwise appear once as itself and once as its own allow.
+    func grownUpShelf() async throws -> [SuggestedTile] {
+        async let suggested = suggestionTiles()
+        async let allowed = grownUpItems()
+
+        let tiles = try await suggested
+        let seen = Set(tiles.compactMap(\.catalogID))
+        return try await tiles + allowed.filter { !seen.contains($0.id) }.map(SuggestedTile.item)
+    }
+
+    /// The suggestions, resolved and judged.
+    ///
+    /// **Filtered at render time**, like every other shelf: a parent can deny
+    /// today what they suggested last week, and a deny outranks a suggestion in
+    /// every mode. Blocks are *not* logged here — these are stored rows, so
+    /// logging them would write the same block once per appearance of the home
+    /// screen. Same rule as favorites.
+    ///
+    /// A snapshot playlist has no catalog identifier, so there is no
+    /// `CatalogItem` to hand the engine and the tile would go unjudged. It is
+    /// judged through its contents instead: the tile survives while at least one
+    /// track does. Otherwise a parent denying the artist leaves a kid a tile that
+    /// opens onto nothing.
+    ///
+    /// Those tracks are judged from the stored row alone, with no rating in it,
+    /// and that is sound rather than lucky — a live suggestion puts an allow on
+    /// each track *itself*, and an allow on the item is the one thing that
+    /// overrides the rating check at level 2. What the stored lineage is for is
+    /// the other direction: it is what lets a deny on the artist still reach
+    /// them here, offline.
+    func suggestionTiles() async throws -> [SuggestedTile] {
+        let rows = suggestions
+        guard !rows.isEmpty else { return [] }
+
+        let ids = rows.compactMap(\.catalogID)
+        var resolved: [CatalogID: CatalogItem] = [:]
+        if !ids.isEmpty {
+            let items = try await source.items(for: ids)
+            let withAncestry = try await source.resolveAncestry(for: items)
+            resolved = Dictionary(
+                withAncestry.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+
+        return rows.compactMap { row in
+            guard let catalogID = row.catalogID else {
+                return row.hasReachableSong(under: engine) ? .snapshotPlaylist(row) : nil
+            }
+            // A catalog answer that never came leaves the tile out rather than
+            // drawing an identifier. Unlike the Recent shelf there is nothing
+            // here a kid recognises from having been there.
+            guard let item = resolved[catalogID] else { return nil }
+            return engine.evaluate(item.policyItem).isAllowed ? .item(item) : nil
+        }
+    }
+
+    /// The songs inside a suggested playlist, judged locally and in order.
+    ///
+    /// No catalog round trip: the rows were resolved when the parent suggested
+    /// it and carry their own lineage. See ``suggestionTiles()`` for why that is
+    /// enough to judge them.
+    func suggestedPlaylistSongs(_ local: UUID) -> [CatalogItem] {
+        guard let row = suggestions.first(where: { $0.id == local }) else { return [] }
+        return row.reachableSongs(under: engine)
+    }
+
+    func suggestedPlaylist(_ local: UUID) -> SuggestionRow? {
+        suggestions.first { $0.id == local }
+    }
+
     // There is deliberately no kid-facing play history any more. It read
     // `PlayEventRecord` — written on stop, five-second floor, songs only —
     // while the shelf above it read arrivals, so the screen behind the "Recent"
@@ -918,7 +1054,6 @@ final class Session {
         guard !ids.isEmpty else { return [] }
         let items = try await source.items(for: ids)
         let resolved = try await source.resolveAncestry(for: items)
-        let engine = kid.makeEngine()
         return resolved.filter { engine.evaluate($0.policyItem).isAllowed }
     }
 
@@ -1019,6 +1154,13 @@ final class Session {
     func refreshLibrary() async {
         favoriteIDs = await library.favoriteIDs()
         playlists = await library.playlists()
+        refreshSuggestions()
+    }
+
+    /// Re-reads the suggestion rows. Synchronous — they are ours and local.
+    func refreshSuggestions() {
+        suggestions = kid.liveSuggestions
+        dismissedSuggestions = kid.dismissedSuggestions
     }
 
     /// Indexes everything under something the kid just kept, in the background.
@@ -1322,6 +1464,212 @@ final class Session {
         return saveLists()
     }
 
+    // MARK: - Suggestions
+    //
+    // Awaited and surfaced like the lists above, and every one of them goes
+    // through `rebuildEngines()`. **Dismissal is the first kid-side action in
+    // this app that changes what the kid may reach**, and it changes it in the
+    // narrowing direction — the one that must never lag behind the tap.
+
+    /// Puts something in front of the kid, and makes it reachable.
+    ///
+    /// Takes a resolved item rather than an identifier so the name and artwork
+    /// are copied from what the parent was actually looking at.
+    ///
+    /// **A playlist is snapshotted even when it is Apple's own.** An allow on a
+    /// playlist identifier reaches the playlist and nothing inside it — nothing
+    /// in this app puts a playlist into a track's lineage, and `resolveAncestry`
+    /// skips them on purpose — so a suggested playlist without its tracks
+    /// resolved would open, at level 1, onto forty blocked rows. Refusing when
+    /// the track list cannot be read is the honest answer: the alternative is a
+    /// tile that looks suggested and plays nothing.
+    func suggest(_ item: CatalogItem, note: String? = nil) async -> String? {
+        var songs: [CatalogItem] = []
+        if item.id.kind == .playlist {
+            guard let tracks = try? await source.children(of: item.id), !tracks.isEmpty else {
+                return "Couldn't read that playlist's songs. Try again in a moment."
+            }
+            songs = (try? await source.resolveAncestry(for: tracks)) ?? tracks
+        }
+        return suggest(
+            target: .catalog(item.id),
+            displayName: item.title,
+            subtitle: item.subtitle,
+            artworkURL: item.artworkURL,
+            note: note,
+            songs: songs
+        )
+    }
+
+    // MARK: - Suggesting out of the parent's own library
+    //
+    // **The parent's library, never the kid's.** This is `LibrarySource` — the
+    // seeding seam — and no part of it goes through `KidLibrary`. The rule it
+    // keeps is the one that makes every other rule work: a library pick becomes
+    // a *catalog* item before anything is stored, so there is one namespace and
+    // a deny on an artist reaches everything of theirs.
+
+    /// The account's own playlists, Apple's and the parent's alike.
+    func libraryPlaylists(limit: Int = 100) async throws -> [LibraryPlaylist] {
+        try await librarySource.libraryPlaylists(limit: limit)
+    }
+
+    /// The account's own albums, songs or artists.
+    func libraryItems(kinds: Set<ItemKind>, limit: Int = 100) async throws -> [LibraryItem] {
+        if kinds == [.artist] {
+            return try await librarySource.libraryArtists(limit: limit)
+        }
+        return try await librarySource.libraryItems(kinds: kinds, limit: limit)
+    }
+
+    /// Matches a library album or song to the catalog.
+    func resolveFromLibrary(_ items: [LibraryItem]) async throws -> LibraryImport {
+        try await librarySource.resolveToCatalog(items)
+    }
+
+    /// Names a library artist in the catalog. See ``ArtistVote``.
+    func resolveLibraryArtist(_ artist: LibraryItem) async throws -> ArtistResolution {
+        try await librarySource.resolveArtist(artist)
+    }
+
+    /// Resolves a library playlist's tracks, ready to be snapshotted.
+    ///
+    /// Returns the discards as well as the matches, because the parent is shown
+    /// both before they commit — "34 of 39 matched, 5 aren't on Apple Music" is
+    /// the only honest thing to put in front of someone about to hand their kid
+    /// a playlist, and a silent 34 reads as the whole thing.
+    func resolveLibraryPlaylist(_ playlist: LibraryPlaylist) async throws -> LibraryImport {
+        let tracks = try await librarySource.tracks(of: playlist)
+        guard !tracks.isEmpty else { return .empty }
+        return try await librarySource.resolveToCatalog(tracks)
+    }
+
+    /// Commits one row of the parent's draft.
+    ///
+    /// A snapshot gets a fresh local identifier every time, so suggesting the
+    /// same library playlist twice makes two rows rather than upserting onto
+    /// one. That is the honest reading of the act: the parent's playlist has
+    /// moved on since, this is a new photograph of it, and the first one is
+    /// still what the kid was given.
+    func suggest(_ draft: SuggestionDraftItem, note: String?) async -> String? {
+        switch draft {
+        case .catalog(let item):
+            return await suggest(item, note: note)
+        case .snapshot(let name, let songs, _):
+            return suggest(
+                target: .snapshotPlaylist(local: UUID()),
+                displayName: name,
+                note: note,
+                songs: songs
+            )
+        }
+    }
+
+    /// What suggesting this would actually get the kid.
+    ///
+    /// `nil` where the question does not apply — an artist has no bounded track
+    /// list to count, and a song is one thing.
+    ///
+    /// It exists because of an inversion suggestions make visible for the first
+    /// time. At level 2 an allow on a *container* does not lift the rating check
+    /// off its children, so a suggested album's explicit tracks stay blocked; at
+    /// level 1 an allow-listed ancestor is enough and no rating is consulted, so
+    /// the same tracks play. A parent who suggests a fourteen-track album and
+    /// hears twelve has been told; one who has not will file it as a bug.
+    func suggestionPreview(for item: CatalogItem) async -> SuggestionPreview? {
+        guard item.id.kind == .album || item.id.kind == .playlist else { return nil }
+        guard let children = try? await source.children(of: item.id) else { return nil }
+        let tracks = (try? await source.resolveAncestry(for: children)) ?? children
+        guard !tracks.isEmpty else { return nil }
+
+        // The policy as it *would* be, not as it is — the point is to answer a
+        // question about a suggestion that has not been made yet.
+        var entries = kid.buildPolicy().policy.entries
+        entries.append(.allow(item.id))
+        if item.id.kind == .playlist {
+            entries.append(contentsOf: tracks.map { PolicyEntry.allow($0.id) })
+        }
+        let hypothetical = PolicyEngine(
+            policy: Policy(
+                mode: kid.mode,
+                entries: entries,
+                unratedBehavior: kid.unratedBehavior
+            )
+        )
+        let playable = tracks.filter { hypothetical.evaluate($0.policyItem).isAllowed }.count
+        return SuggestionPreview(playable: playable, total: tracks.count)
+    }
+
+    func suggest(
+        target: SuggestionTarget,
+        displayName: String,
+        subtitle: String? = nil,
+        artworkURL: URL? = nil,
+        note: String? = nil,
+        songs: [CatalogItem] = []
+    ) -> String? {
+        let record = kid.addSuggestion(
+            target: target,
+            displayName: displayName,
+            subtitle: subtitle,
+            artworkURL: artworkURL,
+            note: note
+        )
+        for song in songs where song.id.kind == .song {
+            record.addSong(
+                id: song.id,
+                displayName: song.title,
+                artworkURL: song.artworkURL,
+                ancestry: song.libraryAncestry
+            )
+        }
+        return saveSuggestions()
+    }
+
+    /// The parent took it back. The reach goes with it.
+    func withdrawSuggestion(_ row: SuggestionRow) -> String? {
+        guard let record = record(for: row) else { return nil }
+        kid.removeSuggestion(record)
+        return saveSuggestions()
+    }
+
+    /// The kid passed on it. The row stays so the parent can see it did.
+    func dismissSuggestion(_ row: SuggestionRow) -> String? {
+        guard let record = record(for: row) else { return nil }
+        kid.dismissSuggestion(record)
+        return saveSuggestions()
+    }
+
+    /// The parent offered it again, back at the front of the shelf.
+    func restoreSuggestion(_ row: SuggestionRow) -> String? {
+        guard let record = record(for: row) else { return nil }
+        kid.restoreSuggestion(record)
+        return saveSuggestions()
+    }
+
+    private func record(for row: SuggestionRow) -> SuggestionRecord? {
+        kid.suggestions.first { $0.id == row.id }
+    }
+
+    /// Saves, then re-indexes the policy — but does **not** blank the library
+    /// browser the way a list edit does.
+    ///
+    /// A parent's list edit can invalidate any screen, so it drops the browser's
+    /// copy wholesale. A suggestion cannot: it only ever adds reach, or removes
+    /// reach to something that was never in the kid's library to begin with. So
+    /// the engines are rebuilt and the shelves re-read, and the screen the kid is
+    /// looking at stays where it is.
+    private func saveSuggestions() -> String? {
+        do {
+            try context.save()
+        } catch {
+            return error.localizedDescription
+        }
+        rebuildEngines()
+        refreshSuggestions()
+        return nil
+    }
+
     private func saveLists() -> String? {
         do {
             try context.save()
@@ -1332,24 +1680,43 @@ final class Session {
         return nil
     }
 
-    /// Rebuilds everything that holds a policy engine.
-    ///
-    /// Both, always. A policy edit that reached the catalog but not the library
-    /// would leave a denied artist off search results and still on the kid's
-    /// shelf — the one screen a parent is least likely to check.
+    /// Rebuilds everything that holds a policy engine, and re-reads what it
+    /// judged. What a parent's edit turns into.
     private func rebuildCatalog() {
+        rebuildEngines()
+        reloadLibraryContents()
+    }
+
+    /// Re-indexes the policy into the three things that hold one.
+    ///
+    /// All three, always. A policy edit that reached the catalog but not the
+    /// library would leave a denied artist off search results and still on the
+    /// kid's shelf — the one screen a parent is least likely to check.
+    ///
+    /// Split out from ``rebuildCatalog()`` because this half is cheap and the
+    /// other half is not, and one caller needs only this: a kid dismissing a
+    /// suggestion changes what they may reach and must take effect at once, but
+    /// blanking the library browser under them because they tapped "no thanks"
+    /// on the home screen would be the app flinching at its own bookkeeping.
+    private func rebuildEngines() {
         // Whatever is being walked belongs to the kid and the policy that were
         // current when it started. A walk writes through a provider holding a
         // `Kid`, so one left running past a kid switch would keep filing one
         // child's artist into whichever library is open now.
         cancelWalks()
-        catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
+        let engine = kid.makeEngine()
+        self.engine = engine
+        catalog = FilteredCatalog(source: source, engine: engine)
         library = MergedLibrary(
             providers: [CloudKitLibraryProvider(kid: kid, context: context)],
             catalog: source,
-            engine: kid.makeEngine(),
+            engine: engine,
             device: deviceLibraryStore
         )
+    }
+
+    /// Drops what the previous engine judged and reads it again.
+    private func reloadLibraryContents() {
         // The heart and the shelves read from a different kid's rows now, or from
         // the same kid's under a new policy. Neither is what is on screen.
         //

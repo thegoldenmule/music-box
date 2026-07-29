@@ -293,6 +293,11 @@ enum ReviewFormat {
             name.map { "from the playlist \($0)" } ?? "from a playlist"
         case .kidPlaylist(_, let name):
             name.map { "from their playlist \($0)" } ?? "from a playlist they have since deleted"
+        case .suggestion:
+            "from what you suggested"
+        case .suggestedPlaylist(_, let name):
+            name.map { "from the playlist you suggested, \($0)" }
+                ?? "from a playlist you suggested and have since taken back"
         case .unknown:
             "from somewhere we can no longer read"
         }

@@ -482,9 +482,14 @@ final class KidPlayerModel {
             // promised the playlist and a silent gap reads as a fault. Their own
             // playlist counts double: they put the song there themselves.
             switch entry.origin {
-            case .playlist, .kidPlaylist:
+            // A suggested playlist counts with the other two: the kid was shown
+            // a list and pressed play on it, so a silent gap reads as a fault
+            // rather than as a wall.
+            case .playlist, .kidPlaylist, .suggestedPlaylist:
                 message = "Skipping this one — let's try the next."
-            case .home, .search, .browse:
+            // A suggested *tile* is a shelf, like the home screen. Nothing was
+            // promised beyond the one thing they tapped.
+            case .home, .search, .browse, .suggestion:
                 break
             }
             await skip()

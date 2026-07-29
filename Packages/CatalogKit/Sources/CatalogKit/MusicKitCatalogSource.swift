@@ -459,6 +459,101 @@ public struct MusicKitLibrarySource: LibrarySource {
         return items
     }
 
+    // MARK: - Playlists and artists
+    //
+    // **Unverified on device, like everything else in this file.** The MusicKit
+    // capability is not enabled on the App ID, so what follows compiles against
+    // the real SDK and has been run against nothing.
+
+    public func libraryPlaylists(limit: Int) async throws -> [LibraryPlaylist] {
+        var request = MusicLibraryRequest<Playlist>()
+        request.limit = limit
+        let response = try await catalog.mapErrors { try await request.response() }
+        return response.items.map(libraryPlaylist(from:))
+    }
+
+    /// One playlist's tracks.
+    ///
+    /// Refetched by identifier rather than carried on the value, because
+    /// ``LibraryPlaylist`` crosses into the app and a `MusicItemCollection` is
+    /// not a thing to hand across that boundary.
+    ///
+    /// Music videos are dropped rather than discarded with a reason: there is no
+    /// player surface for one, so it is out of scope rather than unmatchable —
+    /// the same call `children(of:)` makes for a catalog playlist.
+    public func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryItem] {
+        var request = MusicLibraryRequest<Playlist>()
+        request.filter(matching: \.id, equalTo: MusicItemID(playlist.id))
+        let response = try await catalog.mapErrors { try await request.response() }
+        guard let found = response.items.first else { return [] }
+
+        let detailed = try await catalog.mapErrors { try await found.with([.tracks]) }
+        guard let tracks = detailed.tracks else { return [] }
+
+        return tracks.compactMap { track in
+            guard case .song(let song) = track else { return nil }
+            return libraryItem(from: song)
+        }
+    }
+
+    public func libraryArtists(limit: Int) async throws -> [LibraryItem] {
+        var request = MusicLibraryRequest<Artist>()
+        request.limit = limit
+        let response = try await catalog.mapErrors { try await request.response() }
+        return response.items.map { artist in
+            LibraryItem(
+                id: artist.id.rawValue,
+                kind: .artist,
+                title: artist.name,
+                artworkURL: artworkURL(artist.artwork)
+            )
+        }
+    }
+
+    /// Names a library artist in the catalog by resolving a sample of their songs.
+    ///
+    /// The songs are found by searching the library for the artist's name rather
+    /// than by filtering on the relationship. A name search can over-match — a
+    /// band whose name is a common word will pull in songs that are not theirs —
+    /// and that is exactly what the vote is there to absorb: wrong songs have to
+    /// outnumber right ones before they can carry the result, and if they come
+    /// close nobody wins and the parent is told to use catalog search instead.
+    public func resolveArtist(_ artist: LibraryItem) async throws -> ArtistResolution {
+        guard artist.kind == .artist else { return .notInAppleMusic }
+
+        let songs = try await searchLibrary(
+            term: artist.title,
+            kinds: [.song],
+            limit: ArtistVote.sample
+        )
+        guard !songs.isEmpty else { return .notInAppleMusic }
+
+        let matched = try await resolveToCatalog(songs)
+        guard !matched.resolved.isEmpty else { return .notInAppleMusic }
+
+        guard let winner = ArtistVote.winner(among: matched.resolved) else { return .ambiguous }
+        guard let item = try await catalog.item(for: winner) else { return .notInAppleMusic }
+        return .resolved(item)
+    }
+
+    private func libraryPlaylist(from playlist: Playlist) -> LibraryPlaylist {
+        LibraryPlaylist(
+            id: playlist.id.rawValue,
+            name: playlist.name,
+            curatorName: playlist.curatorName,
+            trackCount: playlist.tracks?.count,
+            artworkURL: artworkURL(playlist.artwork),
+            // A playlist the account holder made carries no `kind` at all;
+            // every case of `Playlist.Kind` names something Apple produced,
+            // `personalMix` included — that one is a mix Apple built *for*
+            // them, which is not the same as one they built. Unverified on
+            // device like the rest of this file, and it decides nothing: both
+            // kinds resolve their tracks the same way, and this only picks the
+            // label the parent reads.
+            isPersonal: playlist.kind == nil
+        )
+    }
+
     /// Match library items to the catalog by recording and product code.
     ///
     /// Two batched requests, one for songs and one for albums, regardless of how

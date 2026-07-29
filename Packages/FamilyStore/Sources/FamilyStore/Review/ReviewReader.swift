@@ -111,6 +111,21 @@ public actor ReviewReader {
         )
     }
 
+    /// Names of the playlists suggested to this kid, for rendering a
+    /// `suggestedPlaylist` origin.
+    ///
+    /// Only the snapshot ones are in here: a suggested *catalog* playlist logs
+    /// as `playlist(_:)` and is named from the catalog like any other container.
+    /// Absent once the parent withdraws it, with no fallback for the same reason
+    /// ``kidPlaylistNames(for:)`` has none.
+    public func suggestedPlaylistNames(for kidID: UUID) throws -> [UUID: String] {
+        let kid = try kid(kidID)
+        return Dictionary(
+            kid.suggestions.filter { $0.catalogID == nil }.map { ($0.id, $0.displayName) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
     /// Songs this kid played before a date, for `firstTimeHeard`.
     ///
     /// Bounded like everything else here, which means a kid with a very long

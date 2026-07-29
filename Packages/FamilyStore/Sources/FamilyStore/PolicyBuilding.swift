@@ -15,7 +15,26 @@ public struct PolicyBuild: Sendable {
     /// not anticipate.
     public let unreadableEntryIDs: [UUID]
 
+    /// Suggestion rows that did not read back cleanly.
+    ///
+    /// A separate field rather than more UUIDs in the one above, because the
+    /// admin resolves those against `kid.entries` and a suggestion's id would
+    /// look up to nothing there. Two namespaces, two lists.
+    public let unreadableSuggestionIDs: [UUID]
+
     public var hasUnreadableEntries: Bool { !unreadableEntryIDs.isEmpty }
+
+    public var hasUnreadableSuggestions: Bool { !unreadableSuggestionIDs.isEmpty }
+
+    public init(
+        policy: Policy,
+        unreadableEntryIDs: [UUID] = [],
+        unreadableSuggestionIDs: [UUID] = []
+    ) {
+        self.policy = policy
+        self.unreadableEntryIDs = unreadableEntryIDs
+        self.unreadableSuggestionIDs = unreadableSuggestionIDs
+    }
 }
 
 extension Kid {
@@ -31,9 +50,31 @@ extension Kid {
     /// unblocks something a parent explicitly refused. A row whose `itemKind`
     /// is unreadable cannot be turned into a `CatalogID` at all and is dropped
     /// — that one is reported and nothing else can be done with it.
+    ///
+    /// **Live suggestions are folded in as allows.** That is what makes a
+    /// suggested item reachable at every level, and it happens here rather than
+    /// in the engine so that ``PolicyEngine`` stays a pure function of a
+    /// ``Policy`` with one kind of entry in it. Three properties matter and all
+    /// three are the engine's, not this function's:
+    ///
+    /// - A **deny still wins**. `evaluate` checks the deny set before it looks at
+    ///   the mode, so nothing added here can outrank a parent's refusal — a
+    ///   suggestion cannot be used to walk something back onto the shelf.
+    /// - In `.denyPlusAuto` an allow on a **container** does not lift the rating
+    ///   check off its children, so a suggested album's explicit tracks stay
+    ///   blocked. Deliberate, and the same rule that stops allowing an artist
+    ///   from permitting their next explicit release.
+    /// - In `.allowOnly` an allow-listed *ancestor* is enough and no rating is
+    ///   consulted, so those same tracks do play. The inversion is pre-existing
+    ///   allow-list behavior; suggestions only make it visible, which is why the
+    ///   suggest sheet states the playable count up front.
+    ///
+    /// **Dismissed suggestions contribute nothing** — see ``SuggestionRecord``
+    /// for why the allow has to go with the tile rather than outliving it.
     public func buildPolicy() -> PolicyBuild {
         var built: [PolicyEntry] = []
         var unreadable: [UUID] = []
+        var unreadableSuggestions: [UUID] = []
 
         for record in entries {
             if let entry = record.entry {
@@ -48,13 +89,29 @@ extension Kid {
             }
         }
 
+        // **The asymmetry with the loop above is the point.** An unreadable
+        // policy row becomes a deny, because dropping a real deny silently
+        // unblocks something a parent refused. Doing that here would be
+        // backwards: a deny wins in every mode, so a corrupt *suggestion* would
+        // turn into a family-wide block on an item nobody objected to — a worse
+        // failure than the one the rule prevents. Suggestions only ever add, so
+        // an unreadable one is dropped and reported.
+        for record in suggestions where !record.isDismissed {
+            guard record.target != nil else {
+                unreadableSuggestions.append(record.id)
+                continue
+            }
+            built.append(contentsOf: record.allowedIDs.map(PolicyEntry.allow))
+        }
+
         return PolicyBuild(
             policy: Policy(
                 mode: mode,
                 entries: built,
                 unratedBehavior: unratedBehavior
             ),
-            unreadableEntryIDs: unreadable
+            unreadableEntryIDs: unreadable,
+            unreadableSuggestionIDs: unreadableSuggestions
         )
     }
 

@@ -33,6 +33,24 @@ public enum PlaybackOrigin: Hashable, Sendable {
     /// they deny what is in it. So this origin says where a play came from and
     /// nothing more, which is exactly what the report wants of it.
     case kidPlaylist(UUID)
+
+    /// A tile on the shelf a parent filled.
+    ///
+    /// Distinct from ``home`` because the question it answers is the one the
+    /// whole suggestions feature exists for: *did they listen to what I picked?*
+    /// Folded into `home` — which is where these tiles sit — that question has no
+    /// answer, and it is not one the report can be taught later, because the rows
+    /// from before the column existed would all read as `home`.
+    case suggestion
+
+    /// A suggested playlist that exists only here, by its local identifier.
+    ///
+    /// The same shape and the same reasoning as ``kidPlaylist(_:)``: a parent's
+    /// own Apple Music playlist has no catalog identifier, and a UUID does not go
+    /// in the catalog namespace. Kept apart from `kidPlaylist` because "a list
+    /// the child made" and "a list an adult handed them" are different answers to
+    /// what a report asks.
+    case suggestedPlaylist(UUID)
 }
 
 // MARK: - Storage form
@@ -60,6 +78,8 @@ extension PlaybackOrigin {
         static let browse = "browse"
         static let playlist = "playlist"
         static let kidPlaylist = "kidPlaylist"
+        static let suggestion = "suggestion"
+        static let suggestedPlaylist = "suggestedPlaylist"
     }
 
     var stored: StoredOrigin {
@@ -76,6 +96,11 @@ extension PlaybackOrigin {
             // No `kind`: the identifier is ours, not the catalog's, and there is
             // no `ItemKind` that honestly describes it.
             StoredOrigin(name: Name.kidPlaylist, id: local.uuidString)
+        case .suggestion:
+            StoredOrigin(name: Name.suggestion)
+        case .suggestedPlaylist(let local):
+            // No `kind`, for the reason on `kidPlaylist`.
+            StoredOrigin(name: Name.suggestedPlaylist, id: local.uuidString)
         }
     }
 
@@ -99,9 +124,11 @@ extension PlaybackOrigin {
             else { return nil }
             let id = CatalogID(kind, raw)
             self = stored.name == Name.browse ? .browse(id) : .playlist(id)
-        case Name.kidPlaylist:
+        case Name.kidPlaylist, Name.suggestedPlaylist:
             guard let raw = stored.id, let local = UUID(uuidString: raw) else { return nil }
-            self = .kidPlaylist(local)
+            self = stored.name == Name.kidPlaylist ? .kidPlaylist(local) : .suggestedPlaylist(local)
+        case Name.suggestion:
+            self = .suggestion
         default:
             return nil
         }
