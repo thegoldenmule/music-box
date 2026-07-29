@@ -264,6 +264,29 @@ struct KidHomeView: View {
         .onChange(of: session.recentTrail) { _, _ in
             if isHome { reloadRecents() }
         }
+        // A heart filled or emptied anywhere in the app — a search result, an
+        // album, the now-playing screen, a tile on this very screen — changes
+        // what belongs on the Library shelf. `refreshLibrary()` already keeps
+        // the heart itself and the playlist shelf in step; this is the shelf of
+        // resolved items beside them, which nothing was updating.
+        .onChange(of: session.favoriteIDs) { _, _ in
+            if isHome { reloadLibraryShelf() }
+        }
+        // Coming back to the root of the stack, after however deep the kid went.
+        //
+        // The two hooks above are each about one shelf reacting to one thing.
+        // This is the backstop for everything else that can have happened while
+        // the home screen was covered — a parent editing the allow list from the
+        // admin, a playlist deleted, a favorite removed from the library
+        // browser — none of which the shelves would otherwise hear about until
+        // the app was backgrounded and brought forward again.
+        //
+        // Without the skeleton: there is already a home screen underneath, and
+        // replacing it with placeholders on the way back from an album is a
+        // worse answer than a shelf that updates a moment late.
+        .onChange(of: router.path.isEmpty) { _, isRoot in
+            if isRoot, isHome { Task { await loadShelves() } }
+        }
         // A kid switch in the admin changes whose sandbox this is, and what is
         // playing belongs to the child who is no longer using the app. The
         // player stops and picks up the other kid's queue instead.
@@ -582,27 +605,56 @@ struct KidHomeView: View {
         }
     }
 
+    /// Re-resolves the Library shelf and nothing else.
+    ///
+    /// The counterpart to ``reloadRecents()``, and it exists for the same reason
+    /// that one does: `favoriteIDs` is what the heart draws from and it updates
+    /// on every write, but the *shelf* is a resolved list of items that only the
+    /// full reload ever built. So a kid could fill a heart, watch it fill, and
+    /// find the shelf below it unchanged — the tap plainly having worked and
+    /// plainly having done nothing.
+    ///
+    /// Cheap for the same reason too: the kid just had this item on screen, so
+    /// the item cache is warm and this usually costs no request at all.
+    private func reloadLibraryShelf() {
+        Task {
+            guard let items = try? await session.favoriteItems() else { return }
+            libraryItems = items
+        }
+    }
+
+    /// The three shelves, together.
+    ///
+    /// Separated from ``reload()`` so that a refresh can happen without the
+    /// skeleton: `isLoading` swaps the whole screen for placeholder tiles, which
+    /// is right on a cold launch with nothing to show and wrong every other
+    /// time. A kid coming back from an album would watch their home screen
+    /// dissolve into grey boxes and reassemble.
+    private func loadShelves() async {
+        // The heart and the playlist shelf read from rows already in memory, so
+        // this costs nothing and has to happen before the shelves draw.
+        await session.refreshLibrary()
+        do {
+            // Started together, not one after another. Each of these is a round
+            // trip to Apple Music — the item cache is rebuilt empty with the
+            // process, so a cold launch resolves every recent and every favorite
+            // over the network — and awaiting them in turn made the wait their
+            // sum when it only ever needed to be their maximum. Nothing here
+            // depends on anything else here.
+            async let recentItems = session.homeItems()
+            async let favorites = session.favoriteItems()
+            async let grownUp = session.grownUpItems()
+            (recents, libraryItems, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
+        } catch {
+            trouble = Session.message(for: error)
+        }
+    }
+
     private func reload() {
         Task {
             isLoading = true
             defer { isLoading = false }
-            // The heart and the playlist shelf read from rows already in memory,
-            // so this costs nothing and has to happen before the shelves draw.
-            await session.refreshLibrary()
-            do {
-                // Started together, not one after another. Each of these is a
-                // round trip to Apple Music — the item cache is rebuilt empty
-                // with the process, so a cold launch resolves every recent and
-                // every favorite over the network — and awaiting them in turn
-                // made the wait their sum when it only ever needed to be their
-                // maximum. Nothing here depends on anything else here.
-                async let recentItems = session.homeItems()
-                async let favorites = session.favoriteItems()
-                async let grownUp = session.grownUpItems()
-                (recents, libraryItems, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
-            } catch {
-                trouble = Session.message(for: error)
-            }
+            await loadShelves()
         }
     }
 
