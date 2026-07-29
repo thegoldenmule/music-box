@@ -94,6 +94,26 @@ public protocol LibraryProvider: Sendable {
     /// whose rows get folded from whatever ``MergedLibrary`` resolves on the pass.
     func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws
 
+    // MARK: - The library index
+    //
+    // Defaulted to nothing, because this is **our** projection and not a thing
+    // any other provider holds. Apple Music has nowhere to put "these four
+    // hundred tracks are here because a child kept the artist", and asking it to
+    // would mean writing four hundred rows into a real person's music library.
+    // The CloudKit provider implements these; everything else declines.
+
+    /// Everything the index holds for this kid.
+    func indexed() async throws -> [LibraryIndexRow]
+
+    /// Adds to what one favorite has already brought in.
+    func appendIndex(from source: CatalogID, rows: [LibraryIndexRow]) async throws
+
+    /// Whether this favorite has been walked by the current version of the walk.
+    func isIndexed(_ source: CatalogID) async -> Bool
+
+    /// Drops everything one favorite brought in.
+    func removeIndex(from source: CatalogID) async throws
+
     func playlists() async throws -> [PlaylistRow]
     func createPlaylist(named name: String, songs: [LibrarySong]) async throws -> PlaylistRow
     func addToPlaylist(_ handle: PlaylistHandle, song: LibrarySong) async throws
@@ -112,6 +132,11 @@ public protocol LibraryProvider: Sendable {
 
 extension LibraryProvider {
     public func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws {}
+
+    public func indexed() async throws -> [LibraryIndexRow] { [] }
+    public func appendIndex(from source: CatalogID, rows: [LibraryIndexRow]) async throws {}
+    public func isIndexed(_ source: CatalogID) async -> Bool { false }
+    public func removeIndex(from source: CatalogID) async throws {}
 
     /// Whether this provider can favorite this kind of thing at all.
     public func canFavorite(_ kind: ItemKind) -> Bool {

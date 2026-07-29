@@ -989,6 +989,11 @@ final class Session {
                 try await library.removeFavorite(item.id)
             } else {
                 try await library.addFavorite(item)
+                // Started here and **not awaited**: keeping an artist means
+                // keeping their work, and finding all of it is fifty round trips.
+                // The heart is already safe by this line; the rest fills in while
+                // the kid carries on using the app.
+                expand(item)
             }
         } catch let refusal as LibraryRefused {
             // They tapped the heart.
@@ -1014,6 +1019,41 @@ final class Session {
     func refreshLibrary() async {
         favoriteIDs = await library.favoriteIDs()
         playlists = await library.playlists()
+    }
+
+    /// Indexes everything under something the kid just kept, in the background.
+    ///
+    /// **Nothing waits on this and nothing reports it.** The kid asked for the
+    /// artist and got the artist; what is underneath arriving over the next
+    /// several seconds is the app catching up, not an operation with an outcome
+    /// they need to be told about. A failure leaves the index short and the next
+    /// heart of the same thing walks again.
+    ///
+    /// Held so a kid switch can cancel it — one child's walk must not go on
+    /// writing into a library after a parent has handed the device to another,
+    /// and `Kid` is captured by the provider the walk writes through.
+    private func expand(_ item: CatalogItem) {
+        guard item.id.kind == .album || item.id.kind == .artist else { return }
+        walks[item.id]?.cancel()
+        walks[item.id] = Task { [weak self] in
+            guard let self else { return }
+            await library.expand(item)
+            guard !Task.isCancelled else { return }
+            walks[item.id] = nil
+            // Only now, and only once. The rows landed as the walk found them,
+            // but re-reading the whole library after each of fifty steps would
+            // cost more than the walk does.
+            if hasLoadedLibrary { await loadLibrary() }
+        }
+    }
+
+    /// Walks in flight, by what they are walking.
+    private var walks: [CatalogID: Task<Void, Never>] = [:]
+
+    /// Stops every walk. What a kid switch and a wipe both need.
+    private func cancelWalks() {
+        for walk in walks.values { walk.cancel() }
+        walks.removeAll()
     }
 
     /// The "Library" shelf: the kid's most recent favorites, newest first.
@@ -1298,6 +1338,11 @@ final class Session {
     /// would leave a denied artist off search results and still on the kid's
     /// shelf — the one screen a parent is least likely to check.
     private func rebuildCatalog() {
+        // Whatever is being walked belongs to the kid and the policy that were
+        // current when it started. A walk writes through a provider holding a
+        // `Kid`, so one left running past a kid switch would keep filing one
+        // child's artist into whichever library is open now.
+        cancelWalks()
         catalog = FilteredCatalog(source: source, engine: kid.makeEngine())
         library = MergedLibrary(
             providers: [CloudKitLibraryProvider(kid: kid, context: context)],

@@ -218,7 +218,8 @@ public final class MergedLibrary {
     /// does not happen again. Steady state is the first alone.
     public func contents() async -> LibraryContents {
         let stored = await mergedRows()
-        guard !stored.isEmpty else { return .empty }
+        let indexed = await indexedRows()
+        guard !stored.isEmpty || !indexed.isEmpty else { return .empty }
 
         let judged = await judge(stored)
         let ancestry = await toppedUpAncestry(for: stored, judged: judged)
@@ -226,7 +227,9 @@ public final class MergedLibrary {
         var songs: [LibrarySong] = []
         var favoritedAlbums: [CatalogItem] = []
         var favoritedArtists: [CatalogItem] = []
-        for item in judged.items {
+        var blocked = judged.blocked
+        var seen: Set<CatalogID> = []
+        for item in judged.items where seen.insert(item.id).inserted {
             switch item.id.kind {
             case .song: songs.append(LibrarySong(item: item, ancestry: ancestry[item.id] ?? .none))
             case .album: favoritedAlbums.append(item)
@@ -238,19 +241,88 @@ public final class MergedLibrary {
             }
         }
 
+        // The index comes second so that anything the kid kept **by hand** wins
+        // the duplicate. A song they hearted and that also arrived under its
+        // artist is one row, and it is the resolved one — which carries the
+        // catalog's rating rather than the copy taken when the walk ran.
+        var indexedAlbums: [CatalogItem] = []
+        for row in indexed where seen.insert(row.catalogID).inserted {
+            switch engine.evaluate(row.policyItem) {
+            case .allowed:
+                switch row.catalogID.kind {
+                case .song: songs.append(LibrarySong(item: row.item, ancestry: row.ancestry))
+                case .album: indexedAlbums.append(row.item)
+                default: break
+                }
+            case .blocked(let reason):
+                blocked.append(BlockedItem(item: row.item, reason: reason))
+            }
+        }
+
         return LibraryContents(
             songs: songs,
-            artists: LibraryBrowse.merged(
-                favorited: favoritedArtists,
-                folded: LibraryBrowse.artists(from: songs)
-            ),
+            artists: LibraryBrowse.merged(favoritedArtists, LibraryBrowse.artists(from: songs)),
             albums: LibraryBrowse.merged(
-                favorited: favoritedAlbums,
-                folded: LibraryBrowse.albums(from: songs)
+                favoritedAlbums,
+                indexedAlbums,
+                LibraryBrowse.albums(from: songs)
             ),
-            blocked: judged.blocked,
+            blocked: blocked,
             isResolved: judged.isResolved
         )
+    }
+
+    /// Everything the index holds, from whichever provider keeps it.
+    ///
+    /// **Judged locally and never resolved.** This table is unbounded — one
+    /// hearted artist can be a thousand songs — and putting a thousand-item
+    /// request in front of the library would undo the whole reason the walk
+    /// happens at insert. Every row carries the rating and the lineage the
+    /// catalog gave at index time, which is everything a verdict needs.
+    private func indexedRows() async -> [LibraryIndexRow] {
+        for provider in readableProviders {
+            guard let rows = try? await provider.indexed(), !rows.isEmpty else { continue }
+            return rows
+        }
+        return []
+    }
+
+    // MARK: - Walking down
+
+    /// Indexes everything underneath something the kid just kept.
+    ///
+    /// **Long, and deliberately not part of the write.** ``addFavorite(_:origin:)``
+    /// returns as soon as the heart is safe; this is what the caller starts
+    /// afterwards and does not wait for. An artist is fifty round trips and the
+    /// app stays usable throughout — each step is saved as it lands, so what is
+    /// already indexed is browsable while the rest arrives.
+    ///
+    /// Idempotent by identifier within a source, so a walk re-run after being
+    /// interrupted adds what is missing rather than duplicating what is there.
+    ///
+    /// Failure is silent on purpose. Nothing here is something the kid asked for
+    /// by name — they hearted an artist and that worked — so there is no message
+    /// to show and nothing for them to do about it. The next heart of the same
+    /// thing walks again.
+    public func expand(_ item: CatalogItem) async {
+        guard item.id.kind == .album || item.id.kind == .artist else { return }
+
+        let walk = LibraryWalk(catalog: catalog)
+        let writers = liveProviders
+        try? await walk.walk(item) { batch in
+            for provider in writers {
+                try? await provider.appendIndex(from: batch.source, rows: batch.rows)
+            }
+        }
+    }
+
+    /// Whether this favorite has already been walked by the current walk.
+    ///
+    /// What a caller checks before spending fifty requests re-deriving something
+    /// it already has.
+    public func isIndexed(_ id: CatalogID) async -> Bool {
+        for provider in readableProviders where await provider.isIndexed(id) { return true }
+        return false
     }
 
     // MARK: - Reading, for the admin

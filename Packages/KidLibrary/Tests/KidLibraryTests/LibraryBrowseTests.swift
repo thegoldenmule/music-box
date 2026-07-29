@@ -173,13 +173,24 @@ struct FoldingSongs {
             rating: .clean
         )
         let merged = LibraryBrowse.merged(
-            favorited: [hearted],
-            folded: LibraryBrowse.albums(from: [kept(Fix.clean)])
+            [hearted],
+            LibraryBrowse.albums(from: [kept(Fix.clean)])
         )
         #expect(merged.count == 1)
         // The hearted one: it was resolved against the catalog and knows its
         // rating, where the folded one only knows a name copied at write time.
         #expect(merged.first?.rating == .clean)
+    }
+
+    @Test("Earlier tiers win, however many there are")
+    func tiersHaveAnOrder() {
+        let id = CatalogID(.album, "album-record")
+        let merged = LibraryBrowse.merged(
+            [CatalogItem(id: id, title: "Hearted", rating: .clean)],
+            [CatalogItem(id: id, title: "Indexed")],
+            [CatalogItem(id: id, title: "Folded")]
+        )
+        #expect(merged.map(\.title) == ["Hearted"])
     }
 }
 

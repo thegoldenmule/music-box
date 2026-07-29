@@ -110,6 +110,39 @@ public final class CloudKitLibraryProvider: LibraryProvider {
         try context.save()
     }
 
+    // MARK: - The library index
+
+    /// Sorted, because a relationship is not.
+    ///
+    /// SwiftData makes no promise about the order of `kid.libraryIndex`, and two
+    /// reads of the same rows really do come back differently. That order is not
+    /// cosmetic here: the fold above takes the *first* row for a container as the
+    /// one whose artwork and subtitle it keeps, so an unsorted read makes a
+    /// column that changes under a kid who did nothing. By identifier rather than
+    /// by name because it is the one field that cannot be absent.
+    public func indexed() async throws -> [LibraryIndexRow] {
+        kid.libraryIndex
+            .compactMap(\.row)
+            .sorted { $0.catalogID.rawValue < $1.catalogID.rawValue }
+    }
+
+    /// Written as the walk finds things rather than once at the end, so an app
+    /// closed halfway through an artist keeps what it got.
+    public func appendIndex(from source: CatalogID, rows: [LibraryIndexRow]) async throws {
+        guard !rows.isEmpty else { return }
+        kid.appendIndex(from: source, with: rows)
+        try context.save()
+    }
+
+    public func isIndexed(_ source: CatalogID) async -> Bool {
+        kid.isIndexed(source)
+    }
+
+    public func removeIndex(from source: CatalogID) async throws {
+        kid.removeIndex(from: source)
+        try context.save()
+    }
+
     // MARK: - Playlists
 
     /// Most recently touched first, which is the order a shelf wants: the one a

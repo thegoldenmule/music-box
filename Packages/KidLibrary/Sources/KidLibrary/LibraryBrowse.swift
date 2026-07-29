@@ -33,7 +33,13 @@ public struct LibrarySong: Sendable, Hashable, Identifiable {
 /// is a permission: a parent may deny tomorrow what is in this value today, which
 /// is why it is rebuilt on every policy change rather than cached across one.
 public struct LibraryContents: Sendable {
-    /// Every kept song the kid may still play, most recent first.
+    /// Every kept song the kid may still play.
+    ///
+    /// **Fold order, not display order.** What the kid chose comes first, most
+    /// recent first, and what a walk indexed follows in a stable order behind it
+    /// — which is what makes ``LibraryBrowse/albums(from:)`` take a container's
+    /// artwork from a hand-picked song where there is one. A column showing these
+    /// sorts them itself; see ``LibraryBrowse/sorted(_:)``.
     public let songs: [LibrarySong]
 
     /// Every artist, alphabetical. Favorited ones and ones folded from `songs`.
@@ -92,20 +98,22 @@ public struct LibraryContents: Sendable {
 /// the Albums column for every kid in the ordinary case. The asymmetry is the
 /// point: this fold cannot reach anything its input did not already allow.
 public enum LibraryBrowse {
-    /// Folded containers, with the ones the kid actually hearted put back.
+    /// The same container from several places, as one row, alphabetical.
     ///
-    /// A favorited container wins the duplicate: it was resolved against the
-    /// catalog and carries a real rating and the catalog's own artwork, where a
-    /// folded one carries a name copied at write time. Hearting *25* and hearting
-    /// a song from *25* is one row, and it is the hearted one.
-    public static func merged(
-        favorited: [CatalogItem],
-        folded: [CatalogItem]
-    ) -> [CatalogItem] {
-        var seen = Set(favorited.map(\.id))
-        var out = favorited
-        for item in folded where seen.insert(item.id).inserted {
-            out.append(item)
+    /// **Earlier tiers win**, and the order callers pass them in is the order of
+    /// how much a row knows about itself: something the kid hearted was resolved
+    /// against the catalog and carries its real rating and the catalog's own
+    /// artwork; something the walk indexed carries what the catalog said then;
+    /// something folded out of a song carries only a name copied at write time.
+    /// Hearting *25*, hearting a song from *25*, and hearting the artist is one
+    /// row, and it is the hearted one.
+    public static func merged(_ tiers: [CatalogItem]...) -> [CatalogItem] {
+        var seen: Set<CatalogID> = []
+        var out: [CatalogItem] = []
+        for tier in tiers {
+            for item in tier where seen.insert(item.id).inserted {
+                out.append(item)
+            }
         }
         return sorted(out)
     }

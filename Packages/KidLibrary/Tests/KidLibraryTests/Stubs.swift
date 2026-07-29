@@ -134,9 +134,34 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
         }
     }
 
+    /// Identifiers whose children will not load — one record on an artist that
+    /// fails while the rest of the walk carries on.
+    private var brokenChildren: Set<CatalogID> = []
+
+    func breakChildren(of id: CatalogID) {
+        lock.withLock { _ = brokenChildren.insert(id) }
+    }
+
+    func fixChildren(of id: CatalogID) {
+        lock.withLock { _ = brokenChildren.remove(id) }
+    }
+
+    /// How many times the walk asked. What tells "indexed once" from "indexed on
+    /// every read", which is the whole reason the index exists.
+    private var childrenCallCount = 0
+    var childrenCalls: Int { lock.withLock { childrenCallCount } }
+
     func children(of id: CatalogID) async throws -> [CatalogItem] {
         try check()
-        return Fix.catalog.filter { $0.ancestors.contains { $0.id == id } }
+        lock.withLock { childrenCallCount += 1 }
+        if lock.withLock({ brokenChildren.contains(id) }) { throw Down() }
+        // An album's children are its tracks; an artist's are their records —
+        // which is what makes ancestry the right thing to filter on, since a song
+        // names both.
+        return Fix.catalog.filter { item in
+            item.ancestors.contains { $0.id == id }
+                && (id.kind == .artist ? item.id.kind == .album : item.id.kind == .song)
+        }
     }
 
     func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {

@@ -98,7 +98,10 @@ struct LibraryView: View {
         return switch filter {
         case .artists: LibraryBrowse.filter(contents.artists, by: term)
         case .albums: LibraryBrowse.filter(contents.albums, by: term)
-        case .songs: LibraryBrowse.filter(contents.songItems, by: term)
+        // Sorted here and not upstream: `LibraryContents.songs` is in fold order,
+        // which is what decides where a container's artwork comes from, and a
+        // column is read by name.
+        case .songs: LibraryBrowse.filter(LibraryBrowse.sorted(contents.songItems), by: term)
         case .playlists: []
         }
     }

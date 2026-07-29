@@ -63,6 +63,15 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \PlaylistRecord.kid)
     public private(set) var playlists: [PlaylistRecord] = []
 
+    /// What the library contains because of what is in ``favorites`` — see
+    /// ``LibraryIndexRecord``.
+    ///
+    /// A projection, like ``recentTrail``, but one that follows the library
+    /// rather than the event log: it survives ``deleteHistory(at:)`` and goes
+    /// with ``deleteEverything(at:)``, because its source does.
+    @Relationship(deleteRule: .cascade, inverse: \LibraryIndexRecord.kid)
+    public private(set) var libraryIndex: [LibraryIndexRecord] = []
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -247,15 +256,79 @@ public final class Kid {
     /// Every, not the first: nothing in the schema stops two rows existing —
     /// CloudKit rejects unique constraints — and leaving one behind would look
     /// like the heart refused to empty.
+    /// Removes every row for this item, and everything it brought in with it.
+    ///
+    /// The index goes too, and has to go here rather than in a caller: a favorite
+    /// removed without it leaves an artist's thousand tracks in the library with
+    /// nothing left that names them, unreachable from any screen that could
+    /// clear them and invisible to a parent looking at what is kept.
     public func removeFavorite(_ catalogID: CatalogID) {
         favorites.removeAll {
             $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
         }
+        removeIndex(from: catalogID)
     }
 
     public func favoriteRecord(for catalogID: CatalogID) -> FavoriteRecord? {
         favorites.first {
             $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
+        }
+    }
+
+    // MARK: - The library index
+
+    /// Adds to what a source has already written, without disturbing it.
+    ///
+    /// **Append and not replace**, which is what makes an interrupted walk worth
+    /// keeping. Hearting an artist can mean fifty round trips, and writing only
+    /// at the end would mean an app closed halfway through kept nothing — so each
+    /// record's tracks land as they arrive, and a walk run again adds what is
+    /// missing rather than starting over.
+    ///
+    /// Rows from *other* sources are untouched, and duplicates within one source
+    /// are dropped. Two hearted artists sharing a collaboration record each keep
+    /// their own row for it, and losing one does not take the other's.
+    ///
+    /// What this cannot do is notice that something has *left* an artist's
+    /// catalog. Nothing needs it to yet: the walk has one version and no reason
+    /// to re-run. When ``LibraryIndex/version`` first moves, a rebuild will want
+    /// ``removeIndex(from:)`` in front of this, which is why that is separate.
+    public func appendIndex(from source: CatalogID, with rows: [LibraryIndexRow], at: Date = .now) {
+        guard !rows.isEmpty else { return }
+        var known = Set(
+            libraryIndex.lazy
+                .filter { $0.sourceID == source.rawValue && $0.sourceKind == source.kind.rawValue }
+                .compactMap(\.itemID)
+        )
+        for row in rows where known.insert(row.catalogID).inserted {
+            let record = LibraryIndexRecord(row: row, at: at)
+            libraryIndex.append(record)
+            record.kid = self
+        }
+        modifiedAt = at
+    }
+
+    /// Everything one favorite brought in, gone with it.
+    public func removeIndex(from source: CatalogID) {
+        let doomed = libraryIndex.filter {
+            $0.sourceID == source.rawValue && $0.sourceKind == source.kind.rawValue
+        }
+        delete(doomed)
+        libraryIndex.removeAll {
+            $0.sourceID == source.rawValue && $0.sourceKind == source.kind.rawValue
+        }
+    }
+
+    /// Whether a source has been walked by the current version of the walk.
+    ///
+    /// An empty answer is not "walked and found nothing" — there is no way to
+    /// tell those apart from the rows alone, and the cost of being wrong is one
+    /// repeated walk rather than a library that is quietly missing an artist.
+    public func isIndexed(_ source: CatalogID) -> Bool {
+        libraryIndex.contains {
+            $0.sourceID == source.rawValue
+                && $0.sourceKind == source.kind.rawValue
+                && $0.version == LibraryIndex.version
         }
     }
 
@@ -348,7 +421,9 @@ public final class Kid {
         deleteHistory(at: at)
         delete(favorites)
         delete(playlists)
+        delete(libraryIndex)
         favorites.removeAll()
         playlists.removeAll()
+        libraryIndex.removeAll()
     }
 }
