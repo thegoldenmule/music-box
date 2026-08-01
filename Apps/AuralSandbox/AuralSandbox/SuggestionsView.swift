@@ -3,7 +3,7 @@ import FamilyStore
 import PolicyEngine
 import SwiftUI
 
-/// One tile on the grown-up shelf.
+/// One tile on a grown-up's shelf.
 ///
 /// Wraps ``TileCell`` for anything with a catalog identifier and draws its own
 /// card for a snapshot playlist, which has none. The dismiss affordance is the
@@ -37,8 +37,12 @@ struct SuggestedTileCell: View {
             // header instead of with the cover it belongs to, which made one
             // album's note read as a subtitle for the whole shelf.
             if reservesNoteSpace || note != nil {
-                SuggestionNote(text: note, reservesSpace: reservesNoteSpace)
-                    .padding(.horizontal, Tile.padding)
+                SuggestionNote(
+                    text: note,
+                    from: row?.addedByName,
+                    reservesSpace: reservesNoteSpace
+                )
+                .padding(.horizontal, Tile.padding)
             }
 
             switch tile {
@@ -107,24 +111,14 @@ struct SuggestedTileCell: View {
     /// was — meant nobody read it.
     private var note: String? { row?.displayNote }
 
-    /// The suggestion behind this tile, whichever shape it is.
-    private var row: SuggestionRow? {
-        switch tile {
-        case .item(let item): row(for: item)
-        case .snapshotPlaylist(let playlist): playlist
-        }
-    }
-
-    /// The suggestion behind a catalog tile, if there is one.
+    /// The suggestion behind this tile, if it came from one.
     ///
-    /// The shelf is a merge — suggestions first, then the allow list — and the
-    /// two halves are indistinguishable to look at on purpose. They are not
-    /// indistinguishable to touch: passing on something a parent suggested is
-    /// the kid's to do, and deleting from the allow list is not. An allow-list
-    /// tile has no row here, so it gets no note and no dismiss button.
-    private func row(for item: CatalogItem) -> SuggestionRow? {
-        session.suggestions.first { $0.catalogID == item.id }
-    }
+    /// A shelf is a merge — that grown-up's suggestions first, then their allow
+    /// list — and the two halves are indistinguishable to look at on purpose.
+    /// They are not indistinguishable to touch: passing on something a parent
+    /// suggested is the kid's to do, and deleting from the allow list is not. An
+    /// allow-list tile has no row here, so it gets no note and no dismiss button.
+    private var row: SuggestionRow? { tile.row(among: session.suggestions) }
 }
 
 /// A parent's line about why they picked something.
@@ -134,6 +128,13 @@ struct SuggestedTileCell: View {
 /// shelf at all.
 struct SuggestionNote: View {
     let text: String?
+
+    /// Who wrote it, for the label a kid hears rather than reads.
+    ///
+    /// Per row rather than per shelf, so it stays right inside the one screen
+    /// that can show two grown-ups' tiles at once. `nil` falls back to the
+    /// wording that names nobody.
+    var from: String?
 
     /// Holds two lines open whether or not there is anything in them. What keeps
     /// a shelf's covers on one line — see ``SuggestedTileCell/reservesNoteSpace``.
@@ -154,7 +155,7 @@ struct SuggestionNote: View {
             // about, rather than floating with the gap under it.
             .frame(maxWidth: .infinity, alignment: .bottomLeading)
             .accessibilityHidden(text == nil)
-            .accessibilityLabel(text.map { "Your grown-up says: \($0)" } ?? "")
+            .accessibilityLabel(text.map { "\(from ?? "Your grown-up") says: \($0)" } ?? "")
     }
 }
 
@@ -193,7 +194,7 @@ struct SuggestedPlaylistTile: View {
     }
 }
 
-/// The grown-up shelf, sideways.
+/// One grown-up's shelf, sideways.
 struct SuggestedShelf: View {
     @Bindable var session: Session
     let tiles: [SuggestedTile]
@@ -202,13 +203,14 @@ struct SuggestedShelf: View {
 
     private let tileWidth: CGFloat = 150
 
-    /// Whether any suggestion on this shelf carries a note.
+    /// Whether any tile on **this** shelf carries a note.
     ///
-    /// Asked of the suggestions rather than of `tiles`, which also carries the
-    /// allow-list tail — those never have notes, and they always sit behind the
-    /// ones that might.
+    /// Asked of this shelf's tiles rather than of every suggestion in the app.
+    /// Once the shelves are split by grown-up, the other question reserves a
+    /// blank two lines above Dad's covers because Mum wrote a sentence on hers —
+    /// space held open on a shelf where nothing can ever fill it.
     private var hasNotes: Bool {
-        session.suggestions.contains { $0.displayNote != nil }
+        tiles.contains { $0.row(among: session.suggestions)?.displayNote != nil }
     }
 
     /// Room for the note above the artwork, held open for the whole shelf so
@@ -237,14 +239,27 @@ struct SuggestedShelf: View {
     }
 }
 
-/// Everything the grown-up put there, behind the shelf's chevron.
+/// Everything one grown-up put there, behind their shelf's chevron.
 struct SuggestionsView: View {
     @Bindable var session: Session
     @Bindable var player: KidPlayerModel
 
+    /// Whose shelf this is — a ``GrownUpShelf/id``, so
+    /// ``GrownUpShelf/unattributed`` opens the one nobody is named on.
+    let grownUp: String
+
     @State private var tiles: [SuggestedTile] = []
     @State private var isLoading = true
     @State private var trouble: String?
+
+    /// Their name, resolved on every load and **never cleared**.
+    ///
+    /// It has to outlive the shelf. A kid who dismisses the last tile is left on
+    /// this screen with nothing to derive a name from, and the empty state is the
+    /// one sentence here that most needs to say who — "When Dad picks something
+    /// out for you" is an explanation, and "when your grown-up does" read under a
+    /// heading that said Dad a second ago is the app forgetting.
+    @State private var name: String?
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
 
@@ -258,7 +273,9 @@ struct SuggestionsView: View {
                 ContentUnavailableView(
                     "Nothing here yet",
                     systemImage: "gift",
-                    description: Text("When your grown-up picks something out for you, it shows up here.")
+                    description: Text(
+                        "When \(name ?? "your grown-up") picks something out for you, it shows up here."
+                    )
                 )
             } else {
                 ScrollView {
@@ -271,8 +288,8 @@ struct SuggestionsView: View {
                                 onDismiss: dismiss,
                                 // Grid rows line up for the same reason a shelf
                                 // does, and by the same measure.
-                                reservesNoteSpace: session.suggestions.contains {
-                                    $0.displayNote != nil
+                                reservesNoteSpace: tiles.contains {
+                                    $0.row(among: session.suggestions)?.displayNote != nil
                                 }
                             )
                         }
@@ -281,7 +298,7 @@ struct SuggestionsView: View {
                 }
             }
         }
-        .navigationTitle("From your grown-up")
+        .navigationTitle(name.map { "From \($0)" } ?? "From your grown-up")
         .task { await load() }
         // The shelf is a projection of rows this screen can change, so it is
         // re-read rather than patched: dismissing one tile can also take the
@@ -293,8 +310,18 @@ struct SuggestionsView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
+        // The roster first, because it is authoritative and answers even when the
+        // shelf has emptied. The shelf's own name is the fallback, and it is what
+        // carries a grown-up who has since been taken off the roster.
+        if grownUp != GrownUpShelf.unattributed,
+            let onRoster = session.grownUps.first(where: { $0.attribution == grownUp })
+        {
+            name = onRoster.name
+        }
         do {
-            tiles = try await session.grownUpShelf()
+            let shelf = try await session.grownUpShelves().first { $0.id == grownUp }
+            tiles = shelf?.tiles ?? []
+            if let found = shelf?.name { name = found }
             trouble = nil
         } catch {
             trouble = Session.message(for: error)
@@ -330,7 +357,7 @@ struct SuggestedPlaylistView: View {
                     ContentUnavailableView(
                         "Nothing to play here",
                         systemImage: "music.note.list",
-                        description: Text("Ask your grown-up about this one.")
+                        description: Text("Ask \(row.addedByName ?? "your grown-up") about this one.")
                     )
                 } else {
                     VStack(alignment: .leading, spacing: 0) {

@@ -12,6 +12,9 @@ public enum FamilyStore {
     public static let schema = Schema([
         Family.self,
         Kid.self,
+        // The adults, by the name their kid calls them. Rows point at these by
+        // identifier and carry a copy of the name — see GrownUp.
+        GrownUp.self,
         PolicyEntryRecord.self,
         SearchEventRecord.self,
         PlayEventRecord.self,

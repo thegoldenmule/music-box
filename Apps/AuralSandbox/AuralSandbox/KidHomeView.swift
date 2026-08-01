@@ -14,9 +14,9 @@ struct KidHomeView: View {
     @State private var player: KidPlayerModel
 
     @State private var recents: [CatalogItem] = []
-    /// What the parent suggested, then their allow list where the level shows
-    /// one. See ``Session/grownUpShelf()``.
-    @State private var fromTheGrownUp: [SuggestedTile] = []
+    /// One shelf per grown-up: what each suggested, then their allow list where
+    /// the level shows one. See ``Session/grownUpShelves()``.
+    @State private var grownUpShelves: [GrownUpShelf] = []
     /// The kid's own favorites, which is what that word describes now.
     @State private var libraryItems: [CatalogItem] = []
     @State private var term = ""
@@ -107,7 +107,9 @@ struct KidHomeView: View {
     /// A suggested playlist contributes nothing: it is a tile that opens, and
     /// the screen behind it queues its own songs.
     private var shown: [CatalogItem] {
-        visible ?? (recents + libraryItems + fromTheGrownUp.compactMap(\.playableItem))
+        visible
+            ?? (recents + libraryItems
+                + grownUpShelves.flatMap(\.tiles).compactMap(\.playableItem))
     }
 
     /// What the results grid is showing, once the filter has had its say.
@@ -380,8 +382,8 @@ struct KidHomeView: View {
             LibraryAlbumView(session: session, player: player, album: id)
         case .playlist(let handle):
             PlaylistView(session: session, player: player, handle: handle)
-        case .suggestions:
-            SuggestionsView(session: session, player: player)
+        case .suggestions(let grownUp):
+            SuggestionsView(session: session, player: player, grownUp: grownUp)
         case .suggestedPlaylist(let local):
             SuggestedPlaylistView(session: session, player: player, local: local)
         }
@@ -566,22 +568,25 @@ struct KidHomeView: View {
                 }
             }
 
-            // What the parent suggested, then what they allowed and have not
-            // suggested — one shelf, because the kid's question is *what did
-            // they pick for me* and two headings answering it differently is
-            // the app showing its own bookkeeping. A shelf rather than the
-            // wrapping grid this used to be: the allow list was bounded by what
-            // a parent would type into a list editor, and suggestions are not.
-            if !fromTheGrownUp.isEmpty {
+            // One shelf per grown-up, named. Within each: what they suggested,
+            // then what they allowed and have not suggested — one heading over
+            // both, because the kid's question is *what did they pick for me*
+            // and two headings answering it differently is the app showing its
+            // own bookkeeping. Split across adults because two parents curate
+            // separately, and a merged shelf would credit all of it to whoever
+            // the app named first. A shelf rather than the wrapping grid this
+            // used to be: the allow list was bounded by what a parent would type
+            // into a list editor, and suggestions are not.
+            ForEach(grownUpShelves) { shelf in
                 Section {
                     SuggestedShelf(
                         session: session,
-                        tiles: fromTheGrownUp,
+                        tiles: shelf.tiles,
                         onPlay: { item in Task { await playSong(item, origin: .suggestion) } },
                         onDismiss: dismiss
                     )
                 } header: {
-                    ShelfHeader(title: "From your grown-up", route: .suggestions)
+                    ShelfHeader(title: shelf.title, route: .suggestions(shelf.id))
                 }
             }
         }
@@ -592,7 +597,7 @@ struct KidHomeView: View {
     private static let homeTop = "home-top"
 
     private var isHomeEmpty: Bool {
-        recents.isEmpty && libraryItems.isEmpty && fromTheGrownUp.isEmpty
+        recents.isEmpty && libraryItems.isEmpty && grownUpShelves.isEmpty
             && session.playlists.isEmpty
     }
 
@@ -649,8 +654,8 @@ struct KidHomeView: View {
             // depends on anything else here.
             async let recentItems = session.homeItems()
             async let favorites = session.favoriteItems()
-            async let grownUp = session.grownUpShelf()
-            (recents, libraryItems, fromTheGrownUp) = try await (recentItems, favorites, grownUp)
+            async let grownUp = session.grownUpShelves()
+            (recents, libraryItems, grownUpShelves) = try await (recentItems, favorites, grownUp)
         } catch {
             trouble = Session.message(for: error)
         }
@@ -898,8 +903,13 @@ enum HomeRoute: Hashable {
 
     case playlist(PlaylistHandle)
 
-    /// Everything the parent suggested, behind the shelf's chevron.
-    case suggestions
+    /// The whole of one grown-up's shelf, behind its chevron.
+    ///
+    /// Carries a ``GrownUpShelf/id`` — an attribution, or the sentinel for the
+    /// shelf nobody is named on. A route rather than a filter applied by the
+    /// screen, because the home screen is where the shelves are already split and
+    /// the chevron has to open the one it sits under.
+    case suggestions(String)
 
     /// One suggested playlist that only exists here, by its local identifier.
     ///

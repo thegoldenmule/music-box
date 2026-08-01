@@ -12,9 +12,13 @@ struct AdminView: View {
     var onClose: () -> Void
 
     @State private var newKidName = ""
+    @State private var newGrownUpName = ""
     @State private var message: String?
     @State private var editing: PolicyEntry.Kind?
     @State private var suggesting = false
+
+    /// The grown-up whose name is being edited, held while the sheet is up.
+    @State private var renaming: GrownUp?
 
     /// The suggestion a swipe is proposing to delete, held until it is
     /// confirmed. See ``withdrawConfirmation``.
@@ -22,6 +26,10 @@ struct AdminView: View {
 
     var body: some View {
         Form {
+            // Above the kids: who is doing the curating comes before whose
+            // sandbox is being curated, and this is the one section on the screen
+            // that is about the adult holding the phone.
+            grownUpsSection
             kidsSection
             reviewSection
             sandboxSection
@@ -57,6 +65,9 @@ struct AdminView: View {
                 SuggestionEditorView(session: session) { suggesting = false }
             }
         }
+        .sheet(item: $renaming) { grownUp in
+            RenameGrownUpSheet(session: session, grownUp: grownUp)
+        }
         .modifier(withdrawConfirmation)
         .alert(
             "Couldn't save",
@@ -67,6 +78,61 @@ struct AdminView: View {
         // Any interaction here is activity; the session lapses on idleness, not
         // on elapsed time.
         .onAppear { session.touchAdmin() }
+    }
+
+    // MARK: - Grown-ups
+
+    /// Who is curating, by the name their kid calls them.
+    ///
+    /// The checkmark is not a permission. There is one passcode and every adult
+    /// in the house opens it with the same code, so this says who is *acting* and
+    /// nothing more — it decides whose name lands on the next suggestion and on
+    /// nothing else. Tapping a row switches, and that stays on this device.
+    ///
+    /// An empty roster is a working state and the one every family starts in:
+    /// writes stamp nobody and the kid's shelf reads "From your grown-up", which
+    /// is what it said before any of this existed.
+    private var grownUpsSection: some View {
+        Section {
+            ForEach(session.grownUps, id: \.id) { grownUp in
+                Button {
+                    session.setActingGrownUp(grownUp)
+                } label: {
+                    HStack {
+                        Text(grownUp.name)
+                        Spacer()
+                        if grownUp.id == session.actingGrownUp?.id {
+                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                        }
+                    }
+                }
+                .swipeActions {
+                    Button("Remove", role: .destructive) { show(session.delete(grownUp)) }
+                    Button("Rename") { renaming = grownUp }.tint(.blue)
+                }
+            }
+
+            HStack {
+                TextField("What your kid calls you", text: $newGrownUpName)
+                Button("Add") {
+                    show(
+                        session.addGrownUp(
+                            named: newGrownUpName.trimmingCharacters(in: .whitespaces)
+                        )
+                    )
+                    newGrownUpName = ""
+                }
+                .disabled(newGrownUpName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        } header: {
+            Text("Grown-ups")
+        } footer: {
+            Text(
+                session.grownUps.isEmpty
+                    ? "Add a name and what you pick out for your kid will say who it came from — \"From Dad\" instead of \"From your grown-up\"."
+                    : "Your kid sees this name on the shelf of things you picked out. Removing someone leaves what they already added where it is."
+            )
+        }
     }
 
     // MARK: - Kids
@@ -336,6 +402,62 @@ extension PolicyEntry.Kind: @retroactive Identifiable {
     public var id: String { rawValue }
 }
 
+/// Changing what a kid calls a grown-up.
+///
+/// A draft in `@State` committed on Done, like every other text field in this
+/// app — nothing here is bound live to a stored record, because a write that
+/// happens per keystroke has no moment at which its failure can be reported.
+///
+/// Unlike the other rename in the app, this one reaches further than the row it
+/// is on: every suggestion and list entry this grown-up made carries a copy of
+/// the old name, and ``Session/rename(_:to:)`` rewrites them. See
+/// ``FamilyStore/Family/renameGrownUp(_:to:at:)`` for why the copies are
+/// corrected here and nowhere else.
+struct RenameGrownUpSheet: View {
+    @Bindable var session: Session
+    let grownUp: GrownUp
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var trouble: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("What your kid calls you", text: $name)
+                    .font(.title3)
+                if let trouble {
+                    Text(trouble).font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Rename")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { save() }
+                        .disabled(trimmed.isEmpty)
+                }
+            }
+            .onAppear { name = grownUp.name }
+        }
+    }
+
+    private var trimmed: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func save() {
+        session.touchAdmin()
+        if let failure = session.rename(grownUp, to: trimmed) {
+            trouble = failure
+        } else {
+            dismiss()
+        }
+    }
+}
+
 /// Asks before deleting a suggestion, and says what goes with it.
 ///
 /// A modifier rather than an inline `confirmationDialog` because both lists in
@@ -407,6 +529,12 @@ struct SuggestionRowLabel: View {
             parts.append(row.itemKind.rawValue)
         }
         if let subtitle = row.subtitle { parts.append(subtitle) }
+        // Who put it there, once anybody is named. Two adults share this list and
+        // share one passcode, so without it a parent looking at a suggestion they
+        // do not recognise cannot tell their partner's pick from their own
+        // forgotten one — and the row they might otherwise swipe away is
+        // somebody else's.
+        if let who = row.addedByName { parts.append("from \(who)") }
         if let note = row.note, !note.isEmpty { parts.append("“\(note)”") }
         return parts.joined(separator: " · ")
     }

@@ -440,7 +440,14 @@ struct SuggestionConfirmView: View {
                     }
                 }
             } header: {
-                Text("Suggesting to \(session.kid.name)")
+                // Both ends of the sentence, where both are known. Whose name
+                // goes on this is decided by a checkmark on another screen, and
+                // the moment to see it is the moment before committing — not
+                // afterwards, on the kid's home screen, under the wrong heading.
+                Text(
+                    session.actingGrownUp.map { "From \($0.name), to \(session.kid.name)" }
+                        ?? "Suggesting to \(session.kid.name)"
+                )
             } footer: {
                 Text(
                     "Suggesting something also makes it reachable, at every level. If \(session.kid.name) passes on it, that goes away again."

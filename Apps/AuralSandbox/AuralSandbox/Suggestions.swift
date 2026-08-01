@@ -115,6 +115,74 @@ enum SuggestedTile: Identifiable, Hashable {
         if case .snapshotPlaylist(let row) = self { return row }
         return nil
     }
+
+    /// The same thing for a catalog tile, which has to be looked up.
+    ///
+    /// A snapshot carries its row; an item carries an identifier and the row has
+    /// to be found among the ones in memory. Takes the rows rather than reaching
+    /// for the session so the answer is a function of what was passed in — every
+    /// caller here is inside a `body` that redraws when those rows change.
+    func row(among rows: [SuggestionRow]) -> SuggestionRow? {
+        switch self {
+        case .item(let item): rows.first { $0.catalogID == item.id }
+        case .snapshotPlaylist(let row): row
+        }
+    }
+}
+
+/// A tile and the grown-up who put it there.
+///
+/// The pairing exists only long enough to be grouped — ``GrownUpShelf`` is what
+/// the screen holds. It is a separate type rather than two more cases on
+/// ``SuggestedTile`` because attribution is a fact about the *row*, and the
+/// allow-list tail has one while carrying no row at all.
+struct AttributedTile: Hashable {
+    let tile: SuggestedTile
+
+    /// A ``GrownUp/attribution``, or `nil` for a row written before anyone was
+    /// named.
+    let addedBy: String?
+
+    /// The name copied onto the row at write time. Used when the roster no longer
+    /// has this grown-up — a removed adult's shelf keeps its heading.
+    let addedByName: String?
+}
+
+/// One grown-up's shelf on the kid's home screen.
+///
+/// **One per adult rather than one for the household**, because two parents
+/// curate separately and a merged shelf tells a kid that everything came from
+/// whoever the app happened to name first. The cost is vertical space on the
+/// home screen, which is why a grown-up with nothing currently reachable
+/// contributes no shelf at all rather than an empty band.
+struct GrownUpShelf: Identifiable, Hashable {
+    /// The grown-up's attribution, or ``GrownUpShelf/unattributed`` for the rows
+    /// nobody is named on.
+    ///
+    /// Keyed on the identifier and never on the name, so two grown-ups who share
+    /// one still get their own shelf.
+    let id: String
+
+    /// `nil` when nobody is named, which is every row until an adult puts
+    /// themselves on the roster.
+    let name: String?
+
+    let tiles: [SuggestedTile]
+
+    /// The route key for the unnamed shelf.
+    ///
+    /// A sentinel rather than an optional id, because this is also a
+    /// `NavigationLink` value and `String?` in a route reads as "no shelf" at
+    /// every site that has to handle it. Not a valid `UUID` string, so it can
+    /// never collide with a real grown-up.
+    static let unattributed = "unattributed"
+
+    /// What the kid reads above it.
+    ///
+    /// The fallback is the wording the whole app used before anyone could be
+    /// named, so a household that never fills the roster sees exactly what it saw
+    /// before the feature existed.
+    var title: String { name.map { "From \($0)" } ?? "From your grown-up" }
 }
 
 extension SuggestionRow {

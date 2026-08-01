@@ -77,7 +77,18 @@ public final class SuggestionRecord {
     /// the field exists rather than after.
     public private(set) var note: String?
 
+    /// Which ``GrownUp`` picked it — their `attribution`, not their name. `nil`
+    /// when nobody is on the roster, which is how the shelf reads as a plain
+    /// "From your grown-up" until somebody is.
+    ///
+    /// **What the kid's home screen groups on.** The identifier rather than the
+    /// name, so two grown-ups who share one still get their own shelf.
     public private(set) var addedBy: String?
+
+    /// Their name as it read when this was suggested, copied like ``displayName``
+    /// and for the same reason. Rewritten only by
+    /// ``Family/renameGrownUp(_:to:at:)``.
+    public private(set) var addedByName: String?
 
     public var kid: Kid?
 
@@ -94,6 +105,7 @@ public final class SuggestionRecord {
         position: Int,
         note: String? = nil,
         addedBy: String? = nil,
+        addedByName: String? = nil,
         at: Date = .now
     ) {
         self.id = id
@@ -115,6 +127,7 @@ public final class SuggestionRecord {
         self.position = position
         self.note = note
         self.addedBy = addedBy
+        self.addedByName = addedByName
         self.suggestedAt = at
         self.modifiedAt = at
     }
@@ -151,11 +164,21 @@ public final class SuggestionRecord {
     /// and reshuffling the shelf under a kid for that is worse than doing
     /// nothing. ``restore(position:at:)`` is the case where the order *should*
     /// change, and it is a separate call because it is a separate intention.
+    ///
+    /// **Attribution moves to whoever just suggested it.** If Mum re-suggests
+    /// what Dad put there, the tile moves to Mum's shelf. Suggesting is an act,
+    /// and the shelf names who performed it — the alternative leaves a row
+    /// credited to somebody who did not do the thing that produced its current
+    /// contents. The note above is the deliberate asymmetry: a note is a sentence
+    /// somebody wrote and is only ever set, never cleared, while attribution is a
+    /// fact about the write in hand and is replaced wholesale, `nil` included.
     func refresh(
         displayName: String,
         subtitle: String?,
         artworkURL: URL?,
         note: String?,
+        addedBy: String? = nil,
+        addedByName: String? = nil,
         at: Date = .now
     ) {
         self.displayName = displayName
@@ -165,7 +188,15 @@ public final class SuggestionRecord {
         // through a surface without a note field must not silently erase the
         // sentence a parent wrote on the one that had it.
         if let note { self.note = note }
+        self.addedBy = addedBy
+        self.addedByName = addedByName
         self.modifiedAt = at
+    }
+
+    /// Corrects the copied name after a rename. See ``Family/renameGrownUp(_:to:at:)``.
+    func rewriteAddedByName(to newName: String, at: Date = .now) {
+        addedByName = newName
+        modifiedAt = at
     }
 
     /// The kid passed on it.
@@ -274,6 +305,7 @@ public final class SuggestionRecord {
             dismissedAt: dismissedAt,
             note: note,
             addedBy: addedBy,
+            addedByName: addedByName,
             entries: entries.sorted { $0.position < $1.position }.map(\.row)
         )
     }

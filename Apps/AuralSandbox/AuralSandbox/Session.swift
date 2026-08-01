@@ -53,6 +53,22 @@ final class Session {
     /// Every kid in the family, in insertion order.
     private(set) var kids: [Kid] = []
 
+    /// Every grown-up in the family, in the order they were added. Often empty,
+    /// which is a working state and not an unfinished one — see ``GrownUp``.
+    private(set) var grownUps: [GrownUp] = []
+
+    /// Which of them is at the keyboard on this device.
+    ///
+    /// A mirror of ``actingGrownUpStore`` resolved against the roster, held here
+    /// so the admin's checkmark redraws. **Nothing reads it to decide what a kid
+    /// may reach** — it names who is curating, and only so their name lands on
+    /// what they curate.
+    ///
+    /// `nil` whenever the roster is empty, and also when the stored identifier
+    /// names somebody who has since been removed. Both fall back the same way:
+    /// writes stamp nothing and shelves read as they did before anyone was named.
+    private(set) var actingGrownUp: GrownUp?
+
     /// Whose sandbox the player is currently inside.
     ///
     /// Switching this happens only inside the admin — a kid cannot become
@@ -171,6 +187,10 @@ final class Session {
     /// Where the shared-device answer is kept. Device-local, never synced.
     private let deviceLibraryStore: any DeviceLibraryStateStore = UserDefaultsDeviceLibraryState()
 
+    /// Which grown-up is acting on *this* device. Device-local for the reason
+    /// ``deviceLibraryStore`` is — see ``ActingGrownUpStore``.
+    private let actingGrownUpStore: any ActingGrownUpStore = UserDefaultsActingGrownUp()
+
     init(passcodes: any PasscodeStore = KeychainPasscodeStore()) throws {
         container = try FamilyStore.container()
         context = ModelContext(container)
@@ -201,7 +221,9 @@ final class Session {
             device: deviceLibraryStore
         )
         kids = family.kids
+        grownUps = family.grownUps
         deviceLibrary = deviceLibraryStore.state
+        actingGrownUp = family.grownUps.first { $0.id == actingGrownUpStore.actingGrownUpID }
     }
 
     /// The family, and one kid to start in.
@@ -330,6 +352,65 @@ final class Session {
         return failure
     }
 
+    // MARK: - Grown-ups
+
+    /// Adds a grown-up, and makes them the one acting if nobody was.
+    ///
+    /// The auto-select is the whole of the setup flow: an adult who types their
+    /// name into an empty roster has said who they are, and asking them to then
+    /// tap the row they just made would be the app pretending not to know.
+    @discardableResult
+    func addGrownUp(named name: String) -> String? {
+        let grownUp = GrownUp(name: name)
+        context.insert(grownUp)
+        family.addGrownUp(grownUp)
+        let failure = saveLists()
+        grownUps = family.grownUps
+        if actingGrownUp == nil { setActingGrownUp(grownUp) }
+        return failure
+    }
+
+    /// Renames a grown-up, correcting the copies on everything they added.
+    ///
+    /// See ``FamilyStore/Family/renameGrownUp(_:to:at:)`` for why this one
+    /// write-time copy is the one that gets rewritten.
+    func rename(_ grownUp: GrownUp, to name: String) -> String? {
+        family.renameGrownUp(grownUp, to: name)
+        let failure = saveLists()
+        grownUps = family.grownUps
+        refreshSuggestions()
+        return failure
+    }
+
+    /// Takes a grown-up off the roster.
+    ///
+    /// **Their shelf survives.** Every row keeps the name copied onto it at write
+    /// time, so a kid does not watch "From Dad" turn back into "From your
+    /// grown-up" because an adult tidied a settings screen. Unlike deleting a
+    /// kid, this refuses nothing: an empty roster is a working state.
+    func delete(_ grownUp: GrownUp) -> String? {
+        if grownUp.id == actingGrownUp?.id { setActingGrownUp(nil) }
+        family.removeGrownUp(grownUp)
+        context.delete(grownUp)
+        let failure = saveLists()
+        grownUps = family.grownUps
+        return failure
+    }
+
+    /// Says who is behind the gate on this device. Device-local, never synced.
+    func setActingGrownUp(_ grownUp: GrownUp?) {
+        actingGrownUpStore.save(grownUp?.id)
+        actingGrownUp = grownUp
+    }
+
+    /// What a write stamps: the identifier, and the name as it reads right now.
+    ///
+    /// One place rather than an argument pair repeated at each call site, because
+    /// the two must never disagree about which grown-up they describe.
+    private var attribution: (id: String?, name: String?) {
+        (actingGrownUp?.attribution, actingGrownUp?.name)
+    }
+
     // MARK: - The parent's review
 
     /// A library reader for **any** kid, not just the active one.
@@ -371,7 +452,13 @@ final class Session {
         id: CatalogID,
         displayName: String
     ) -> String? {
-        kid.addEntry(kind: kind, id: id, displayName: displayName)
+        kid.addEntry(
+            kind: kind,
+            id: id,
+            displayName: displayName,
+            addedBy: attribution.id,
+            addedByName: attribution.name
+        )
         do {
             try context.save()
         } catch {
@@ -899,6 +986,23 @@ final class Session {
         return try await resolveAllowed(ids)
     }
 
+    /// Who added each thing on the allow list.
+    ///
+    /// Built from the records rather than carried on the resolved items, because
+    /// resolution goes through the catalog and the catalog knows nothing about
+    /// this family. First row wins where the same item was allowed twice — the
+    /// list is allowed to hold duplicates and a tile can only sit on one shelf.
+    private var allowListAttribution: [CatalogID: (id: String?, name: String?)] {
+        var out: [CatalogID: (id: String?, name: String?)] = [:]
+        for record in kid.entries {
+            guard let entry = record.entry, entry.kind == .allow else { continue }
+            if out[entry.id] == nil {
+                out[entry.id] = (record.addedBy, record.addedByName)
+            }
+        }
+        return out
+    }
+
     /// The allow list where the level shows one, and nothing where it does not.
     ///
     /// The empty answer is a policy answer, not a view's shortcut, which is why
@@ -911,25 +1015,112 @@ final class Session {
         kid.mode == .allowOnly ? try await allowListItems() : []
     }
 
-    /// The whole of "From your grown-up": what the parent suggested, then what
-    /// they allowed and have not suggested.
+    /// What each grown-up picked out, one shelf per adult.
     ///
-    /// One shelf rather than two, because the kid's question is *what did they
-    /// pick for me* and two headings answering it differently is the app showing
-    /// its own bookkeeping. Suggestions lead because they are the deliberate act
-    /// and the dismissible half; the allow-list tail is still level 1 only, for
-    /// the reason ``grownUpItems()`` records.
+    /// **Within** a shelf: what that grown-up suggested, then what they allowed
+    /// and have not suggested. One heading over both halves, because the kid's
+    /// question is *what did they pick for me* and two headings answering it
+    /// differently is the app showing its own bookkeeping. Suggestions lead
+    /// because they are the deliberate act and the dismissible half; the
+    /// allow-list tail is still level 1 only, for the reason ``grownUpItems()``
+    /// records.
+    ///
+    /// **Across** shelves: split by who, because two parents curate separately.
+    /// Everything nobody is named on collects in one trailing shelf reading "From
+    /// your grown-up", which is the whole of the home screen for a household that
+    /// never fills the roster.
     ///
     /// Anything suggested is dropped from the tail rather than drawn twice —
     /// suggesting something *is* allowing it, so at level 1 every suggestion
-    /// would otherwise appear once as itself and once as its own allow.
-    func grownUpShelf() async throws -> [SuggestedTile] {
-        async let suggested = suggestionTiles()
+    /// would otherwise appear once as itself and once as its own allow. Deduped
+    /// across *all* shelves rather than within one, because a suggestion moving
+    /// to Mum's shelf must not leave Dad's allow of the same album drawing it
+    /// again underneath.
+    func grownUpShelves() async throws -> [GrownUpShelf] {
+        async let suggested = attributedSuggestionTiles()
         async let allowed = grownUpItems()
 
         let tiles = try await suggested
-        let seen = Set(tiles.compactMap(\.catalogID))
-        return try await tiles + allowed.filter { !seen.contains($0.id) }.map(SuggestedTile.item)
+        let seen = Set(tiles.compactMap(\.tile.catalogID))
+
+        // Guarded rather than computed unconditionally: the tail is level 1 only,
+        // and `allowListAttribution` walks `kid.entries` — a to-many that faults
+        // in with a synchronous read. Levels 2 and 3 answer empty here and should
+        // not pay for a walk whose result they discard.
+        var tail: [AttributedTile] = []
+        let allowedItems = try await allowed
+        if !allowedItems.isEmpty {
+            let attribution = allowListAttribution
+            tail = allowedItems.filter { !seen.contains($0.id) }.map { item in
+                let who = attribution[item.id] ?? (nil, nil)
+                return AttributedTile(tile: .item(item), addedBy: who.id, addedByName: who.name)
+            }
+        }
+
+        return Self.shelves(
+            from: tiles + tail,
+            roster: grownUps.map { ($0.attribution, $0.name) }
+        )
+    }
+
+    /// Groups tiles into shelves. Pure, and the only place the ordering rule
+    /// lives.
+    ///
+    /// Roster order first, because that is the order an adult typed the names in
+    /// and the only order in the app that a person chose. Grown-ups no longer on
+    /// the roster follow, in the order their tiles appear — they still have rows
+    /// and those rows still have a name copied onto them. The unnamed shelf is
+    /// always last: it is the residue, and putting it above somebody's actual
+    /// name would read as the more important of the two.
+    ///
+    /// The **live** roster name wins over the copy where there is one, so a
+    /// rename shows up even if the backfill across rows did not land. The copy is
+    /// what carries a removed grown-up.
+    ///
+    /// **An attribution nobody can be named for is treated as unattributed**, and
+    /// folded into the residue rather than given a shelf of its own. Nothing
+    /// writes that state today — the identifier and the name are stamped together
+    /// or not at all — but the alternative if it ever arrives is two shelves both
+    /// headed "From your grown-up", which reads as a bug to a child and is one.
+    static func shelves(
+        from tiles: [AttributedTile],
+        roster: [(attribution: String, name: String)]
+    ) -> [GrownUpShelf] {
+        let liveNames = Dictionary(
+            roster.map { ($0.attribution, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var order: [String] = roster.map(\.attribution)
+        var grouped: [String: [SuggestedTile]] = [:]
+        var names: [String: String] = [:]
+
+        for tile in tiles {
+            let name = tile.addedBy.flatMap { liveNames[$0] } ?? tile.addedByName
+            let key =
+                if let attribution = tile.addedBy, name != nil {
+                    attribution
+                } else {
+                    GrownUpShelf.unattributed
+                }
+            if grouped[key] == nil, !order.contains(key) { order.append(key) }
+            grouped[key, default: []].append(tile.tile)
+            if key != GrownUpShelf.unattributed, names[key] == nil { names[key] = name }
+        }
+
+        // The residue goes last however it got into `order`. It is appended in
+        // tile order above, which is wherever the first unnamed row happened to
+        // fall, and that is not where it belongs.
+        let keys =
+            order.filter { $0 != GrownUpShelf.unattributed }
+            + (grouped[GrownUpShelf.unattributed] != nil ? [GrownUpShelf.unattributed] : [])
+
+        return keys.compactMap { key in
+            // A grown-up with nothing currently reachable contributes no shelf
+            // rather than an empty band under their name.
+            guard let tiles = grouped[key], !tiles.isEmpty else { return nil }
+            return GrownUpShelf(id: key, name: names[key], tiles: tiles)
+        }
     }
 
     /// The suggestions, resolved and judged.
@@ -953,6 +1144,16 @@ final class Session {
     /// the other direction: it is what lets a deny on the artist still reach
     /// them here, offline.
     func suggestionTiles() async throws -> [SuggestedTile] {
+        try await attributedSuggestionTiles().map(\.tile)
+    }
+
+    /// The same tiles, each still knowing which grown-up put it there.
+    ///
+    /// Separate from ``suggestionTiles()`` rather than folded into it because the
+    /// attribution is only ever wanted by the grouping in
+    /// ``grownUpShelves()`` — every other caller wants tiles and would be
+    /// unpicking a pair for nothing.
+    func attributedSuggestionTiles() async throws -> [AttributedTile] {
         let rows = suggestions
         guard !rows.isEmpty else { return [] }
 
@@ -968,14 +1169,21 @@ final class Session {
         }
 
         return rows.compactMap { row in
-            guard let catalogID = row.catalogID else {
-                return row.hasReachableSong(under: engine) ? .snapshotPlaylist(row) : nil
+            let tile: SuggestedTile?
+            if let catalogID = row.catalogID {
+                // A catalog answer that never came leaves the tile out rather
+                // than drawing an identifier. Unlike the Recent shelf there is
+                // nothing here a kid recognises from having been there.
+                if let item = resolved[catalogID], engine.evaluate(item.policyItem).isAllowed {
+                    tile = .item(item)
+                } else {
+                    tile = nil
+                }
+            } else {
+                tile = row.hasReachableSong(under: engine) ? .snapshotPlaylist(row) : nil
             }
-            // A catalog answer that never came leaves the tile out rather than
-            // drawing an identifier. Unlike the Recent shelf there is nothing
-            // here a kid recognises from having been there.
-            guard let item = resolved[catalogID] else { return nil }
-            return engine.evaluate(item.policyItem).isAllowed ? .item(item) : nil
+            guard let tile else { return nil }
+            return AttributedTile(tile: tile, addedBy: row.addedBy, addedByName: row.addedByName)
         }
     }
 
@@ -1436,7 +1644,9 @@ final class Session {
             kind: kind,
             id: id,
             displayName: displayName,
-            artworkURL: artworkURL
+            artworkURL: artworkURL,
+            addedBy: attribution.id,
+            addedByName: attribution.name
         )
         do {
             try context.save()
@@ -1613,7 +1823,9 @@ final class Session {
             displayName: displayName,
             subtitle: subtitle,
             artworkURL: artworkURL,
-            note: note
+            note: note,
+            addedBy: attribution.id,
+            addedByName: attribution.name
         )
         for song in songs where song.id.kind == .song {
             record.addSong(

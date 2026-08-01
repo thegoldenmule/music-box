@@ -67,7 +67,13 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
     /// A parent's one line about why. Optional, and shown to the kid.
     public let note: String?
 
+    /// Which grown-up picked it — a ``GrownUp/attribution``, not a name. `nil`
+    /// when the roster is empty. What the home screen groups shelves on.
     public let addedBy: String?
+
+    /// Their name as it read at write time. What the kid actually sees — "From
+    /// Dad" — and `nil` falls back to the wording that names nobody.
+    public let addedByName: String?
 
     /// The songs this suggestion resolves to, in order. Empty for everything
     /// that is not a playlist.
@@ -110,6 +116,7 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
         dismissedAt: Date? = nil,
         note: String? = nil,
         addedBy: String? = nil,
+        addedByName: String? = nil,
         entries: [PlaylistEntryRow] = []
     ) {
         self.id = id
@@ -122,6 +129,7 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
         self.dismissedAt = dismissedAt
         self.note = note
         self.addedBy = addedBy
+        self.addedByName = addedByName
         self.entries = entries
     }
 }

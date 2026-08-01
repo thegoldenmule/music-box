@@ -130,6 +130,7 @@ public final class Kid {
         displayName: String,
         artworkURL: URL? = nil,
         addedBy: String? = nil,
+        addedByName: String? = nil,
         at: Date = .now
     ) -> PolicyEntryRecord {
         let record = PolicyEntryRecord(
@@ -138,6 +139,7 @@ public final class Kid {
             displayName: displayName,
             artworkURL: artworkURL,
             addedBy: addedBy,
+            addedByName: addedByName,
             at: at
         )
         attach(record, at: at)
@@ -184,6 +186,7 @@ public final class Kid {
         artworkURL: URL? = nil,
         note: String? = nil,
         addedBy: String? = nil,
+        addedByName: String? = nil,
         at: Date = .now
     ) -> SuggestionRecord {
         if let existing = suggestionRecord(for: target) {
@@ -192,6 +195,8 @@ public final class Kid {
                 subtitle: subtitle,
                 artworkURL: artworkURL,
                 note: note,
+                addedBy: addedBy,
+                addedByName: addedByName,
                 at: at
             )
             if existing.isDismissed {
@@ -209,10 +214,26 @@ public final class Kid {
             position: nextSuggestionPosition,
             note: note,
             addedBy: addedBy,
+            addedByName: addedByName,
             at: at
         )
         attach(record, at: at)
         return record
+    }
+
+    /// Rewrites the copied name on everything this grown-up added.
+    ///
+    /// Driven by ``Family/renameGrownUp(_:to:at:)``, which is where the reasoning
+    /// for correcting a write-time copy lives. Matches on the attribution and
+    /// never on the name — two grown-ups may share one, and a rename must not
+    /// reach the other's rows.
+    func rewriteAttribution(of attribution: String, to newName: String, at: Date = .now) {
+        for record in suggestions where record.addedBy == attribution {
+            record.rewriteAddedByName(to: newName, at: at)
+        }
+        for record in entries where record.addedBy == attribution {
+            record.rewriteAddedByName(to: newName, at: at)
+        }
     }
 
     func attach(_ record: SuggestionRecord, at: Date = .now) {

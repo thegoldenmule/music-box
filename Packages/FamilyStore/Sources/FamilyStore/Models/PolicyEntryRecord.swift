@@ -38,8 +38,18 @@ public final class PolicyEntryRecord {
 
     public private(set) var addedAt: Date = Date.distantPast
 
-    /// `nil` until there is more than one parent.
+    /// Which ``GrownUp`` added it — their `attribution`, not their name. `nil`
+    /// when the roster is empty, which is how a household that never names
+    /// anybody works.
     public private(set) var addedBy: String?
+
+    /// Their name as it read when this was added, copied for the same reason
+    /// ``displayName`` is: the shelf renders offline, and a grown-up taken off
+    /// the roster still reads as a name.
+    ///
+    /// The one thing that rewrites it is ``Family/renameGrownUp(_:to:at:)`` —
+    /// see there for why this copy is the exception that gets corrected.
+    public private(set) var addedByName: String?
 
     public var kid: Kid?
 
@@ -50,6 +60,7 @@ public final class PolicyEntryRecord {
         displayName: String,
         artworkURL: URL? = nil,
         addedBy: String? = nil,
+        addedByName: String? = nil,
         at: Date = .now
     ) {
         self.id = id
@@ -59,8 +70,15 @@ public final class PolicyEntryRecord {
         self.displayName = displayName
         self.artworkURL = artworkURL
         self.addedBy = addedBy
+        self.addedByName = addedByName
         self.addedAt = at
         self.modifiedAt = at
+    }
+
+    /// Corrects the copied name after a rename. See ``Family/renameGrownUp(_:to:at:)``.
+    func rewriteAddedByName(to newName: String, at: Date = .now) {
+        addedByName = newName
+        modifiedAt = at
     }
 
     /// Builds a row straight from stored strings, bypassing the typed enums.
