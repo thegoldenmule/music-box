@@ -15,6 +15,17 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<!-- Where a CKSyncEngine's change notifications land. A parent's deny
+		     that only arrives when the child next launches the app is not the
+		     safety story this design describes. -->
+		<string>remote-notification</string>
 	</array>
+
+	<!-- Declares that this app can be the target of a CloudKit share
+	     invitation. Without it the system does not offer the app when a share
+	     link is opened, and the second parent's first ten minutes — the
+	     feature's front door — simply do not happen. -->
+	<key>CKSharingSupported</key>
+	<true/>
 </dict>
 </plist>

@@ -11,5 +11,20 @@
 	     the MusicKit terms, so without this the app does not work at all. -->
 	<key>com.apple.security.network.client</key>
 	<true/>
+
+	<!-- The same container as iOS, and it must be the same string: this is what
+	     makes a parent's Mac and a kid's iPad the same household rather than two
+	     unrelated ones. See AuralSandbox-iOS.entitlements for why the bundle
+	     id's spelling is load-bearing. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.thegoldenmule.auralsanbox</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- iOS has no app-sandbox key: it is not a valid iOS entitlement and would
+	     fail provisioning. That is why this file did not exist until CloudKit
+	     needed one — see the note in AuralSandbox-macOS.entitlements. -->
+
+	<!-- The container the family's records live in.
+	     `iCloud.` + the bundle identifier, which is the convention Xcode's
+	     capability editor follows. Note the bundle id is `auralsanbox` without
+	     the `d` — that spelling is deliberate and the container has to match it
+	     exactly, because a container identifier is matched literally and a
+	     "corrected" one is simply a different container. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.thegoldenmule.auralsanbox</string>
+	</array>
+
+	<!-- CloudKit only. Not CloudDocuments and not key-value storage: nothing in
+	     this app puts a document in iCloud Drive, and the two device-local
+	     values that might have wanted a key-value store (`DeviceLibraryState`
+	     and `ActingGrownUp`) are deliberately never synced. -->
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+
+	<!-- Where a CKSyncEngine's change notifications arrive. Without it the app
+	     learns about another parent's edit only when it next asks, which turns
+	     "a deny reaches the kid's device in seconds" into "whenever the child
+	     next opens the app" — and that window is the whole safety story. -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>
