@@ -129,9 +129,12 @@ struct ChoosingTheActiveKid {
     }
 
     /// `kids` is a to-many relationship and CloudKit does not preserve to-many
-    /// ordering, so `first` is not a choice anybody made. Stable is the floor.
-    @Test("With no preference the answer is the same every time")
-    func fallbackIsDeterministic() throws {
+    /// ordering, so `first` on it is not a choice anybody made. What replaces it
+    /// is the order a parent actually put their children in, captured into
+    /// `sortIndex` — so the answer is the *first* child added, whatever their
+    /// identifier sorts like.
+    @Test("With no preference the first child added is the answer")
+    func fallbackFollowsTheTypedOrder() throws {
         let context = try newStore()
         let family = insertFamily(context)
         for id in [Fix.high, Fix.low] {
@@ -146,7 +149,70 @@ struct ChoosingTheActiveKid {
             family.addKid(kid, at: Fix.t0)
         }
 
+        // `high` was added first, and sorts *last* by identifier — so this
+        // asserts the roster order beat the tiebreak rather than coinciding
+        // with it.
+        #expect(family.kids.compactMap(\.sortIndex).sorted() == [0, 1])
+        #expect(FamilyResolution.activeKid(of: family)?.id == Fix.high)
+    }
+
+    /// The tiebreak underneath, for rows nothing has captured an order for. It
+    /// has to be identical on every device and every launch; the identifier is
+    /// arbitrary and does that.
+    @Test("Uncaptured rows fall back to a stable tiebreak, and sort last")
+    func uncapturedRowsSortLastAndStably() throws {
+        let context = try newStore()
+        let family = insertFamily(context)
+
+        // Attached directly, so nothing assigns an index — the state every row
+        // written before the column existed is in.
+        for id in [Fix.high, Fix.low] {
+            let kid = Kid(
+                id: id, name: id.uuidString, mode: .allowOnly, unratedBehavior: .block, at: Fix.t0)
+            context.insert(kid)
+            kid.family = family
+        }
+        let captured = insertFamily(context, kids: ["Ada"]).kids.first
+
+        #expect(family.kids.allSatisfy { $0.sortIndex == nil })
+        #expect(family.orderedKids.map(\.id) == [Fix.low, Fix.high])
         #expect(FamilyResolution.activeKid(of: family)?.id == Fix.low)
+        // And a captured row outranks an uncaptured one wherever they meet.
+        #expect(captured?.sortIndex == 0)
+    }
+
+    /// The capture is the whole point: run it late and the order it was meant to
+    /// preserve has already been through a sync that does not preserve it.
+    @Test("Capturing the roster order is idempotent and never renumbers")
+    func captureIsIdempotent() throws {
+        let context = try newStore()
+        let family = insertFamily(context)
+        for name in ["Ada", "Sam", "Robin"] {
+            let kid = Kid(name: name, mode: .allowOnly, unratedBehavior: .block, at: Fix.t0)
+            context.insert(kid)
+            kid.family = family
+        }
+
+        #expect(FamilyResolution.captureRosterOrder(of: family, at: Fix.t0) == 3)
+        let first = family.orderedKids.map(\.name)
+
+        // A second run finds nothing to do, and cannot reshuffle what the first
+        // one decided — which is what stops a co-parent's device joining later
+        // from reordering a roster that has already been captured.
+        #expect(FamilyResolution.captureRosterOrder(of: family, at: Fix.t0) == 0)
+        #expect(family.orderedKids.map(\.name) == first)
+    }
+
+    @Test("A child added after the capture goes to the end, not the top")
+    func lateArrivalGoesLast() throws {
+        let context = try newStore()
+        let family = insertFamily(context, kids: ["Ada", "Sam"])
+
+        let late = Kid(name: "Robin", mode: .allowOnly, unratedBehavior: .block, at: Fix.t0)
+        context.insert(late)
+        family.addKid(late, at: Fix.t0)
+
+        #expect(family.orderedKids.map(\.name) == ["Ada", "Sam", "Robin"])
     }
 
     @Test("A preference naming nobody falls back rather than resolving to nil")

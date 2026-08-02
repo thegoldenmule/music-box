@@ -94,6 +94,53 @@ public enum FamilyResolution {
         return (survivor, Resolution(mergedAway: losers.count))
     }
 
+    /// Writes down the order the two rosters are already in, once.
+    ///
+    /// **This one has a deadline, and it is the reason it exists at all.** The
+    /// order a parent typed their children and their grown-ups in is not stored
+    /// anywhere — it is the insertion order of a to-many relationship, and it
+    /// has always been what the admin and the kid's home screen render. That is
+    /// fine while one device owns the store and it stops being true the moment
+    /// anything syncs: CloudKit does not preserve to-many ordering, and this
+    /// codebase already says so about a sibling relationship.
+    ///
+    /// So the order is readable **now** and gone afterwards. Capturing it is not
+    /// a migration in the SwiftData sense — no stage, no frozen schema, nothing
+    /// rewritten but two integers per row — but it is a one-way door in the same
+    /// way: run it late and there is nothing left to read.
+    ///
+    /// **Idempotent, and it never renumbers.** A row that already has an index
+    /// keeps it; only `nil` rows are filled, and they are appended after the
+    /// highest index already assigned. So a second parent's device joining later
+    /// cannot reshuffle a roster that has already been captured, and adding a
+    /// child after the capture does not disturb the ones above them.
+    ///
+    /// For a grown-up this is not cosmetic. Their shelves appear on a child's
+    /// own home screen in this order, and "From Dad" above "From Mum" is
+    /// something the child reads every day.
+    @discardableResult
+    public static func captureRosterOrder(of family: Family, at: Date = .now) -> Int {
+        var captured = 0
+
+        func fill<Row>(
+            _ rows: [Row],
+            index: (Row) -> Int?,
+            assign: (Row, Int) -> Void
+        ) {
+            var next = (rows.compactMap(index).max() ?? -1) + 1
+            for row in rows where index(row) == nil {
+                assign(row, next)
+                next += 1
+                captured += 1
+            }
+        }
+
+        fill(family.kids, index: \.sortIndex) { $0.setSortIndex($1, at: at) }
+        fill(family.grownUps, index: \.sortIndex) { $0.setSortIndex($1, at: at) }
+
+        return captured
+    }
+
     /// The child the app opens into.
     ///
     /// `preferring` is the device's own answer — the bound kid, once
@@ -101,11 +148,11 @@ public enum FamilyResolution {
     /// the household. It is passed rather than read so that this stays a
     /// function of its arguments.
     ///
-    /// The fallback is the lowest identifier, for the same reason the merge
-    /// picks one: arbitrary, but identical on every device and every launch,
-    /// which is exactly what `first` on an unordered relationship is not. It is
-    /// a placeholder for a real order and should be replaced by `Kid.sortIndex`
-    /// when that lands — *stable* is the floor here, not *meaningful*.
+    /// The fallback is the first of ``Family/orderedKids``, which is the order a
+    /// parent actually put their children in — captured by
+    /// ``captureRosterOrder(of:at:)`` — with the identifier breaking ties. It
+    /// used to be the lowest identifier outright, which was stable but
+    /// meaningless; stable is the floor and this clears it.
     ///
     /// **A preference that names nobody falls back rather than failing.** That
     /// is right for today, when the preference is only a restored selection, and
@@ -117,6 +164,6 @@ public enum FamilyResolution {
         if let id, let preferred = family.kids.first(where: { $0.id == id }) {
             return preferred
         }
-        return family.kids.min { $0.id.uuidString < $1.id.uuidString }
+        return family.orderedKids.first
     }
 }

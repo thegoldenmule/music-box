@@ -277,20 +277,19 @@ public final class PlaylistRecord {
             catalogID: catalogID,
             displayName: displayName,
             artworkURL: artworkURL,
-            position: entries.count,
+            position: nextPosition,
             ancestry: ancestry,
             at: at
         )
         entries.append(record)
         record.playlist = self
-        renumber(at: at)
         modifiedAt = at
         return record
     }
 
     public func removeSong(_ catalogID: CatalogID, at: Date = .now) {
+        // No renumbering. A hole is not a problem — see ``positionGap``.
         entries.removeAll { $0.catalogID == catalogID.rawValue }
-        renumber(at: at)
         modifiedAt = at
     }
 
@@ -313,18 +312,40 @@ public final class PlaylistRecord {
             let b = rank[right.element.catalogID] ?? (order.count + right.offset)
             return a < b
         }
-        for (position, entry) in sorted.enumerated() {
-            entry.element.move(to: position, at: at)
+        for (index, entry) in sorted.enumerated() {
+            entry.element.move(to: index * Self.positionGap, at: at)
         }
         modifiedAt = at
     }
 
-    /// Contiguous from zero after every edit. Gaps are not a supported state:
-    /// two racing edits produce a consistent order rather than a hole.
-    private func renumber(at: Date) {
-        for (position, entry) in entries.sorted(by: { $0.position < $1.position }).enumerated() {
-            entry.move(to: position, at: at)
-        }
+    /// The space left between two neighbours, so something can be put between
+    /// them without touching either.
+    ///
+    /// **Gaps are the supported state now, and that is a reversal.** This used
+    /// to renumber to contiguous integers after every edit, on the reasoning
+    /// that two racing edits should produce a consistent order rather than a
+    /// hole. Under one writer that held. Under two it is the bug: `renumber`
+    /// runs only on the device doing the editing, so after a merge the list has
+    /// two entries claiming one slot and a hole where nothing repairs it. It
+    /// also rewrote `position` **and** `modifiedAt` on every row on every add,
+    /// so adding a fortieth song was forty record updates — on the records
+    /// CLAUDE.md names as holding the most of a child's own work, and the ones
+    /// with no undo.
+    ///
+    /// What replaces it is cheaper and survives a merge: append past the
+    /// current maximum, never touch a neighbour, and break ties on `id` at read
+    /// time so two devices that do land on one number still agree what the
+    /// order is. Arbitrary between those two songs, identical everywhere, which
+    /// is the property that matters.
+    ///
+    /// Exhaustion is not a real concern here: a reorder redistributes from zero,
+    /// and a kid's playlist would need a thousand insertions between one pair of
+    /// songs to close the gap.
+    public static let positionGap = 1024
+
+    /// One gap past the highest, so appending never rewrites a neighbour.
+    private var nextPosition: Int {
+        (entries.map(\.position).max() ?? -Self.positionGap) + Self.positionGap
     }
 
     // MARK: - Reading
@@ -337,6 +358,13 @@ public final class PlaylistRecord {
 
     /// The value form. Unreadable rows are dropped from `entries` rather than
     /// renumbering around them — the positions stored are still the truth.
+    ///
+    /// **Sorted on `(position, id)`, and the tiebreak is load-bearing.** Two
+    /// devices appending offline compute the same maximum and land on the same
+    /// number; without a second key the order between those two songs is
+    /// whatever the relationship happens to hand back, which can differ per
+    /// device and per launch. The identifier is arbitrary and *identical
+    /// everywhere*, which is the property a child's playlist needs.
     public var row: PlaylistRow {
         PlaylistRow(
             handle: handle,
@@ -345,7 +373,7 @@ public final class PlaylistRecord {
             modifiedAt: modifiedAt,
             appleIsOurs: appleIsOurs,
             origin: libraryOrigin ?? .kid,
-            entries: entries.sorted { $0.position < $1.position }.map(\.row)
+            entries: entries.sorted(by: PlaylistEntryRecord.inOrder).map(\.row)
         )
     }
 }
@@ -438,5 +466,19 @@ public final class PlaylistEntryRecord {
             addedAt: addedAt,
             ancestry: ancestry
         )
+    }
+}
+
+extension PlaylistEntryRecord {
+    /// Deterministic order for a playlist's songs.
+    ///
+    /// `position` first, `id` to break a tie. The tiebreak exists because two
+    /// devices appending offline compute the same maximum and land on the same
+    /// number — see ``PlaylistRecord/positionGap``. Without it the order between
+    /// those two songs is whatever the relationship hands back, which can differ
+    /// per device and per launch; with it the answer is arbitrary between them
+    /// and the same everywhere.
+    static func inOrder(_ a: PlaylistEntryRecord, _ b: PlaylistEntryRecord) -> Bool {
+        (a.position, a.id.uuidString) < (b.position, b.id.uuidString)
     }
 }

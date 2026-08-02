@@ -56,6 +56,15 @@ public final class GrownUp {
     /// address beside a child's search history is the combination.
     public private(set) var accountRecordName: String?
 
+    /// Where this adult sits on the roster, which is the order their shelves
+    /// appear in on the kid's home screen.
+    ///
+    /// `nil` until captured. See
+    /// ``FamilyResolution/captureRosterOrder(of:at:)`` — this one is read by a
+    /// child off their own home screen daily, so "Dad above Mum" is not
+    /// cosmetic to them.
+    public private(set) var sortIndex: Int?
+
     public var family: Family?
 
     public init(id: UUID = UUID(), name: String, at: Date = .now) {
@@ -73,6 +82,12 @@ public final class GrownUp {
     /// and wrong for every other one.
     public func rename(to newName: String, at: Date = .now) {
         name = newName
+        modifiedAt = at
+    }
+
+    /// See ``FamilyResolution/captureRosterOrder(of:at:)``.
+    public func setSortIndex(_ index: Int, at: Date = .now) {
+        sortIndex = index
         modifiedAt = at
     }
 

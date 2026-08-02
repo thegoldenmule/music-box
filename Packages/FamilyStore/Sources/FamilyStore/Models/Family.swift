@@ -38,10 +38,17 @@ public final class Family {
         self.grownUps = []
     }
 
+    /// Adds a child, and puts them at the end of the order.
+    ///
+    /// The index is assigned here rather than left for the next launch's capture
+    /// so that a roster does not depend on when the app was last restarted. A
+    /// child arriving from another device already carries one and keeps it.
     @discardableResult
     public func addKid(_ kid: Kid, at: Date = .now) -> Kid {
+        let next = (kids.compactMap(\.sortIndex).max() ?? -1) + 1
         kids.append(kid)
         kid.family = self
+        if kid.sortIndex == nil { kid.setSortIndex(next, at: at) }
         modifiedAt = at
         return kid
     }
@@ -53,10 +60,13 @@ public final class Family {
 
     // MARK: - Grown-ups
 
+    /// Adds an adult, and puts them at the end of the roster. See ``addKid(_:at:)``.
     @discardableResult
     public func addGrownUp(_ grownUp: GrownUp, at: Date = .now) -> GrownUp {
+        let next = (grownUps.compactMap(\.sortIndex).max() ?? -1) + 1
         grownUps.append(grownUp)
         grownUp.family = self
+        if grownUp.sortIndex == nil { grownUp.setSortIndex(next, at: at) }
         modifiedAt = at
         return grownUp
     }
@@ -79,6 +89,31 @@ public final class Family {
 
     public func grownUp(_ id: UUID) -> GrownUp? {
         grownUps.first { $0.id == id }
+    }
+
+    // MARK: - Order
+    //
+    // `kids` and `grownUps` are to-many relationships, and CloudKit does not
+    // preserve to-many ordering — this file already says so about the adults
+    // being "in the order they were added", which was true of one device and
+    // will not be of two. Both rosters carry a `sortIndex` now, captured once by
+    // `FamilyResolution.captureRosterOrder(of:at:)`, and these are the accessors
+    // that use it. **Nothing should read the relationships directly for
+    // display.**
+
+    /// The children, in the order a parent put them in.
+    ///
+    /// A row with no captured index sorts last rather than first, so a child
+    /// added on a build that has not run the capture cannot silently jump to the
+    /// top of the admin's list. Ties break on the identifier, which is arbitrary
+    /// and identical on every device.
+    public var orderedKids: [Kid] {
+        kids.sorted { ($0.sortIndex ?? .max, $0.id.uuidString) < ($1.sortIndex ?? .max, $1.id.uuidString) }
+    }
+
+    /// The adults, in the order their shelves appear on the kid's home screen.
+    public var orderedGrownUps: [GrownUp] {
+        grownUps.sorted { ($0.sortIndex ?? .max, $0.id.uuidString) < ($1.sortIndex ?? .max, $1.id.uuidString) }
     }
 
     /// Renames a grown-up **and corrects every copy of the old name.**

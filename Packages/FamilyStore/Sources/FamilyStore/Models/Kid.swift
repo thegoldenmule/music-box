@@ -64,6 +64,13 @@ public final class Kid {
     /// this stays nil forever. It is one column either way.
     public private(set) var boundAccountRecordName: String?
 
+    /// Where this child sits in the admin's list of kids.
+    ///
+    /// `nil` means nobody has captured it yet, which is every row written before
+    /// the column existed — see ``FamilyResolution/captureRosterOrder(of:at:)``
+    /// for why that capture has a deadline attached.
+    public private(set) var sortIndex: Int?
+
     public var family: Family?
 
     @Relationship(deleteRule: .cascade, inverse: \PolicyEntryRecord.kid)
@@ -150,6 +157,12 @@ public final class Kid {
 
     public func rename(to newName: String, at: Date = .now) {
         name = newName
+        modifiedAt = at
+    }
+
+    /// See ``FamilyResolution/captureRosterOrder(of:at:)``.
+    public func setSortIndex(_ index: Int, at: Date = .now) {
+        sortIndex = index
         modifiedAt = at
     }
 
@@ -468,7 +481,7 @@ public final class Kid {
     public var liveSuggestions: [SuggestionRow] {
         suggestions
             .filter { !$0.isDismissed }
-            .sorted { $0.position > $1.position }
+            .sorted(by: SuggestionRecord.newestFirst)
             .compactMap(\.row)
     }
 
@@ -477,7 +490,7 @@ public final class Kid {
     public var dismissedSuggestions: [SuggestionRow] {
         suggestions
             .filter(\.isDismissed)
-            .sorted { $0.position > $1.position }
+            .sorted(by: SuggestionRecord.newestFirst)
             .compactMap(\.row)
     }
 

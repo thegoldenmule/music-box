@@ -186,7 +186,9 @@ struct Playlists {
         let row = playlist.row
         #expect(row.name == "Bangers")
         #expect(row.entries.map(\.catalogID) == [Fix.song, Fix.song2])
-        #expect(row.entries.map(\.position) == [0, 1])
+        // The *order*, not the numbers. Positions are sparse now so that
+        // appending never rewrites a neighbour — see `PlaylistRecord.positionGap`.
+        #expect(row.entries.map(\.position) == row.entries.map(\.position).sorted())
         #expect(row.handle.local == playlist.id)
         #expect(row.handle.appleLibraryID == nil)
         #expect(row.appleIsOurs == false)
@@ -212,8 +214,13 @@ struct Playlists {
         #expect(playlist.entries.count == 1)
     }
 
-    @Test("Positions stay contiguous after a removal from the middle")
-    func removalRenumbers() throws {
+    /// Was "positions stay contiguous". They do not any more, and that is the
+    /// fix rather than a regression: renumbering ran only on the editing device,
+    /// so after a merge the list held two entries in one slot and a hole nothing
+    /// repaired — and it rewrote `modifiedAt` on every row on every edit, on the
+    /// records with the most of a child's own work in them.
+    @Test("A removal from the middle leaves the rest in order")
+    func removalKeepsOrder() throws {
         let (_, kid) = try newKid()
         let playlist = kid.addPlaylist(named: "Bangers", at: Fix.t0)
         playlist.addSong(id: Fix.song, displayName: "One", at: Fix.t0)
@@ -223,10 +230,11 @@ struct Playlists {
         playlist.removeSong(Fix.song2, at: Fix.t1)
 
         #expect(playlist.row.entries.map(\.catalogID) == [Fix.song, Fix.song3])
-        #expect(playlist.row.entries.map(\.position) == [0, 1])
+        // A hole is a supported state now.
+        #expect(playlist.row.entries.map(\.position) == playlist.row.entries.map(\.position).sorted())
     }
 
-    @Test("Reordering to a new sequence renumbers from zero")
+    @Test("Reordering to a new sequence redistributes with room between")
     func reorders() throws {
         let (_, kid) = try newKid()
         let playlist = kid.addPlaylist(named: "Bangers", at: Fix.t0)
@@ -237,7 +245,10 @@ struct Playlists {
         playlist.reorder(to: [Fix.song3, Fix.song, Fix.song2], at: Fix.t1)
 
         #expect(playlist.row.entries.map(\.catalogID) == [Fix.song3, Fix.song, Fix.song2])
-        #expect(playlist.row.entries.map(\.position) == [0, 1, 2])
+        // Redistributed from zero in gaps, so something can be dropped between
+        // any two of them later without touching either.
+        let gap = PlaylistRecord.positionGap
+        #expect(playlist.row.entries.map(\.position) == [0, gap, gap * 2])
     }
 
     @Test("A partial order is a reorder, not a deletion")

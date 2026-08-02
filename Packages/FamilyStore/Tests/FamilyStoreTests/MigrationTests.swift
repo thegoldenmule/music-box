@@ -147,6 +147,64 @@ struct Migration {
 
         // Nothing has carried them off the device, which is true.
         #expect(visit.exportedAt == nil)
+
+        // Nothing was ever withdrawn, because nothing could be — so both policy
+        // entries are live. Getting this backwards would retract a family's
+        // entire allow list in one upgrade, which is why the defaults read
+        // through to `addedAt` rather than standing on their own.
+        #expect(entry.retractedAt == nil)
+        let allLive = kid.entries.allSatisfy(\.isLive)
+        #expect(allLive)
+        #expect(kid.liveEntries.count == 2)
+
+        // Nobody has captured a roster order yet. That is the state the capture
+        // exists to fix, and it must not be mistaken for "index zero".
+        #expect(kid.sortIndex == nil)
+        #expect(grownUp.sortIndex == nil)
+    }
+
+    /// **The capture, against real old data.** The order a parent typed their
+    /// children and grown-ups in was never stored — it is the insertion order of
+    /// a to-many relationship, readable now and gone the moment anything syncs.
+    @Test("The roster order is captured from a store that never recorded one")
+    func rosterOrderIsCaptured() throws {
+        let fixture = try FixtureStore("v1-store")
+        let container = try FamilyStore.container(at: fixture.url)
+        let context = ModelContext(container)
+        let families = try context.fetch(FetchDescriptor<Family>())
+        let family = try #require(families.first)
+
+        let before = family.kids.map(\.id) + family.grownUps.map(\.id)
+        let captured = FamilyResolution.captureRosterOrder(of: family)
+        try context.save()
+
+        #expect(captured == before.count)
+        let kidsCaptured = family.kids.allSatisfy { $0.sortIndex != nil }
+        let adultsCaptured = family.grownUps.allSatisfy { $0.sortIndex != nil }
+        #expect(kidsCaptured)
+        #expect(adultsCaptured)
+
+        // And running it again on the migrated store finds nothing to do, so a
+        // second device joining later cannot reshuffle it.
+        #expect(FamilyResolution.captureRosterOrder(of: family) == 0)
+    }
+
+    /// A playlist written with contiguous positions still reads in its original
+    /// order under the sparse scheme, and appending to it does not disturb it.
+    @Test("An older playlist keeps its order, and still takes an append")
+    func olderPlaylistOrderSurvives() throws {
+        let fixture = try FixtureStore("v1-store")
+        let container = try FamilyStore.container(at: fixture.url)
+        let context = ModelContext(container)
+
+        let kid = try #require(try context.fetch(FetchDescriptor<Kid>()).first)
+        let playlist = try #require(kid.playlists.first)
+        #expect(playlist.row.entries.map(\.catalogID.rawValue) == ["song-1", "song-2"])
+
+        playlist.addSong(id: CatalogID(.song, "song-3"), displayName: "Three")
+        try context.save()
+
+        #expect(playlist.row.entries.map(\.catalogID.rawValue) == ["song-1", "song-2", "song-3"])
     }
 
     @Test("The five new tables arrive empty and queryable")

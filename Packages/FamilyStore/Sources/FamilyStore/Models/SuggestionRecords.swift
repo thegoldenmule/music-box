@@ -68,6 +68,16 @@ public final class SuggestionRecord {
     /// effort avoiding everywhere else.
     public private(set) var position: Int = 0
 
+    /// Which of the kid's own playlists this snapshots, for a
+    /// `snapshotPlaylist` target. `nil` for a catalog target, and `nil` for a
+    /// snapshot row written before the column existed — see ``target`` for why
+    /// that needs no backfill.
+    ///
+    /// A **local** UUID and the one deliberate exception to the rule that every
+    /// stored identifier is an Apple Music catalog identifier: a playlist the
+    /// kid made did not exist until they made it.
+    public private(set) var sourcePlaylistID: UUID?
+
     /// When the kid passed on it. `nil` while it is live.
     public private(set) var dismissedAt: Date?
 
@@ -114,10 +124,21 @@ public final class SuggestionRecord {
             self.catalogID = catalogID.rawValue
             self.itemKind = catalogID.kind.rawValue
         case .snapshotPlaylist(let local):
-            // The row's own identity *is* the handle, the way
-            // `PlaylistRecord.handle` is built from its `id`. A second column
-            // holding the same UUID would be one more thing that can disagree.
-            self.id = local
+            // **The row keeps its own identity and points at the playlist in a
+            // column of its own.** It used to do the opposite — `self.id =
+            // local` — on the reasoning that one UUID is better than two that
+            // can disagree. That holds for one writer and breaks for two: the
+            // suggestion's identity became the *playlist's*, so two grown-ups
+            // suggesting the same source playlist produced two records with an
+            // identical key and no unique constraint to stop them. CloudKit
+            // rejects unique constraints outright, so nothing would have. A
+            // mapper keyed on `id` overwrites one parent's note, their
+            // attribution and every resolved entry under it.
+            //
+            // It also let a `SuggestionRecord` id collide with a
+            // `PlaylistRecord` id across two namespaces that are otherwise
+            // unrelated.
+            self.sourcePlaylistID = local
             self.catalogID = nil
             self.itemKind = ItemKind.playlist.rawValue
         }
@@ -271,7 +292,11 @@ public final class SuggestionRecord {
             return .catalog(CatalogID(kind, catalogID))
         }
         guard kind == .playlist else { return nil }
-        return .snapshotPlaylist(local: id)
+        // **Reads through to `id` for a row written before the column existed.**
+        // Those rows *are* keyed by the playlist's UUID, so `id` is the right
+        // answer for them and no backfill write is needed — the same shape as
+        // `PolicyEntryRecord.assertion` reading through to `addedAt`.
+        return .snapshotPlaylist(local: sourcePlaylistID ?? id)
     }
 
     public var isDismissed: Bool { dismissedAt != nil }
@@ -306,7 +331,7 @@ public final class SuggestionRecord {
             note: note,
             addedBy: addedBy,
             addedByName: addedByName,
-            entries: entries.sorted { $0.position < $1.position }.map(\.row)
+            entries: entries.sorted(by: SuggestionEntryRecord.inOrder).map(\.row)
         )
     }
 }
@@ -418,5 +443,25 @@ public final class SuggestionEntryRecord {
             addedAt: addedAt,
             ancestry: ancestry
         )
+    }
+}
+
+extension SuggestionEntryRecord {
+    /// Deterministic order for a suggested playlist's songs. See
+    /// ``PlaylistEntryRecord/inOrder(_:_:)``.
+    static func inOrder(_ a: SuggestionEntryRecord, _ b: SuggestionEntryRecord) -> Bool {
+        (a.position, a.id.uuidString) < (b.position, b.id.uuidString)
+    }
+}
+
+extension SuggestionRecord {
+    /// Newest first, which is how the kid's shelf reads it.
+    ///
+    /// The tiebreak matters more here than on a playlist: two grown-ups
+    /// suggesting something while offline both take one past the highest
+    /// position they can see, so a collision is the *expected* case rather than
+    /// a rare one.
+    static func newestFirst(_ a: SuggestionRecord, _ b: SuggestionRecord) -> Bool {
+        (a.position, a.id.uuidString) > (b.position, b.id.uuidString)
     }
 }

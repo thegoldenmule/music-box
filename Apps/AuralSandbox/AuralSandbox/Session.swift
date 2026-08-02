@@ -252,8 +252,8 @@ final class Session {
             engine: engine,
             device: deviceLibraryStore
         )
-        kids = family.kids
-        grownUps = family.grownUps
+        kids = family.orderedKids
+        grownUps = family.orderedGrownUps
         deviceLibrary = deviceLibraryStore.state
         actingGrownUp = family.grownUps.first { $0.id == actingGrownUpStore.actingGrownUpID }
     }
@@ -282,10 +282,17 @@ final class Session {
     private static func load(from context: ModelContext) throws -> (Family, Kid, Int) {
         if let resolved = try FamilyResolution.resolve(in: context) {
             let family = resolved.family
+            // Before anything reads a roster, and before anything syncs: the
+            // order a parent typed lives in the relationship's insertion order
+            // and is gone the moment it does. See `captureRosterOrder`.
+            let captured = FamilyResolution.captureRosterOrder(of: family)
+
             if let kid = FamilyResolution.activeKid(of: family) {
-                // A merge is a write, and it is the one write here that must not
-                // be lost: leaving it uncommitted means every launch re-merges.
-                if resolved.resolution.mergedAway > 0 { try context.save() }
+                // A merge and a capture are both writes, and they are the ones
+                // here that must not be lost: leaving either uncommitted means
+                // every launch redoes it, and the capture would then be reading
+                // an order that has already been through a sync.
+                if resolved.resolution.mergedAway > 0 || captured > 0 { try context.save() }
                 return (family, kid, resolved.resolution.mergedAway)
             }
 
@@ -383,7 +390,7 @@ final class Session {
         context.insert(kid)
         family.addKid(kid)
         let failure = saveLists()
-        kids = family.kids
+        kids = family.orderedKids
         return failure
     }
 
@@ -405,8 +412,8 @@ final class Session {
         family.removeKid(kid)
         context.delete(kid)
         let failure = saveLists()
-        kids = family.kids
-        if wasActive, let first = family.kids.first {
+        kids = family.orderedKids
+        if wasActive, let first = FamilyResolution.activeKid(of: family) {
             switchTo(first)
         }
         return failure
@@ -425,7 +432,7 @@ final class Session {
         context.insert(grownUp)
         family.addGrownUp(grownUp)
         let failure = saveLists()
-        grownUps = family.grownUps
+        grownUps = family.orderedGrownUps
         if actingGrownUp == nil { setActingGrownUp(grownUp) }
         return failure
     }
@@ -437,7 +444,7 @@ final class Session {
     func rename(_ grownUp: GrownUp, to name: String) -> String? {
         family.renameGrownUp(grownUp, to: name)
         let failure = saveLists()
-        grownUps = family.grownUps
+        grownUps = family.orderedGrownUps
         refreshSuggestions()
         return failure
     }
@@ -453,7 +460,7 @@ final class Session {
         family.removeGrownUp(grownUp)
         context.delete(grownUp)
         let failure = saveLists()
-        grownUps = family.grownUps
+        grownUps = family.orderedGrownUps
         return failure
     }
 
