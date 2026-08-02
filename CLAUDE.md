@@ -46,7 +46,13 @@ overwritten the next time they are generated, and worse, it puts the repo and
 the wiki into disagreement while looking authoritative. To change what a README
 says, change the wiki page it comes from and let generation carry it across.
 
-This file is the exception: `CLAUDE.md` is hand-maintained and safe to edit.
+Two files are the exception, both hand-maintained and safe to edit: this one,
+and **`STYLE.md`** — how the app should look and move, and where Apple says so.
+Read `STYLE.md` before any UI or styling change. It carries the availability
+tiers against the iOS 17 / macOS 14 floor (getting a tier wrong is a build
+failure, not a style disagreement), the motion vocabulary, the recipes for the
+four set-pieces, and a list of approaches already assessed and rejected with
+reasons — check that list before proposing one of them again.
 
 The same goes for anything learned while working — a verified API fact, a
 measured number, a decision. It belongs in the wiki (`What We Know About
