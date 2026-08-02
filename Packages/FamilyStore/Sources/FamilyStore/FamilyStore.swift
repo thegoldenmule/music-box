@@ -7,39 +7,17 @@ import SwiftData
 /// third-party analytics, no PII to anyone. That is a legal position, not an
 /// architecture preference — this store holds a child's search history.
 public enum FamilyStore {
-    /// Every model, in one place. Adding a model without adding it here means
-    /// it silently does not persist.
-    public static let schema = Schema([
-        Family.self,
-        Kid.self,
-        // The adults, by the name their kid calls them. Rows point at these by
-        // identifier and carry a copy of the name — see GrownUp.
-        GrownUp.self,
-        PolicyEntryRecord.self,
-        SearchEventRecord.self,
-        PlayEventRecord.self,
-        BlockEventRecord.self,
-        VisitEventRecord.self,
-        WeeklySummaryRecord.self,
-        // The first projection in this store. Derived from VisitEventRecord and
-        // rebuildable from it — see RecentTrailRecord for why that matters to
-        // the retention sweep.
-        RecentTrailRecord.self,
-        FavoriteRecord.self,
-        PlaylistRecord.self,
-        PlaylistEntryRecord.self,
-        // The parent's shelf, not the kid's. Beside the library rather than in
-        // it — see SuggestionRecord for why a suggestion is never merged into
-        // what the kid kept.
-        SuggestionRecord.self,
-        SuggestionEntryRecord.self,
-        // The second projection, and the first whose source is the library
-        // rather than the event log — which is what decides that it survives
-        // `deleteHistory` and goes with `deleteEverything`.
-        LibraryIndexRecord.self,
-    ])
+    /// Every model, in one place, taken from the current schema version.
+    ///
+    /// The list itself lives in ``FamilySchemaV1`` now rather than here, because
+    /// a version's model list has to be frozen once a store has been written
+    /// with it — see ``FamilySchemaV1/models``. This stays the name the rest of
+    /// the package opens the store by, so nothing above had to learn about
+    /// versions.
+    public static let schema = Schema(versionedSchema: FamilySchemaV1.self)
 
-    /// Opens the store on disk.
+    /// Opens the store on disk, **migrating it if it was written by an older
+    /// build**.
     ///
     /// No CloudKit container is attached. See ``zoneNote`` for why that is a
     /// deferral rather than a decision.
@@ -50,13 +28,21 @@ public enum FamilyStore {
             } else {
                 ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             }
-        return try ModelContainer(for: schema, configurations: configuration)
+        return try ModelContainer(
+            for: schema,
+            migrationPlan: FamilyMigrationPlan.self,
+            configurations: configuration
+        )
     }
 
     /// An empty store that never touches disk. For tests.
+    ///
+    /// Carries the migration plan too, so a test cannot pass against a store
+    /// opened more permissively than the real one.
     public static func inMemoryContainer() throws -> ModelContainer {
         try ModelContainer(
             for: schema,
+            migrationPlan: FamilyMigrationPlan.self,
             configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         )
     }

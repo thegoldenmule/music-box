@@ -251,8 +251,35 @@ what happens inside this app.
 
 ## Schema constraints to honor now
 
-Nothing has shipped, so nothing needs migrating — but several first-release
-choices are expensive to reverse:
+**There is existing data, and every schema change has to migrate it.** This
+reverses what the packages were built on — much of the wiki and the older
+comments in `FamilyStore` still say "nothing has shipped, so nothing needs
+migrating", and that sentence is now wrong wherever it appears. Treat any
+reasoning that leans on it as suspect.
+
+What that means in practice:
+
+- The schema is **versioned**. `FamilySchemaV1` holds the model list and
+  `FamilyMigrationPlan` carries a store forward; `FamilyStore.container()` opens
+  through the plan. A version's `models` list is **frozen** once a store has
+  been written with it — new columns belong to a new version, and editing an
+  old one in place leaves both ends of a stage describing the same thing, which
+  is a migration plan that compiles, runs, and does nothing.
+- **A migration may never drop a row.** The lists are the irreplaceable part and
+  a child's playlists are the records with the most of their own work in them. A
+  stage that cannot map something fails loudly and leaves the store alone rather
+  than writing the half it understood.
+- **A custom stage reads the old shape in `willMigrate` and writes the new one
+  in `didMigrate`**; anything computed between them is lost. The case already
+  known to need this is `mode` and `unratedBehavior` moving off `Kid` — those
+  two fields decide what a child can reach, so a stage that silently defaults
+  them widens a sandbox with nothing on screen to say so.
+- `MigrationTests` writes a store in the pre-version shape and re-opens it under
+  the plan. That is the closest check available on this machine; it is not a
+  device, and a real store carries more history than a fixture.
+
+Several first-release choices are still expensive to reverse, and these hold as
+they did:
 
 - Records go in a **named custom CloudKit zone** from the first release. The
   default zone cannot be shared, and v1 is local-only but v2 shares the family
