@@ -158,6 +158,37 @@ struct Coalescing {
         }
     }
 
+    /// The device clock is the one input this store declares it does not trust:
+    /// a kid can move it, and two devices will not agree. A bare
+    /// `< coalescingWindow` also swallows every negative interval, so a visit
+    /// arriving with an earlier timestamp than the newest on file was discarded
+    /// as a duplicate — a genuine visit lost off the shelf and out of the
+    /// report. One duplicate row is the cheaper failure.
+    @Test("A visit that looks older than the newest one is still a visit")
+    func negativeIntervalIsNotARepeat() async throws {
+        let (container, kidID) = try await storeWithKid()
+        let projector = RecentsProjector(modelContainer: container)
+
+        try await projector.record(visit(Fix.record, artist: Fix.band, minutes: 0), for: kidID)
+        try await projector.record(
+            VisitEvent(
+                itemID: Fix.record,
+                displayName: "album-record",
+                artistID: Fix.band,
+                manner: .opened,
+                // The clock moved backwards between the two arrivals.
+                at: Fix.t0.addingTimeInterval(-30)
+            ),
+            for: kidID
+        )
+
+        try await MainActor.run {
+            let context = ModelContext(container)
+            let visits = try context.fetch(FetchDescriptor<VisitEventRecord>())
+            #expect(visits.count == 2)
+        }
+    }
+
     @Test("A genuine return later is its own visit")
     func laterReturnIsRecorded() async throws {
         let (container, kidID) = try await storeWithKid()

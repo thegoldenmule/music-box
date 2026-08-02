@@ -154,6 +154,37 @@ final class Session {
     /// from the sweep and not from a wipe to avoid.
     private(set) var historyCleared = 0
 
+    /// How many duplicate households this launch had to fold into one.
+    ///
+    /// Zero on every healthy store, and it stays zero until something can
+    /// create a second household — which today is nothing. It is read rather
+    /// than acted on so that the repair is not *silent*: a parent who has been
+    /// curating into the losing household is owed the sentence "we found two
+    /// copies of your family and merged them", and an admin that says nothing
+    /// leaves them to notice that their lists changed by themselves.
+    ///
+    /// Surfacing it is admin work that has not been done. The count is here so
+    /// that it is a UI gap rather than a fact nobody kept.
+    private(set) var householdsMerged = 0
+
+    /// Bumped whenever the policy in force changes — a list edit, a suggestion,
+    /// a dismissal.
+    ///
+    /// The same counter-rather-than-callback shape as ``historyCleared`` and for
+    /// the same reason. What it exists for is narrower and was a real gap:
+    /// ``rebuildEngines()`` already re-indexed the policy into everything that
+    /// *judges*, but nothing re-asked about the song already coming out of the
+    /// speaker. `KidPlayerModel.revalidate()` guards on `status == .stopped`,
+    /// and every `queuedVerdict` call site concerns the entry queued *behind*
+    /// the current one — so a parent who denied the track their child was
+    /// playing watched it go on playing to the end. On one device, with no sync
+    /// involved.
+    ///
+    /// It is also the seam a remote edit lands on later: an entry arriving from
+    /// another parent's phone is the same event as one typed here, and it must
+    /// not need a second mechanism.
+    private(set) var policyGeneration = 0
+
     /// The active kid's engine, built when their policy changes and not before.
     ///
     /// **Held rather than built per call, and that is a correctness matter now
@@ -200,9 +231,10 @@ final class Session {
         player = MusicKitPlayer()
         self.passcodes = passcodes
 
-        let (family, kid) = try Self.load(from: context)
+        let (family, kid, merged) = try Self.load(from: context)
         self.family = family
         self.kid = kid
+        householdsMerged = merged
 
         let source = CachingCatalogSource(
             wrapping: MusicKitCatalogSource(),
@@ -228,24 +260,52 @@ final class Session {
 
     /// The family, and one kid to start in.
     ///
-    /// Level 2 for a first kid because that is the default the product
-    /// recommends, and because level 1 with an empty allow list shows nothing
-    /// at all — a correct result that reads as a broken app.
-    private static func load(from context: ModelContext) throws -> (Family, Kid) {
-        var descriptor = FetchDescriptor<Family>()
-        descriptor.fetchLimit = 1
+    /// **Which household, and which child, are ``FamilyResolution``'s answers**,
+    /// not this one's. This is the part that is allowed to *create*.
+    ///
+    /// What used to be here fetched one `Family` with no predicate and no sort
+    /// and then took `kids.first`, and the guard ran the two together:
+    /// `if let family = …first, let kid = family.kids.first`. So a real
+    /// household that happened to have no children in it yet fell through the
+    /// same branch as an empty store and got a **second** household, plus a kid
+    /// named `"Kid"`, as a side effect of a fetch miss. Under one device that is
+    /// unreachable; the moment records arrive from a zone it is a normal
+    /// hydration state, because a household and its children need not land in
+    /// one step.
+    ///
+    /// The bootstrap that remains is deliberately the *narrow* one: a kid for a
+    /// household that has none. A household is created only when there is
+    /// genuinely no household — and once there is a zone to consult, "we could
+    /// not reach it" must not be allowed to reach this line at all, because a
+    /// device that bootstraps on an unreachable zone has forked the family with
+    /// no repair path.
+    private static func load(from context: ModelContext) throws -> (Family, Kid, Int) {
+        if let resolved = try FamilyResolution.resolve(in: context) {
+            let family = resolved.family
+            if let kid = FamilyResolution.activeKid(of: family) {
+                // A merge is a write, and it is the one write here that must not
+                // be lost: leaving it uncommitted means every launch re-merges.
+                if resolved.resolution.mergedAway > 0 { try context.save() }
+                return (family, kid, resolved.resolution.mergedAway)
+            }
 
-        if let family = try context.fetch(descriptor).first, let kid = family.kids.first {
-            return (family, kid)
+            let kid = Kid(name: "Kid", mode: .denyPlusAuto, unratedBehavior: .block)
+            context.insert(kid)
+            family.addKid(kid)
+            try context.save()
+            return (family, kid, resolved.resolution.mergedAway)
         }
 
+        // Level 2 for a first kid because that is the default the product
+        // recommends, and because level 1 with an empty allow list shows nothing
+        // at all — a correct result that reads as a broken app.
         let family = Family()
         let kid = Kid(name: "Kid", mode: .denyPlusAuto, unratedBehavior: .block)
         context.insert(family)
         context.insert(kid)
         family.addKid(kid)
         try context.save()
-        return (family, kid)
+        return (family, kid, 0)
     }
 
     // MARK: - The admin gate
@@ -1918,6 +1978,7 @@ final class Session {
         cancelWalks()
         let engine = kid.makeEngine()
         self.engine = engine
+        policyGeneration += 1
         catalog = FilteredCatalog(source: source, engine: engine)
         library = MergedLibrary(
             providers: [CloudKitLibraryProvider(kid: kid, context: context)],

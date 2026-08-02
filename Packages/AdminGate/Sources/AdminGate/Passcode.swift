@@ -67,9 +67,51 @@ public protocol PasscodeStore: Sendable {
     func clear() throws
 }
 
+/// Whether this device has a gate — in three states, because two is a lie.
+///
+/// ``PasscodeStore/record()`` can return `nil` and it can *throw*, and those are
+/// not the same fact about a household. Collapsing them is what
+/// `((try? record()) ?? nil) != nil` did: a Keychain that errored read exactly
+/// like a device nobody had ever set a code on, and the screen that asks is the
+/// one that offers to **choose** a new one. So a transient read failure on a
+/// device holding a family's entire policy set and every child's search history
+/// offered to replace the passcode protecting them, and would have succeeded —
+/// `setPasscode` guards on this and nothing else.
+///
+/// Three states, and the third is the point.
+public enum PasscodeAvailability: Sendable, Equatable {
+    /// A passcode exists and was read.
+    case configured
+    /// The store answered, and there is nothing there. The only state that may
+    /// offer to choose one.
+    case absent
+    /// The store could not be read. Says nothing about whether a passcode
+    /// exists, which is precisely why it must not be treated as `absent`.
+    case unreadable
+}
+
 extension PasscodeStore {
+    /// The honest three-state answer. Prefer this wherever the difference can
+    /// be shown to somebody.
+    public var availability: PasscodeAvailability {
+        do {
+            return try record() == nil ? .absent : .configured
+        } catch {
+            return .unreadable
+        }
+    }
+
+    /// The two-state answer, for callers that genuinely only need *is there a
+    /// gate* — and it **fails closed**: unreadable counts as configured.
+    ///
+    /// The asymmetry is deliberate and matches how `unlockAdmin` already behaves
+    /// on the same call. Failing closed costs an adult a confusing screen on a
+    /// device whose Keychain is broken, and they can still get in with the code
+    /// they know. Failing open hands the gate to whoever is holding the device,
+    /// which on the kid's iPad is the child. A wrong answer in one direction is
+    /// an annoyance and in the other it is the feature not existing.
     public var isConfigured: Bool {
-        ((try? record()) ?? nil) != nil
+        availability != .absent
     }
 }
 

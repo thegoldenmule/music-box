@@ -221,6 +221,31 @@ struct ModifiedAt {
 
         #expect(kid.modifiedAt == Fix.t0)
     }
+
+    /// The loudest writer in the store, on the record sync most needs quiet.
+    /// Hearting a twenty-five-album artist ran this once per album, and every
+    /// one of those stamps made a child listening to music look like a parent
+    /// editing settings. It stamped before the fix.
+    @Test("Filling the library index does not stamp the kid")
+    func libraryIndexDoesNotStamp() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+
+        kid.appendIndex(
+            from: Fix.artist,
+            with: [
+                LibraryIndexRow(
+                    catalogID: Fix.song,
+                    displayName: "A Song",
+                    source: Fix.artist
+                )
+            ],
+            at: Fix.t1
+        )
+
+        #expect(kid.libraryIndex.count == 1)
+        #expect(kid.modifiedAt == Fix.t0)
+    }
 }
 
 // MARK: - Deletion

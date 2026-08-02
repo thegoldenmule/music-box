@@ -301,6 +301,12 @@ struct KidHomeView: View {
         .onChange(of: session.historyCleared) { _, _ in
             Task { await player.stop() }
         }
+        // A parent's edit reaches the song already playing, not only the one
+        // queued behind it. Everything that judges was re-indexed the moment
+        // `rebuildEngines()` ran; this is the audio.
+        .onChange(of: session.policyGeneration) { _, _ in
+            Task { await player.revalidatePlaying() }
+        }
         .onChange(of: scenePhase) { _, phase in
             // Otherwise a kid who plays one song and puts the phone down never
             // produces a play event at all — and the queue would come back
@@ -309,6 +315,24 @@ struct KidHomeView: View {
                 player.flush()
             } else if isHome {
                 reload()
+            }
+
+            // `AdminGate.close()`'s own doc says it is "called on background,
+            // and on leaving the admin". The second half was true and the first
+            // was not, so an admin session left open survived backgrounding and
+            // came back open — on the shared iPad, in a child's hands, with the
+            // idle timeout the only thing between them and the allow list.
+            //
+            // **`.background` and not `phase != .active`.** `.inactive` is the
+            // app switcher, a system alert, Notification Centre pulled halfway
+            // down — a parent glancing at something mid-edit, not a parent
+            // leaving. Closing on that would throw away the session they are
+            // still in. The flush above is the opposite case and correctly
+            // takes both: writing the play event early costs nothing if they
+            // come straight back.
+            if phase == .background {
+                session.closeAdmin()
+                showingAdmin = false
             }
         }
     }

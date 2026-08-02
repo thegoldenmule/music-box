@@ -130,12 +130,22 @@ public actor RecentsProjector {
     // MARK: -
 
     /// Whether this is the same arrival as the newest visit already recorded.
+    ///
+    /// **The window is a range, not a ceiling.** A bare `< coalescingWindow`
+    /// also swallows every *negative* interval, so a visit that arrives looking
+    /// older than the newest one on file is silently discarded as a duplicate.
+    /// The device clock is the one input this store already declares it does not
+    /// trust — a kid can move it, and two devices will not agree — so "earlier
+    /// than what we have" is a state to expect rather than one to treat as
+    /// impossible. Discarding it loses a genuine visit off the shelf and out of
+    /// the report; keeping it costs at worst one duplicate row, which is the
+    /// direction this rule should fail in.
     private func isRepeat(_ visit: VisitEvent, for kid: Kid) -> Bool {
         guard
             let newest = kid.visits.compactMap(\.event).max(by: { $0.at < $1.at }),
             newest.itemID == visit.itemID
         else { return false }
-        return visit.at.timeIntervalSince(newest.at) < Self.coalescingWindow
+        return (0..<Self.coalescingWindow).contains(visit.at.timeIntervalSince(newest.at))
     }
 
     private func kid(_ id: UUID) throws -> Kid {

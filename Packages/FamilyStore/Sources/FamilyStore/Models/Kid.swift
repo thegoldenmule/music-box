@@ -152,7 +152,20 @@ public final class Kid {
         modifiedAt = at
     }
 
+    /// Takes a row off the list, and **off the disk**.
+    ///
+    /// `removeAll()` alone nulls the inverse and leaves the row where no query
+    /// can reach it — every query here is `kid?.id == kidID` — so a parent who
+    /// removed a deny would watch it vanish from the screen while it went on
+    /// being a deny for nobody. The same shape as ``removeSuggestion(_:at:)``,
+    /// and for the same reason; this one was the straggler.
+    ///
+    /// The asymmetry worth naming: an orphaned *deny* is the harmless half. It
+    /// is an orphaned **allow** that matters, because a level-1 kid whose allow
+    /// row is unreachable loses reach a parent believes they granted. Deleting
+    /// covers both without having to decide which this was.
     public func removeEntry(_ record: PolicyEntryRecord, at: Date = .now) {
+        delete([record])
         entries.removeAll { $0.id == record.id }
         modifiedAt = at
     }
@@ -447,6 +460,13 @@ public final class Kid {
     /// catalog. Nothing needs it to yet: the walk has one version and no reason
     /// to re-run. When ``LibraryIndex/version`` first moves, a rebuild will want
     /// ``removeIndex(from:)`` in front of this, which is why that is separate.
+    ///
+    /// **Does not stamp `modifiedAt`**, under the rule stated above the library
+    /// writes. It used to, which made this the loudest writer in the store on
+    /// the one record that most needs to be quiet: hearting a twenty-five-album
+    /// artist dirties the kid twenty-six times in a minute, and every one of
+    /// those is a child listening to music wearing a parent's edit as a
+    /// disguise.
     public func appendIndex(from source: CatalogID, with rows: [LibraryIndexRow], at: Date = .now) {
         guard !rows.isEmpty else { return }
         var known = Set(
@@ -459,7 +479,6 @@ public final class Kid {
             libraryIndex.append(record)
             record.kid = self
         }
-        modifiedAt = at
     }
 
     /// Everything one favorite brought in, gone with it.

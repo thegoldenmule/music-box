@@ -407,6 +407,44 @@ final class KidPlayerModel {
         save()
     }
 
+    /// Re-judges **what is playing right now**, the moment the policy changes.
+    ///
+    /// ``revalidate()`` is the launch-time pass and deliberately refuses to run
+    /// on a live player — `status == .stopped, !hasStartedCurrent`. The queued
+    /// entry is covered by ``pollQueuedItem()`` on every watchdog tick. Between
+    /// them they left one hole, and it was the obvious one: a parent who denies
+    /// the song their child is playing, and watches it play to the end. That was
+    /// true on one device with nothing synced, and it is where a deny arriving
+    /// from another parent's phone will land.
+    ///
+    /// Synchronous verdict, for the same reason ``pollQueuedItem()`` uses it: a
+    /// queued entry carries its ancestry, so this is an indexed lookup rather
+    /// than a round trip, and it can run on a parent's keystroke.
+    ///
+    /// **An unjudgeable answer leaves the track alone.** `.unknown` means the
+    /// ancestry is not there to judge with, not that anything is wrong — the
+    /// track was judged properly when it started, and stopping a child's music
+    /// because a lineage went missing is the wrong direction to fail in here.
+    /// The narrow case this must catch is a verdict that *changed*.
+    func revalidatePlaying() async {
+        // The entry behind this one is polled on a tick that only runs while the
+        // watchdog does, so a paused player would keep a now-denied song queued.
+        pollQueuedItem()
+
+        guard queue.indices.contains(index) else { return }
+        let entry = queue[index]
+        guard case .blocked(let reason) = session.queuedVerdict(for: entry.item) else { return }
+
+        // Silence first, for the reason ``adoptHandover()`` gives: everything
+        // else here can wait a turn, a denied song coming out of the speaker
+        // cannot, and letting `skip()` replace the queue would leave it playing
+        // for as long as the next track takes to load.
+        try? await session.player.pause()
+        session.refuseAdopted(entry.item, reason: reason, origin: entry.origin)
+        message = nil
+        await skip()
+    }
+
     /// Writes the queue down, or clears it when there is nothing to come back to.
     ///
     /// Fire-and-forget in the ``EventLog`` sense — no failure is surfaced,
