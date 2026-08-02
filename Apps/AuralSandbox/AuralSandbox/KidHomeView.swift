@@ -88,7 +88,7 @@ struct KidHomeView: View {
         _player = State(initialValue: KidPlayerModel(session: session))
     }
 
-    private var canSearch: Bool { session.kid.mode != .allowOnly }
+    private var canSearch: Bool { session.kid.effectiveMode != .allowOnly }
 
     /// Whether the home screen is what is underneath — as opposed to a search,
     /// running or finished. Reloading recents out from under a set of results
@@ -517,7 +517,7 @@ struct KidHomeView: View {
         } else if isHomeEmpty {
             ContentUnavailableView {
                 Label(
-                    session.kid.mode == .allowOnly
+                    session.kid.effectiveMode == .allowOnly
                         ? "Nothing here yet"
                         : "Pick something to listen to",
                     systemImage: "music.note.list"

@@ -61,6 +61,33 @@ public final class PolicyEntryRecord {
     /// because it exists nowhere else once the row is written.
     public private(set) var originatingDeviceID: UUID?
 
+    /// When this row was last **asserted**, if it has been re-added since it was
+    /// first created. `.distantPast` on every row that has only ever been added
+    /// once, which is why ``assertion`` reads through to ``addedAt``.
+    ///
+    /// Two columns rather than one mutable `addedAt` because `addedAt` is what
+    /// the admin shows a parent — *"you added this on Tuesday"* — and a re-add
+    /// after a retraction should not rewrite that sentence.
+    public private(set) var assertedAt: Date = Date.distantPast
+
+    /// When this row was **withdrawn**, or `nil` while it stands.
+    ///
+    /// **Removal is a retraction, not a delete, and that is the whole
+    /// mechanism.** Two parents editing one list offline produce independent
+    /// field changes on independent rows; nothing is co-written, every device
+    /// computes the same live set from the same timestamps, and there is
+    /// nothing to arbitrate. Last-write-wins over a whole list — the thing the
+    /// spec forbids outright — never comes up, because there is no list-shaped
+    /// value to write.
+    ///
+    /// It is also the only tombstone available. A deleted row leaves nothing to
+    /// enumerate, so a delete can never be exported and a co-parent's device
+    /// keeps the entry forever.
+    ///
+    /// `nil` is the default and the truthful value for every row that predates
+    /// the column: nothing had been retracted, because nothing could be.
+    public private(set) var retractedAt: Date?
+
     public var kid: Kid?
 
     public init(
@@ -121,13 +148,69 @@ public final class PolicyEntryRecord {
 
     /// The typed entry, or `nil` if the stored strings do not make one.
     ///
-    /// See ``Kid/buildPolicy(unreadableEntriesAs:)`` for what happens to a row
-    /// that lands here — the answer is deliberately not "skip it".
+    /// See ``Kid/buildPolicy()`` for what happens to a row that lands here —
+    /// the answer is deliberately not "skip it".
     public var entry: PolicyEntry? {
         guard
             let kind = PolicyEntry.Kind(rawValue: kind),
             let itemKind = ItemKind(rawValue: itemKind)
         else { return nil }
         return PolicyEntry(kind: kind, id: CatalogID(itemKind, catalogID))
+    }
+
+    // MARK: - Standing
+
+    /// How far apart two device clocks are assumed to be able to drift.
+    ///
+    /// Inside this window an assert and a retract are **too close to call**.
+    /// Neither device is wrong; they simply do not agree what "after" means, and
+    /// picking the later timestamp is picking whichever device's clock ran fast.
+    public static let clockSkewWindow: TimeInterval = 120
+
+    /// The moment this row was last claimed to stand.
+    ///
+    /// Reads through to ``addedAt`` for a row that has never been re-asserted,
+    /// which is what lets the columns above default to `.distantPast` and `nil`
+    /// and still be right about every row written before they existed.
+    public var assertion: Date { max(assertedAt, addedAt) }
+
+    /// Whether this row is part of the policy right now.
+    ///
+    /// **Fails closed inside the skew window, and the asymmetry is the point.**
+    /// When an assert and a retract land within ``clockSkewWindow`` of each
+    /// other, a **deny stands** and an **allow does not**. A phantom deny hides
+    /// one item a parent meant to allow: visible on the screen they are already
+    /// looking at, and fixable in one tap. A deny that loses a coin-toss against
+    /// a stale retraction silently un-blocks something a parent explicitly
+    /// refused, and nothing on any screen says so.
+    ///
+    /// It is the same direction `buildPolicy()` takes on an unreadable row and
+    /// the same one `UnratedBehavior.block` takes on a missing rating — one
+    /// level up, and for the same reason.
+    public var isLive: Bool {
+        guard let retractedAt else { return true }
+        let interval = assertion.timeIntervalSince(retractedAt)
+        guard abs(interval) >= Self.clockSkewWindow else {
+            return kind == PolicyEntry.Kind.deny.rawValue
+        }
+        return interval > 0
+    }
+
+    /// Withdraws the row without destroying it. See ``retractedAt``.
+    public func retract(at: Date = .now) {
+        retractedAt = at
+        modifiedAt = at
+    }
+
+    /// Puts a retracted row back.
+    ///
+    /// **Does not clear ``retractedAt``**, deliberately. Both timestamps only
+    /// ever move forward, so the comparison in ``isLive`` decides — and a device
+    /// that has not yet seen the retraction cannot resurrect the row merely by
+    /// having an older copy with no retraction on it. Clearing the column would
+    /// throw away the fact the merge needs.
+    public func reassert(at: Date = .now) {
+        assertedAt = at
+        modifiedAt = at
     }
 }

@@ -158,16 +158,171 @@ struct Entries {
         #expect(kid.modifiedAt == Fix.t1)
     }
 
-    @Test("Removing an entry takes it off the policy")
+    /// Removal is a **retraction**, not a delete: the row stays as the tombstone
+    /// that lets the withdrawal reach another device, and `buildPolicy()` is
+    /// what leaves it out of the policy. See `PolicyEntryRecord.retractedAt`.
+    @Test("Removing an entry takes it off the policy and leaves the tombstone")
     func removing() throws {
         let context = try newStore()
         let kid = insertKid(context)
-        let record = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band")
+        let record = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t0)
         kid.removeEntry(record, at: Fix.t1)
 
-        #expect(kid.entries.isEmpty)
+        #expect(kid.entries.count == 1)
+        #expect(kid.liveEntries.isEmpty)
+        #expect(record.isLive == false)
         #expect(kid.buildPolicy().policy.entries.isEmpty)
         #expect(kid.modifiedAt == Fix.t1)
+    }
+
+    /// Re-adding what was withdrawn lands on the same row rather than a second
+    /// one. Two rows sharing a natural key is how a retraction gets lost: the
+    /// screen shows one entry either way, and withdrawing it leaves the twin.
+    @Test("Re-adding a withdrawn entry revives the row it withdrew")
+    func reAddingRevives() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let record = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t0)
+        kid.removeEntry(record, at: Fix.t1)
+
+        let again = kid.addEntry(
+            kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t1 + 3600)
+
+        #expect(again.id == record.id)
+        #expect(kid.entries.count == 1)
+        #expect(kid.buildPolicy().policy.entries.count == 1)
+        // The sentence the admin shows a parent does not move.
+        #expect(record.addedAt == Fix.t0)
+    }
+}
+
+// MARK: -
+
+@Suite("A withdrawal racing an assertion")
+@MainActor
+struct RetractionSkew {
+    /// Two devices, two clocks, and no agreement about which came first. Taking
+    /// the later timestamp is taking whichever device ran fast, so inside the
+    /// window the answer is chosen by consequence instead: a **deny stands**.
+    /// A phantom deny hides one item, visibly and fixably. A deny that loses a
+    /// coin toss silently unblocks something a parent refused.
+    @Test("Inside the skew window a deny stands")
+    func denyStandsInsideWindow() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let record = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t0)
+
+        record.retract(at: Fix.t0 + PolicyEntryRecord.clockSkewWindow / 2)
+
+        #expect(record.isLive)
+        #expect(kid.buildPolicy().policy.entries.count == 1)
+    }
+
+    @Test("Inside the skew window an allow does not")
+    func allowFallsInsideWindow() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let record = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
+
+        record.retract(at: Fix.t0 + PolicyEntryRecord.clockSkewWindow / 2)
+
+        #expect(record.isLive == false)
+        #expect(kid.buildPolicy().policy.entries.isEmpty)
+    }
+
+    /// Outside the window the clocks are trusted and the later fact wins,
+    /// whichever kind it is.
+    @Test("Outside the window the later fact wins, either way")
+    func outsideWindowTimestampsDecide() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let beyond = PolicyEntryRecord.clockSkewWindow * 2
+
+        let denied = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t0)
+        denied.retract(at: Fix.t0 + beyond)
+        #expect(denied.isLive == false)
+
+        let allowed = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
+        allowed.retract(at: Fix.t0 + beyond)
+        allowed.reassert(at: Fix.t0 + beyond * 2)
+        #expect(allowed.isLive)
+    }
+
+    /// A device that has not seen the retraction cannot resurrect the row just
+    /// by holding an older copy — `reassert` leaves `retractedAt` in place so
+    /// the comparison, not the absence, decides.
+    @Test("Re-asserting keeps the retraction on the record")
+    func reassertKeepsTheRetraction() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let record = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
+        let beyond = PolicyEntryRecord.clockSkewWindow * 2
+
+        record.retract(at: Fix.t0 + beyond)
+        record.reassert(at: Fix.t0 + beyond * 2)
+
+        #expect(record.retractedAt != nil)
+        #expect(record.isLive)
+    }
+
+    /// The default for a row written before the column existed. `nil` means
+    /// nothing was ever withdrawn, which is true of every one of them.
+    @Test("A row that was never withdrawn is live")
+    func neverWithdrawnIsLive() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let record = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
+
+        #expect(record.retractedAt == nil)
+        #expect(record.isLive)
+    }
+}
+
+// MARK: -
+
+@Suite("Two parents, one list, both offline")
+@MainActor
+struct OfflineListMerge {
+    /// **The exit test the spec names**, at the level this store can express it:
+    /// two parents edit the same list while offline, both reconnect, and neither
+    /// one's work is lost. There is no list-shaped value anywhere — only
+    /// independent rows carrying independent timestamps — so the result is the
+    /// same whichever order the changes arrive in, and nothing has to arbitrate.
+    @Test("Independent edits all survive, from either arrival order")
+    func bothParentsEditsSurvive() throws {
+        let beyond = PolicyEntryRecord.clockSkewWindow * 2
+
+        // Parent A denies artist X and withdraws the allow on album Y.
+        // Parent B allows album Z and withdraws the same allow on album Y.
+        func applyA(_ kid: Kid, y: PolicyEntryRecord) {
+            kid.addEntry(kind: .deny, id: Fix.artist, displayName: "X", at: Fix.t0 + beyond)
+            kid.removeEntry(y, at: Fix.t0 + beyond)
+        }
+        func applyB(_ kid: Kid, y: PolicyEntryRecord) {
+            kid.addEntry(kind: .allow, id: Fix.song, displayName: "Z", at: Fix.t0 + beyond)
+            kid.removeEntry(y, at: Fix.t0 + beyond)
+        }
+
+        for order in [0, 1] {
+            let context = try newStore()
+            let kid = insertKid(context, mode: .denyPlusAuto)
+            let y = kid.addEntry(kind: .allow, id: Fix.album, displayName: "Y", at: Fix.t0)
+
+            if order == 0 {
+                applyA(kid, y: y)
+                applyB(kid, y: y)
+            } else {
+                applyB(kid, y: y)
+                applyA(kid, y: y)
+            }
+
+            let entries = kid.buildPolicy().policy.entries
+            #expect(entries.contains(.deny(Fix.artist)))
+            #expect(entries.contains(.allow(Fix.song)))
+            // Withdrawn by both. Doing it twice is doing it once.
+            #expect(entries.contains(.allow(Fix.album)) == false)
+            #expect(entries.count == 2)
+        }
     }
 }
 

@@ -171,12 +171,20 @@ struct ChoosingTheActiveKid {
 @Suite("Removing a policy entry")
 @MainActor
 struct RemovingAPolicyEntry {
-    /// `removeAll()` on a relationship nulls the inverse and leaves the row on
-    /// disk. Every query here is `kid?.id == kidID`, so the orphan is invisible
-    /// — a parent watches the deny disappear while it goes on being a deny for
-    /// nobody. This returned one row before the fix.
-    @Test("The row leaves the store, not just the relationship")
-    func removalDeletes() throws {
+    /// This one moved twice and both moves are worth keeping.
+    ///
+    /// It began as `removeAll()` on the relationship alone, which nulls the
+    /// inverse and leaves the row where no query can reach it — every query here
+    /// is `kid?.id == kidID` — so a parent watched the deny disappear while it
+    /// went on being a deny for nobody. That was fixed by deleting through the
+    /// context, which is right for one writer and wrong for two: **a deleted row
+    /// leaves nothing to enumerate**, so the removal can never be exported and a
+    /// co-parent's device keeps the entry forever.
+    ///
+    /// So it is a retraction. The row stays, reachable by every query, and it is
+    /// `buildPolicy()` that leaves it out.
+    @Test("The row stays as a tombstone and leaves the policy")
+    func removalRetracts() throws {
         let context = try newStore()
         let family = insertFamily(context, kids: ["Ada"])
         let kid = try #require(family.kids.first)
@@ -185,10 +193,16 @@ struct RemovingAPolicyEntry {
         try context.save()
         #expect(try context.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
 
-        kid.removeEntry(record, at: Fix.t0)
+        kid.removeEntry(record, at: Fix.t0 + PolicyEntryRecord.clockSkewWindow * 2)
         try context.save()
 
-        #expect(kid.entries.isEmpty)
-        #expect(try context.fetch(FetchDescriptor<PolicyEntryRecord>()).isEmpty)
+        // Still on disk and still attached — that is the tombstone, and it is
+        // the only thing that can carry the withdrawal to another device.
+        #expect(kid.entries.count == 1)
+        #expect(try context.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
+
+        // And out of the policy, which is what a parent asked for.
+        #expect(kid.liveEntries.isEmpty)
+        #expect(kid.buildPolicy().policy.entries.isEmpty)
     }
 }

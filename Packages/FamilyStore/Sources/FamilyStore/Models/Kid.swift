@@ -23,6 +23,25 @@ public final class Kid {
     /// row ever falls back to them. They are the *most restrictive* values
     /// rather than the recommended ones, so that if one ever were consulted it
     /// would fail closed.
+    /// **A cache, and never the authority. Do not read these.**
+    ///
+    /// ``effectiveMode`` and ``effectiveUnratedBehavior`` are the answer;
+    /// `SandboxSettingRecord` is where the decision lives. These two columns
+    /// remain for exactly two reasons, and neither is "convenience":
+    ///
+    /// 1. They are the answer for a store written before decisions existed,
+    ///    where the column *was* the decision. That is what let those fields
+    ///    move without a custom migration over a family's live curation.
+    /// 2. A build that predates the decision table still reads them, so
+    ///    refreshing them on every write keeps two versions in one household
+    ///    agreeing rather than diverging.
+    ///
+    /// Reading them directly is a bug that will not show up on one device: a
+    /// decision arriving from another device writes a row, and this copy goes
+    /// stale until something happens to touch it.
+    ///
+    /// They cannot be renamed to something that says so — a column rename is a
+    /// migration, and these carry every existing family's sandbox level.
     public private(set) var mode: SandboxMode = SandboxMode.allowOnly
     public private(set) var unratedBehavior: UnratedBehavior = UnratedBehavior.block
 
@@ -49,6 +68,14 @@ public final class Kid {
 
     @Relationship(deleteRule: .cascade, inverse: \PolicyEntryRecord.kid)
     public private(set) var entries: [PolicyEntryRecord] = []
+
+    /// Every decision anyone has made about how wide this child's sandbox is.
+    ///
+    /// Append-only, and the authority for ``effectiveMode`` and
+    /// ``effectiveUnratedBehavior``. Empty on every store that predates the
+    /// table, which is what makes the cached columns the answer there.
+    @Relationship(deleteRule: .cascade, inverse: \SandboxSettingRecord.kid)
+    public private(set) var sandboxSettings: [SandboxSettingRecord] = []
 
     /// What a parent has put in front of this kid.
     ///
@@ -126,14 +153,112 @@ public final class Kid {
         modifiedAt = at
     }
 
-    public func setMode(_ newMode: SandboxMode, at: Date = .now) {
+    /// Records a decision about the sandbox level, **and** refreshes the cache.
+    ///
+    /// Both halves matter. The decision row is the authority and is what stops a
+    /// concurrent rename from swallowing a tightening; the column keeps every
+    /// existing reader working and is what a store with no decision rows falls
+    /// back to. Nothing may read `mode` directly — use ``effectiveMode``.
+    public func setMode(
+        _ newMode: SandboxMode,
+        decidedByGrownUpID: UUID? = nil,
+        decidedByAccountRecordName: String? = nil,
+        originatingDeviceID: UUID? = nil,
+        at: Date = .now
+    ) {
+        decide(
+            .mode,
+            rawValue: newMode.rawValue,
+            decidedByGrownUpID: decidedByGrownUpID,
+            decidedByAccountRecordName: decidedByAccountRecordName,
+            originatingDeviceID: originatingDeviceID,
+            at: at
+        )
         mode = newMode
         modifiedAt = at
     }
 
-    public func setUnratedBehavior(_ behavior: UnratedBehavior, at: Date = .now) {
+    public func setUnratedBehavior(
+        _ behavior: UnratedBehavior,
+        decidedByGrownUpID: UUID? = nil,
+        decidedByAccountRecordName: String? = nil,
+        originatingDeviceID: UUID? = nil,
+        at: Date = .now
+    ) {
+        decide(
+            .unratedBehavior,
+            rawValue: behavior.rawValue,
+            decidedByGrownUpID: decidedByGrownUpID,
+            decidedByAccountRecordName: decidedByAccountRecordName,
+            originatingDeviceID: originatingDeviceID,
+            at: at
+        )
         unratedBehavior = behavior
         modifiedAt = at
+    }
+
+    private func decide(
+        _ key: SandboxSettingKey,
+        rawValue: String,
+        decidedByGrownUpID: UUID?,
+        decidedByAccountRecordName: String?,
+        originatingDeviceID: UUID?,
+        at: Date
+    ) {
+        attach(
+            SandboxSettingRecord(
+                key: key,
+                rawValue: rawValue,
+                decidedByAccountRecordName: decidedByAccountRecordName,
+                decidedByGrownUpID: decidedByGrownUpID,
+                originatingDeviceID: originatingDeviceID,
+                at: at
+            )
+        )
+    }
+
+    /// Attaches a decision built elsewhere.
+    ///
+    /// Internal because the supported way to make one is ``setMode(_:decidedByGrownUpID:decidedByAccountRecordName:originatingDeviceID:at:)``,
+    /// which also refreshes the cache. The caller that needs this is a test
+    /// writing a raw value *this build cannot read* — which is the case the
+    /// resolution rule has to be right about and which no public API can
+    /// produce.
+    func attach(_ record: SandboxSettingRecord) {
+        sandboxSettings.append(record)
+        record.kid = self
+    }
+
+    // MARK: - What is actually in force
+
+    /// The sandbox level in force, resolved from the decisions.
+    ///
+    /// **The only thing that may decide what a child can reach.** Falls back to
+    /// the cached ``mode`` column when there are no readable decisions — which
+    /// is every store written before decisions existed, and is the right answer
+    /// for one: the column *was* the decision there.
+    ///
+    /// That fallback is also why this change needed no migration. The old column
+    /// is still the source of truth for old data, so nothing had to be rewritten
+    /// and no schema version had to be frozen.
+    public var effectiveMode: SandboxMode {
+        SandboxSettingResolution.resolve(
+            sandboxSettings,
+            key: .mode,
+            parse: SandboxMode.init(rawValue:),
+            narrower: SandboxSettingResolution.narrower
+        ) ?? mode
+    }
+
+    /// What an unrated item is treated as, resolved from the decisions.
+    /// See ``effectiveMode``.
+    public var effectiveUnratedBehavior: UnratedBehavior {
+        SandboxSettingResolution.resolve(
+            sandboxSettings,
+            key: .unratedBehavior,
+            parse: UnratedBehavior.init(rawValue:),
+            narrower: SandboxSettingResolution.narrower
+        ) ?? unratedBehavior
     }
 
     // MARK: - Lists
@@ -152,6 +277,22 @@ public final class Kid {
         addedByName: String? = nil,
         at: Date = .now
     ) -> PolicyEntryRecord {
+        // **Re-asserts rather than duplicating.** (kind, itemKind, catalogID) is
+        // this row's natural key, and adding the same thing twice — a parent
+        // re-denying an artist they denied and then withdrew, or two parents
+        // denying the same one — has to land on one row. Two rows with one key
+        // is how a retraction gets lost: withdrawing "the" deny leaves its twin
+        // standing, and the screen shows one entry either way.
+        if let existing = entries.first(where: {
+            $0.kind == kind.rawValue
+                && $0.itemKind == catalogID.kind.rawValue
+                && $0.catalogID == catalogID.rawValue
+        }) {
+            existing.reassert(at: at)
+            modifiedAt = at
+            return existing
+        }
+
         let record = PolicyEntryRecord(
             kind: kind,
             catalogID: catalogID,
@@ -171,23 +312,31 @@ public final class Kid {
         modifiedAt = at
     }
 
-    /// Takes a row off the list, and **off the disk**.
+    /// Takes a row off the list by **retracting** it, not by deleting it.
     ///
-    /// `removeAll()` alone nulls the inverse and leaves the row where no query
-    /// can reach it — every query here is `kid?.id == kidID` — so a parent who
-    /// removed a deny would watch it vanish from the screen while it went on
-    /// being a deny for nobody. The same shape as ``removeSuggestion(_:at:)``,
-    /// and for the same reason; this one was the straggler.
+    /// This replaces a delete, and the reasoning is worth keeping because it
+    /// moved twice. Originally this was `entries.removeAll { }` alone, which
+    /// nulls the inverse and leaves the row where no query can reach it — every
+    /// query here is `kid?.id == kidID` — so a parent who removed a deny watched
+    /// it vanish from the screen while it went on being a deny for nobody. The
+    /// fix for that was to delete through the context, and that was right for a
+    /// store with one writer.
     ///
-    /// The asymmetry worth naming: an orphaned *deny* is the harmless half. It
-    /// is an orphaned **allow** that matters, because a level-1 kid whose allow
-    /// row is unreachable loses reach a parent believes they granted. Deleting
-    /// covers both without having to decide which this was.
+    /// It is wrong for a store with two. **A deleted row leaves nothing to
+    /// enumerate**, so the removal can never be exported, and a co-parent's
+    /// device keeps the entry forever. The retraction *is* the tombstone, and it
+    /// is what makes two parents editing one list offline resolve without
+    /// arbitration — see ``PolicyEntryRecord/retractedAt``.
+    ///
+    /// The row stays attached to the kid, so it is visible to every query and to
+    /// the admin; ``buildPolicy()`` is what filters it out of the policy.
     public func removeEntry(_ record: PolicyEntryRecord, at: Date = .now) {
-        delete([record])
-        entries.removeAll { $0.id == record.id }
+        record.retract(at: at)
         modifiedAt = at
     }
+
+    /// Every entry that is currently part of the policy.
+    public var liveEntries: [PolicyEntryRecord] { entries.filter(\.isLive) }
 
     // MARK: - Suggestions
     //

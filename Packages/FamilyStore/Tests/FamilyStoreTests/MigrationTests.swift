@@ -86,11 +86,18 @@ struct Migration {
 
         // The two fields that decide what a child can reach. Asserted by value,
         // not by presence: a migration that quietly defaults these widens a
-        // sandbox with nothing on screen to say so. They are also exactly the
-        // two the *next* version has to move onto their own record, which is
-        // why that one gets a custom stage and this one does not.
+        // sandbox with nothing on screen to say so.
+        //
+        // They have since moved onto `SandboxSettingRecord`, and this store has
+        // no decision rows because the table did not exist when it was written
+        // — so the columns are the answer, and `effectiveMode` has to agree with
+        // them. That agreement is exactly what let the move be additive instead
+        // of a custom stage over a family's live curation.
         #expect(kid.mode == .allowOnly)
         #expect(kid.unratedBehavior == .block)
+        #expect(kid.sandboxSettings.isEmpty)
+        #expect(kid.effectiveMode == .allowOnly)
+        #expect(kid.effectiveUnratedBehavior == .block)
 
         // Curation — the irreplaceable half.
         #expect(kid.entries.count == 2)
@@ -195,7 +202,7 @@ struct SchemaVersionShape {
     @Test("V2 is the current version and covers every model")
     func versionIsWhatItSays() {
         #expect(FamilySchemaV2.versionIdentifier == Schema.Version(2, 0, 0))
-        #expect(FamilySchemaV2.models.count == 21)
+        #expect(FamilySchemaV2.models.count == 22)
         #expect(FamilyStore.schema.entities.count == FamilySchemaV2.models.count)
     }
 

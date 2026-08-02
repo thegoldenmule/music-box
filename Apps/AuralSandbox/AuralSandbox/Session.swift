@@ -1072,7 +1072,7 @@ final class Session {
     /// all three of its fetches together — a branch in the caller would have to
     /// be resolved before any of them began.
     func grownUpItems() async throws -> [CatalogItem] {
-        kid.mode == .allowOnly ? try await allowListItems() : []
+        kid.effectiveMode == .allowOnly ? try await allowListItems() : []
     }
 
     /// What each grown-up picked out, one shelf per adult.
@@ -1861,9 +1861,9 @@ final class Session {
         }
         let hypothetical = PolicyEngine(
             policy: Policy(
-                mode: kid.mode,
+                mode: kid.effectiveMode,
                 entries: entries,
-                unratedBehavior: kid.unratedBehavior
+                unratedBehavior: kid.effectiveUnratedBehavior
             )
         )
         let playable = tracks.filter { hypothetical.evaluate($0.policyItem).isAllowed }.count

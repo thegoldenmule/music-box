@@ -203,7 +203,7 @@ struct AdminView: View {
         } footer: {
             // The spec is explicit that level 2 copy must never imply the
             // explicit tag covers themes. It covers lyrics, and only lyrics.
-            Text(explanation(for: session.kid.mode))
+            Text(explanation(for: session.kid.effectiveMode))
         }
     }
 
@@ -358,11 +358,11 @@ struct AdminView: View {
     // MARK: -
 
     private var modeBinding: Binding<SandboxMode> {
-        Binding(get: { session.kid.mode }, set: { session.setMode($0) })
+        Binding(get: { session.kid.effectiveMode }, set: { session.setMode($0) })
     }
 
     private var unratedBinding: Binding<UnratedBehavior> {
-        Binding(get: { session.kid.unratedBehavior }, set: { session.setUnratedBehavior($0) })
+        Binding(get: { session.kid.effectiveUnratedBehavior }, set: { session.setUnratedBehavior($0) })
     }
 
     /// Each switch writes both answers, because the stored value is derived from

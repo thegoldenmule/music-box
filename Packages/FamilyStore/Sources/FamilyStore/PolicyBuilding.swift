@@ -76,7 +76,13 @@ extension Kid {
         var unreadable: [UUID] = []
         var unreadableSuggestions: [UUID] = []
 
-        for record in entries {
+        // **Retracted rows are not part of the policy, and are still here.** A
+        // removal is a tombstone rather than a delete — see
+        // `PolicyEntryRecord.retractedAt` — so the filtering happens on read.
+        // The skew rule inside `isLive` is what makes a deny and a withdrawal
+        // that arrive from two devices at nearly the same moment resolve in the
+        // direction that hides an item rather than the one that unblocks it.
+        for record in entries where record.isLive {
             if let entry = record.entry {
                 built.append(entry)
                 continue
@@ -106,9 +112,15 @@ extension Kid {
 
         return PolicyBuild(
             policy: Policy(
-                mode: mode,
+                // Resolved from the decision rows, falling back to the cached
+                // columns — never the columns directly. See
+                // ``Kid/effectiveMode``. The invariant the spec states is that
+                // no default is substituted at evaluation time, and that still
+                // holds: the fallback is the value a parent actually set, not a
+                // constant.
+                mode: effectiveMode,
                 entries: built,
-                unratedBehavior: unratedBehavior
+                unratedBehavior: effectiveUnratedBehavior
             ),
             unreadableEntryIDs: unreadable,
             unreadableSuggestionIDs: unreadableSuggestions

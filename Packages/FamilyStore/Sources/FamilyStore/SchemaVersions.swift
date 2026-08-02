@@ -119,6 +119,11 @@ public enum FamilySchemaV2: VersionedSchema {
 
             // MARK: - Added for multiple adults and bound devices
 
+            // The two fields that decide what a child can reach, moved off the
+            // record a rename also touches. `Kid.mode` and
+            // `Kid.unratedBehavior` stay as a cache, which is what makes this
+            // additive instead of a custom migration.
+            SandboxSettingRecord.self,
             // Where "kid profiles tied to devices" lands. There was nowhere for
             // it to go: the active kid was `family.kids.first` on an unordered
             // relationship and the choice was never persisted at all.
@@ -160,6 +165,7 @@ public enum SyncCoverage {
             Kid.self,
             GrownUp.self,
             PolicyEntryRecord.self,
+            SandboxSettingRecord.self,
             SuggestionRecord.self,
             SuggestionEntryRecord.self,
             FavoriteRecord.self,
