@@ -32,9 +32,10 @@ public enum FamilyStore {
     public static func container(at url: URL? = nil) throws -> ModelContainer {
         let configuration =
             if let url {
-                ModelConfiguration(schema: schema, url: url)
+                ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)
             } else {
-                ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+                ModelConfiguration(
+                    schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
             }
         return try ModelContainer(for: schema, configurations: configuration)
     }
@@ -43,9 +44,49 @@ public enum FamilyStore {
     public static func inMemoryContainer() throws -> ModelContainer {
         try ModelContainer(
             for: schema,
-            configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(
+                schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         )
     }
+
+    /// **`cloudKitDatabase: .none` is not a formality, and omitting it was a
+    /// real bug.**
+    ///
+    /// The parameter defaults to `.automatic`, and `.automatic` does not mean
+    /// *off* — it means *on if the app is entitled*. So this store was
+    /// unmirrored only for as long as the app had no iCloud entitlement, and
+    /// the moment one was added SwiftData turned mirroring on by itself.
+    ///
+    /// It did not fail quietly, which is the one mercy. The store stopped
+    /// opening at all:
+    ///
+    /// ```text
+    /// NSCocoaErrorDomain 134060
+    /// CloudKit integration requires that all relationships be optional,
+    /// the following are not: Family: kids, Kid: entries, …
+    /// ```
+    ///
+    /// Two things worth keeping from that.
+    ///
+    /// **The whole sync design rests on this store never being mirrored** — no
+    /// local-to-mirrored migration, our own record names, our own conflict
+    /// rules. That premise was being held up by an accident of provisioning
+    /// rather than by anything in the code. Now it is explicit.
+    ///
+    /// **And if mirroring is ever wanted, sixteen relationships stand in the
+    /// way.** Every to-many is non-optional: `Family.kids`, `Kid.entries`, and
+    /// so on down. CloudKit requires those optional too, not just their
+    /// inverses — which is the half already done and the half `CLAUDE.md`
+    /// describes as finished. Changing them is a schema change, so it is
+    /// cheap now and a migration later; it is deliberately **not** done here,
+    /// because nothing wants mirroring and paying for it would be paying for a
+    /// path this design has already decided against.
+    public static let mirroringNote = """
+        cloudKitDatabase is .none explicitly. The default is .automatic, which \
+        enables mirroring as soon as the app carries an iCloud entitlement — \
+        and sixteen to-many relationships are non-optional, which mirroring \
+        rejects outright.
+        """
 
     /// **The custom-zone requirement, and what is actually true today.**
     ///

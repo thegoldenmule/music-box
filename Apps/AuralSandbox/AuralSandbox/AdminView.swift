@@ -43,6 +43,9 @@ struct AdminView: View {
 
             Section {
                 NavigationLink("Diagnostics") { SearchView(session: session) }
+                // Throwaway, and meant to be deleted once the answers are
+                // written down — see CloudKitProbeView.
+                NavigationLink("CloudKit probes") { CloudKitProbeView() }
             } footer: {
                 Text(
                     "Unfiltered counts and reasons, for answering the questions the specs still list as open. Nothing here belongs on the kid's side."

@@ -24,7 +24,13 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
-	<key>aps-environment</key>
+	<!-- **`com.apple.developer.aps-environment`, not `aps-environment`.** The
+	     unprefixed key is iOS-only; on macOS it is inert, and the symptom of
+	     getting it wrong is not a build failure but a Mac that never receives a
+	     CloudKit change notification — a parent's deny arriving whenever the app
+	     next asks instead of in seconds. Exactly the shape of silent
+	     misconfiguration this project has been bitten by twice before. -->
+	<key>com.apple.developer.aps-environment</key>
 	<string>development</string>
 </dict>
 </plist>
