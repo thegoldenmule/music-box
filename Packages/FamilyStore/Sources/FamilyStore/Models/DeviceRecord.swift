@@ -196,3 +196,43 @@ public final class DeviceRecord {
         modifiedAt = at
     }
 }
+
+// MARK: - Absorbing a record another device wrote
+
+extension DeviceRecord {
+    func applySync(
+        familyID: UUID?,
+        label: String,
+        roleRaw: String?,
+        platformRaw: String?,
+        boundKidID: UUID?,
+        enrolledAccountRecordName: String?,
+        enrolledByGrownUpID: UUID?,
+        enrolledAt: Date?,
+        lastSeenAt: Date?,
+        revokedAt: Date?,
+        at: Date
+    ) {
+        if let familyID, self.familyID == nil { self.familyID = familyID }
+        self.label = label
+        if let roleRaw { self.roleRaw = roleRaw }
+        if let platformRaw { self.platformRaw = platformRaw }
+        self.boundKidID = boundKidID
+        if let enrolledAccountRecordName { self.enrolledAccountRecordName = enrolledAccountRecordName }
+        if let enrolledByGrownUpID, self.enrolledByGrownUpID == nil {
+            self.enrolledByGrownUpID = enrolledByGrownUpID
+        }
+        if let enrolledAt { self.enrolledAt = min(self.enrolledAt, enrolledAt) }
+        if let lastSeenAt { self.lastSeenAt = max(self.lastSeenAt, lastSeenAt) }
+
+        // **Sticky, and this is the one that matters most.** A revocation is a
+        // tombstone: a device that has not heard about it carries no
+        // `revokedAt`, and letting that absence clear one would be the device
+        // un-revoking itself — the same failure a delete would have had, one
+        // level up. Earliest wins, so the first revocation stands.
+        if let revokedAt {
+            self.revokedAt = min(self.revokedAt ?? .distantFuture, revokedAt)
+        }
+        modifiedAt = at
+    }
+}

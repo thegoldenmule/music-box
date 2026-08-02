@@ -506,3 +506,88 @@ extension PlaylistEntryRecord {
         (a.position, a.id.uuidString) < (b.position, b.id.uuidString)
     }
 }
+
+// MARK: - Absorbing a record another device wrote
+//
+// In this file so `private(set)` stays exactly as strict as it was, and
+// monotonic for the reason the others are: a caller handing `apply` a raw
+// remote copy must not be able to use an *absence* to undo something. See
+// ``SyncApply``.
+
+extension FavoriteRecord {
+    func applySync(
+        favoritedAt: Date?,
+        displayName: String,
+        artworkURL: URL?,
+        rawOrigin: String?,
+        ancestry: LibraryAncestry,
+        at: Date
+    ) {
+        // Earliest wins. A shelf ordered most-recent-first must not reshuffle
+        // because the same favorite was adopted again on another device.
+        if let favoritedAt { self.favoritedAt = min(self.favoritedAt, favoritedAt) }
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        // The precedence rule lives in one place and this is not it: a row the
+        // child chose never degrades, so an arriving `appleLibrary` or `parent`
+        // origin cannot overwrite `kid`.
+        if let rawOrigin, let incoming = LibraryOrigin(rawValue: rawOrigin),
+            self.libraryOrigin != .kid || incoming == .kid
+        {
+            self.origin = rawOrigin
+        }
+        if !ancestry.isEmpty { apply(ancestry) }
+        modifiedAt = at
+    }
+}
+
+extension PlaylistRecord {
+    func applySync(
+        name: String,
+        createdAt: Date?,
+        rawOrigin: String?,
+        appleLibraryID: String?,
+        appleIsOurs: Bool?,
+        at: Date
+    ) {
+        self.name = name
+        if let createdAt { self.createdAt = min(self.createdAt, createdAt) }
+        if let rawOrigin { self.origin = rawOrigin }
+        // Advance only: a device that has not seen the link carries nothing
+        // here, and that absence must not unlink a playlist from the account's
+        // own library.
+        if let appleLibraryID, self.appleLibraryID == nil { self.appleLibraryID = appleLibraryID }
+        if let appleIsOurs, appleIsOurs { self.appleIsOurs = true }
+        modifiedAt = at
+    }
+}
+
+extension PlaylistRecord {
+    /// Attaches a song built elsewhere. See ``SuggestionRecord/attach(_:)``.
+    func attach(_ record: PlaylistEntryRecord) {
+        entries.append(record)
+        record.playlist = self
+    }
+}
+
+extension PlaylistEntryRecord {
+    func applySync(
+        position: Int?,
+        addedAt: Date?,
+        displayName: String,
+        artworkURL: URL?,
+        rawOrigin: String?,
+        ancestry: LibraryAncestry,
+        at: Date
+    ) {
+        // Position is ordinary mutable state — a reorder is a real edit and the
+        // later one wins, which is what `newerRecord` already decided upstream.
+        if let position { self.position = position }
+        if let addedAt { self.addedAt = min(self.addedAt, addedAt) }
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        if let rawOrigin { self.origin = rawOrigin }
+        if !ancestry.isEmpty { apply(ancestry) }
+        modifiedAt = at
+    }
+}

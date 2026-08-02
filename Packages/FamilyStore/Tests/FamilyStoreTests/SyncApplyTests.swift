@@ -383,3 +383,137 @@ struct OutboxTests {
         #expect(never.contains("PendingDeletionRecord"))
     }
 }
+
+// MARK: -
+
+@Suite("Everything that can be sent can be received")
+@MainActor
+struct ApplyCoverage {
+    /// A model that encodes and does not apply is a kind of row that silently
+    /// never arrives — and the failure is invisible from the sending device,
+    /// which sees its own copy and no error. This is what makes it a build
+    /// failure instead.
+    @Test("The apply list and the encode list agree exactly")
+    func coverageMatches() {
+        #expect(SyncApply.applicableTypes == RecordMapper.encodableTypes)
+    }
+
+    /// Every declared type actually dispatches. A name in the set with no `case`
+    /// behind it would pass the test above and still never arrive.
+    @Test("Every declared type dispatches to something")
+    func everyTypeDispatches() throws {
+        let context = try newStore()
+        let target = SyncApply.Context(context)
+
+        for type in SyncApply.applicableTypes {
+            let empty = SyncedRecord(name: "x", type: type, fields: [:])
+            let outcome = SyncApply.apply(empty, in: target)
+            // An empty record cannot be placed, but it must fail as *deferred*
+            // rather than as an unknown type — which is what proves the case
+            // exists.
+            #expect(outcome != .unknownType(type), "no case for \(type)")
+        }
+    }
+}
+
+// MARK: -
+
+@Suite("The kid's own work crosses intact")
+@MainActor
+struct LibraryRoundTrip {
+    /// A playlist's natural key *is* its id, so an apply that minted a fresh one
+    /// would give the same playlist a second record name and put a duplicate on
+    /// the server. The songs land under it in order.
+    @Test("A playlist and its songs cross with their identity intact")
+    func playlistCrosses() throws {
+        let (a, b) = try twoDevices()
+        let (family, kid) = seedFamily(a)
+        let playlist = kid.addPlaylist(named: "Car songs", at: t0)
+        playlist.addSong(id: CatalogID(.song, "one"), displayName: "One", at: at(10))
+        playlist.addSong(id: CatalogID(.song, "two"), displayName: "Two", at: at(20))
+        try a.save()
+
+        let target = SyncApply.Context(b)
+        for change in try Outbox.pending(since: .distantPast, in: a) {
+            guard case .upsert(let record) = change else { continue }
+            _ = SyncApply.apply(record, in: target)
+        }
+        try b.save()
+
+        let arrived = try #require(try b.fetch(FetchDescriptor<PlaylistRecord>()).first)
+        #expect(arrived.id == playlist.id)
+        #expect(arrived.syncRecordName == playlist.syncRecordName)
+        #expect(arrived.name == "Car songs")
+        #expect(arrived.row.entries.map(\.catalogID.rawValue) == ["one", "two"])
+        #expect(arrived.kid?.id == kid.id)
+        #expect(try b.fetch(FetchDescriptor<Family>()).first?.id == family.id)
+    }
+
+    /// The precedence rule lives in one place, and an arriving row must not be
+    /// where a second copy of it appears: a row the child chose never degrades
+    /// to one the account adopted.
+    @Test("An adopted favorite arriving cannot demote one the kid chose")
+    func kidOriginNeverDegrades() throws {
+        let context = try newStore()
+        let (_, kid) = seedFamily(context)
+        let mine = try #require(
+            kid.addFavorite(
+                id: CatalogID(.album, "album-A"), displayName: "A", origin: .kid, at: t0))
+
+        var incoming = mine.syncRecord()
+        incoming["origin"] = .string(LibraryOrigin.appleLibrary.rawValue)
+        incoming[Field.modifiedAt] = .date(at(600))
+        _ = SyncApply.apply(incoming, in: SyncApply.Context(context))
+
+        #expect(mine.libraryOrigin == .kid)
+    }
+
+    /// A dismissal withdraws an allow, so a device that has not seen the restore
+    /// must not be able to put the tile back by carrying no `restoredAt`.
+    @Test("A suggestion crosses with both halves of its dismissal")
+    func suggestionDismissalCrosses() throws {
+        let (a, b) = try twoDevices()
+        let (family, kid) = seedFamily(a)
+        let suggestion = kid.addSuggestion(
+            target: .catalog(CatalogID(.album, "album-A")), displayName: "An Album", at: t0)
+        suggestion.dismiss(at: at(600))
+        try a.save()
+
+        let target = SyncApply.Context(b)
+        _ = SyncApply.apply(family.syncRecord(), in: target)
+        _ = SyncApply.apply(kid.syncRecord(), in: target)
+        _ = SyncApply.apply(suggestion.syncRecord(), in: target)
+
+        let arrived = try #require(try b.fetch(FetchDescriptor<SuggestionRecord>()).first)
+        #expect(arrived.isDismissed)
+        #expect(arrived.allowedIDs.isEmpty)
+
+        // The parent re-offers it, and that crosses too.
+        kid.restoreSuggestion(suggestion, at: at(1200))
+        _ = SyncApply.apply(suggestion.syncRecord(), in: target)
+        #expect(arrived.isDismissed == false)
+
+        // And a stale copy taken before the restore cannot undo it.
+        var stale = suggestion.syncRecord()
+        stale[Field.restoredAt] = nil
+        _ = SyncApply.apply(stale, in: target)
+        #expect(arrived.isDismissed == false)
+    }
+
+    /// Revocation is a tombstone. A device that has not heard about it carries
+    /// no `revokedAt`, and that absence must never un-revoke.
+    @Test("A revocation crosses and cannot be undone by a stale copy")
+    func revocationCrosses() throws {
+        let context = try newStore()
+        let device = DeviceRecord(label: "Sam's iPad", role: .kidOnly, platform: .pad, at: t0)
+        context.insert(device)
+        let beforeRevoking = device.syncRecord()
+
+        device.revoke(at: at(600))
+        let target = SyncApply.Context(context)
+        _ = SyncApply.apply(beforeRevoking, in: target)
+
+        #expect(device.isRevoked)
+        #expect(device.revokedAt == at(600))
+    }
+}

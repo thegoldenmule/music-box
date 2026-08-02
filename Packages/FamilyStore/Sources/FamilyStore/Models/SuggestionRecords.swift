@@ -497,3 +497,78 @@ extension SuggestionRecord {
         (a.position, a.id.uuidString) > (b.position, b.id.uuidString)
     }
 }
+
+// MARK: - Absorbing a record another device wrote
+
+extension SuggestionRecord {
+    func applySync(
+        displayName: String,
+        subtitle: String?,
+        artworkURL: URL?,
+        note: String?,
+        addedBy: String?,
+        addedByName: String?,
+        position: Int?,
+        suggestedAt: Date?,
+        dismissedAt: Date?,
+        restoredAt: Date?,
+        sourcePlaylistID: UUID?,
+        at: Date
+    ) {
+        self.displayName = displayName
+        self.subtitle = subtitle
+        self.artworkURL = artworkURL
+        self.note = note
+        self.addedBy = addedBy
+        self.addedByName = addedByName
+        if let position { self.position = position }
+        if let suggestedAt { self.suggestedAt = suggestedAt }
+
+        // Advance only, both halves. A device that has not seen the dismissal
+        // carries none, and that absence must never read as "the kid never
+        // passed on this" — dismissal withdraws an allow.
+        if let dismissedAt, dismissedAt > (self.dismissedAt ?? .distantPast) {
+            self.dismissedAt = dismissedAt
+        }
+        if let restoredAt, restoredAt > (self.restoredAt ?? .distantPast) {
+            self.restoredAt = restoredAt
+        }
+
+        // Fills in for a row written before the column existed, and never
+        // rewrites one that has it — see ``target``, which reads through to
+        // `id` for exactly those rows.
+        if let sourcePlaylistID, self.sourcePlaylistID == nil {
+            self.sourcePlaylistID = sourcePlaylistID
+        }
+        modifiedAt = at
+    }
+}
+
+extension SuggestionRecord {
+    /// Attaches a resolved song built elsewhere. Internal: the supported way to
+    /// make one is ``addSong(id:displayName:artworkURL:ancestry:at:)``, and the
+    /// caller that needs this is `SyncApply` placing a row that arrived with its
+    /// own identifier.
+    func attach(_ record: SuggestionEntryRecord) {
+        entries.append(record)
+        record.suggestion = self
+    }
+}
+
+extension SuggestionEntryRecord {
+    func applySync(
+        position: Int?,
+        addedAt: Date?,
+        displayName: String,
+        artworkURL: URL?,
+        ancestry: LibraryAncestry,
+        at: Date
+    ) {
+        if let position { self.position = position }
+        if let addedAt { self.addedAt = min(self.addedAt, addedAt) }
+        self.displayName = displayName
+        self.artworkURL = artworkURL
+        if !ancestry.isEmpty { apply(ancestry) }
+        modifiedAt = at
+    }
+}
