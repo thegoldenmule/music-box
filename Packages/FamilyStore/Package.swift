@@ -20,6 +20,12 @@ let package = Package(
         .testTarget(
             name: "FamilyStoreTests",
             dependencies: ["FamilyStore", "PolicyEngine"],
+            // A real store file written by an older build. It is the only way to
+            // test a migration honestly: a fixture built from the *current*
+            // `@Model` classes has the current shape whatever schema version it
+            // is nominally written under, so it would pass by construction and
+            // prove nothing. See MigrationTests.
+            resources: [.copy("Fixtures")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

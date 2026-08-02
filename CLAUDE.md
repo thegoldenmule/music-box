@@ -259,24 +259,39 @@ reasoning that leans on it as suspect.
 
 What that means in practice:
 
-- The schema is **versioned**. `FamilySchemaV1` holds the model list and
-  `FamilyMigrationPlan` carries a store forward; `FamilyStore.container()` opens
-  through the plan. A version's `models` list is **frozen** once a store has
-  been written with it — new columns belong to a new version, and editing an
-  old one in place leaves both ends of a stage describing the same thing, which
-  is a migration plan that compiles, runs, and does nothing.
+- **A `VersionedSchema` names live types; it does not capture their shape.** So
+  the obvious way to write version history — a `FamilySchemaV1` whose `models`
+  lists `Kid.self` and friends — silently re-describes itself the moment one of
+  those classes changes. Adding a column to `Kid` makes V1 describe the new
+  shape under the old number, and both ends of a stage then describe the same
+  thing. This was tried and it fails hard rather than quietly: a real store from
+  the previous build would not open at all, with `NSCocoaErrorDomain 134504,
+  "Cannot use staged migration with an unknown model version."`
+- **Freezing a version means duplicating its `@Model` classes** into their own
+  namespace with the shape they had, and never touching them again. Sixteen
+  classes per frozen version. That is the bill, and it comes due at the first
+  custom stage.
+- **There is currently no migration plan, and that is a decision, not a gap.**
+  Everything added since the unversioned original is additive, and SwiftData
+  migrates that by inference. `FamilySchemaV2` is the current version and
+  `FamilyStore.container()` passes no plan. Do not add one without freezing the
+  preceding version first — a plan is strictly worse than none until you do.
 - **A migration may never drop a row.** The lists are the irreplaceable part and
   a child's playlists are the records with the most of their own work in them. A
   stage that cannot map something fails loudly and leaves the store alone rather
   than writing the half it understood.
 - **A custom stage reads the old shape in `willMigrate` and writes the new one
-  in `didMigrate`**; anything computed between them is lost. The case already
-  known to need this is `mode` and `unratedBehavior` moving off `Kid` — those
-  two fields decide what a child can reach, so a stage that silently defaults
-  them widens a sandbox with nothing on screen to say so.
-- `MigrationTests` writes a store in the pre-version shape and re-opens it under
-  the plan. That is the closest check available on this machine; it is not a
-  device, and a real store carries more history than a fixture.
+  in `didMigrate`**; anything computed between them is lost. `SchemaVersions.swift`
+  carries the queue of changes that will need one and why each is not additive —
+  `mode`/`unratedBehavior`, the assert/retract backfill, the ordering ranks,
+  `Kid.sortIndex`/`GrownUp.createdAt`, and `SuggestionRecord.sourcePlaylistID`.
+- **Test a migration against a store an older build actually wrote.**
+  `Tests/FamilyStoreTests/Fixtures/v1-store.sqlite` is one, generated from a git
+  worktree at the commit before the change and checked in as a binary. A fixture
+  built by constructing a `Schema` from a model-type array uses the *current*
+  classes, so it has the current columns whatever version it claims — it passes
+  and proves nothing. When a stage is added, add a fixture with it. None of this
+  covers a real family's months of history, which is a device check.
 
 Several first-release choices are still expensive to reverse, and these hold as
 they did:

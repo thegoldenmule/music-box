@@ -26,6 +26,25 @@ public final class Kid {
     public private(set) var mode: SandboxMode = SandboxMode.allowOnly
     public private(set) var unratedBehavior: UnratedBehavior = UnratedBehavior.block
 
+    /// The Apple Account that *is* this child, when they have one of their own
+    /// under Family Sharing. `nil` for every kid on a parent's account, which is
+    /// the commoner shape and the one the device binding covers alone.
+    ///
+    /// A column on the existing `Kid` rather than a second kid record per
+    /// account, and that is the whole point of it: a child who gets their own
+    /// Apple Account at nine becomes a one-field write instead of a data
+    /// migration, and every favorite, playlist and week of history stays exactly
+    /// where it is.
+    ///
+    /// **This is the half of "tied to Apple IDs" that may never fire.** Whether
+    /// an under-13 account can participate in a CloudKit share at all is
+    /// unverified, and `CKAccountStatus.restricted` — documented as what
+    /// parental controls produce — is a plausible steady state on precisely the
+    /// device this is for. If the probe comes back negative, every kid device
+    /// runs under a parent's account, the device binding is the only key, and
+    /// this stays nil forever. It is one column either way.
+    public private(set) var boundAccountRecordName: String?
+
     public var family: Family?
 
     @Relationship(deleteRule: .cascade, inverse: \PolicyEntryRecord.kid)

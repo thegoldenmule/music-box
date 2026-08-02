@@ -9,18 +9,26 @@ import SwiftData
 public enum FamilyStore {
     /// Every model, in one place, taken from the current schema version.
     ///
-    /// The list itself lives in ``FamilySchemaV1`` now rather than here, because
-    /// a version's model list has to be frozen once a store has been written
-    /// with it — see ``FamilySchemaV1/models``. This stays the name the rest of
-    /// the package opens the store by, so nothing above had to learn about
-    /// versions.
-    public static let schema = Schema(versionedSchema: FamilySchemaV1.self)
+    /// The list lives in ``FamilySchemaV2`` rather than here so that the version
+    /// identifier and the models it covers cannot drift apart. This stays the
+    /// name the rest of the package opens the store by, so nothing above had to
+    /// learn about versions.
+    public static let schema = Schema(versionedSchema: FamilySchemaV2.self)
 
     /// Opens the store on disk, **migrating it if it was written by an older
     /// build**.
     ///
-    /// No CloudKit container is attached. See ``zoneNote`` for why that is a
-    /// deferral rather than a decision.
+    /// **No migration plan, deliberately, and not as a deferral.** Everything
+    /// added since the unversioned original is additive, and SwiftData migrates
+    /// that by inference. Passing a plan whose earlier version is a list of
+    /// *live* model types is worse than passing none: those types have since
+    /// changed, so the version describes the wrong shape and a real store fails
+    /// to open at all with `NSCocoaErrorDomain 134504, "Cannot use staged
+    /// migration with an unknown model version."` See ``FamilySchemaV2`` for
+    /// what freezing a version actually costs and when it becomes unavoidable.
+    ///
+    /// No CloudKit container is attached either. See ``zoneNote`` for why that
+    /// is a deferral rather than a decision.
     public static func container(at url: URL? = nil) throws -> ModelContainer {
         let configuration =
             if let url {
@@ -28,21 +36,13 @@ public enum FamilyStore {
             } else {
                 ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             }
-        return try ModelContainer(
-            for: schema,
-            migrationPlan: FamilyMigrationPlan.self,
-            configurations: configuration
-        )
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 
     /// An empty store that never touches disk. For tests.
-    ///
-    /// Carries the migration plan too, so a test cannot pass against a store
-    /// opened more permissively than the real one.
     public static func inMemoryContainer() throws -> ModelContainer {
         try ModelContainer(
             for: schema,
-            migrationPlan: FamilyMigrationPlan.self,
             configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         )
     }

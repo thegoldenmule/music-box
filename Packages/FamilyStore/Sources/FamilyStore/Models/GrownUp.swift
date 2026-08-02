@@ -33,6 +33,29 @@ public final class GrownUp {
 
     public private(set) var modifiedAt: Date = Date.distantPast
 
+    /// The opaque `CKContainer.userRecordID.recordName` for the Apple Account
+    /// that accepted the family share as this grown-up. `nil` until one does,
+    /// which is every row today.
+    ///
+    /// **It can only be captured at acceptance**, which is why the column goes
+    /// in before there is a share rather than when one is needed: adding it
+    /// afterwards means re-inviting every adult who already joined.
+    ///
+    /// **A hint, never an authorization and never a key.** It does not open the
+    /// gate, does not widen what any kid may reach, and nothing points at it. It
+    /// is *allowed to be wrong* — dev and production CloudKit are separate
+    /// databases and survival across a reinstall is reported rather than
+    /// documented — so every path that reads it needs a working answer when it
+    /// is stale. What it buys is one upgrade and no more: ``ActingGrownUp`` is a
+    /// claim, and where this matches the account signed in on the device, it
+    /// becomes something checkable.
+    ///
+    /// Only the record name. Never `CKUserIdentity.nameComponents`, never
+    /// `lookupInfo` — App Review guideline 5.1.4 names persistent identifiers
+    /// *used in combination with* a minor's data as the trigger, and an email
+    /// address beside a child's search history is the combination.
+    public private(set) var accountRecordName: String?
+
     public var family: Family?
 
     public init(id: UUID = UUID(), name: String, at: Date = .now) {
@@ -50,6 +73,18 @@ public final class GrownUp {
     /// and wrong for every other one.
     public func rename(to newName: String, at: Date = .now) {
         name = newName
+        modifiedAt = at
+    }
+
+    /// Records which Apple Account joined as this grown-up.
+    ///
+    /// Set once at share acceptance and cleared only when they leave. Passing
+    /// `nil` un-claims the row, which is what removing a participant means here
+    /// — the roster entry survives, because their name is on everything they
+    /// curated and a child should not watch "From Dad" become "From your
+    /// grown-up" because an adult changed phones.
+    public func claim(account recordName: String?, at: Date = .now) {
+        accountRecordName = recordName
         modifiedAt = at
     }
 

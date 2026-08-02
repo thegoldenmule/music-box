@@ -2,10 +2,31 @@ import Foundation
 import PolicyEngine
 import SwiftData
 
-// Three event tables. Between them they carry every field v1 can record,
+// Four event tables. Between them they carry every field v1 can record,
 // including the ones nothing reads yet: a column absent at v1 is absent for
 // that whole period forever, because no later release can backfill a fact
 // nobody wrote down.
+//
+// MARK: The two sync columns
+//
+// Every table here carries `originatingDeviceID` and `exportedAt`. Both are
+// nil-by-default and both defaults are *truthful* for a row written before
+// they existed, which is why they migrate lightweight and need no backfill —
+// a row nobody attributed genuinely has no device, and a row nothing carried
+// genuinely has not been exported.
+//
+// `originatingDeviceID` answers "which device wrote this" for the rest of the
+// product's life, and it is the one fact here that cannot be recovered later:
+// it exists nowhere else the moment the row is written. It is what lets an
+// activity segment be keyed by writing device — which is what gives the volume
+// leader in this store no conflict surface at all — what lets the report say
+// "from Sam's iPad", and what turns a duplicate into something diagnosable.
+// Nothing populates it yet; the device identity it wants is Stage 6, and rows
+// written in between honestly have none.
+//
+// `exportedAt` is the watermark that makes packing resumable and, more
+// importantly, stops the retention sweep deleting a row no segment has carried
+// yet. Ordering matters there and is the sweep's problem, not this table's.
 
 /// One arrival: a song pressed play on, or a container opened.
 ///
@@ -34,10 +55,19 @@ public final class VisitEventRecord {
     public private(set) var rating: String = StoredRating.Name.unknown
     public private(set) var manner: String = VisitManner.opened.rawValue
 
+    /// See *The two sync columns* at the top of this file.
+    public private(set) var originatingDeviceID: UUID?
+    public private(set) var exportedAt: Date?
+
+    /// Stamps the row as carried. **Deliberately does not touch `kid`** — an
+    /// export is our bookkeeping, not something the child or a parent did.
+    public func markExported(at: Date = .now) { exportedAt = at }
+
     public var kid: Kid?
 
-    public init(id: UUID = UUID(), event: VisitEvent) {
+    public init(id: UUID = UUID(), event: VisitEvent, originatingDeviceID: UUID? = nil) {
         self.id = id
+        self.originatingDeviceID = originatingDeviceID
         self.at = event.at
         self.catalogID = event.itemID.rawValue
         self.itemKind = event.itemID.kind.rawValue
@@ -83,10 +113,19 @@ public final class SearchEventRecord {
     /// find nothing — the over-fetch loop hit its cap while still short.
     public private(set) var gaveUpEarly: Bool = false
 
+    /// See *The two sync columns* at the top of this file.
+    public private(set) var originatingDeviceID: UUID?
+    public private(set) var exportedAt: Date?
+
+    /// Stamps the row as carried. **Deliberately does not touch `kid`** — an
+    /// export is our bookkeeping, not something the child or a parent did.
+    public func markExported(at: Date = .now) { exportedAt = at }
+
     public var kid: Kid?
 
-    public init(id: UUID = UUID(), event: SearchEvent) {
+    public init(id: UUID = UUID(), event: SearchEvent, originatingDeviceID: UUID? = nil) {
         self.id = id
+        self.originatingDeviceID = originatingDeviceID
         self.at = event.at
         self.term = event.term
         self.resultCount = event.resultCount
@@ -139,11 +178,20 @@ public final class PlayEventRecord {
     public private(set) var originKind: String?
     public private(set) var originID: String?
 
+    /// See *The two sync columns* at the top of this file.
+    public private(set) var originatingDeviceID: UUID?
+    public private(set) var exportedAt: Date?
+
+    /// Stamps the row as carried. **Deliberately does not touch `kid`** — an
+    /// export is our bookkeeping, not something the child or a parent did.
+    public func markExported(at: Date = .now) { exportedAt = at }
+
     public var kid: Kid?
 
-    public init(id: UUID = UUID(), event: PlayEvent) {
+    public init(id: UUID = UUID(), event: PlayEvent, originatingDeviceID: UUID? = nil) {
         let origin = event.origin.stored
         self.id = id
+        self.originatingDeviceID = originatingDeviceID
         self.at = event.at
         self.songID = event.songID.rawValue
         self.albumID = event.albumID?.rawValue
@@ -251,12 +299,21 @@ public final class BlockEventRecord {
     public private(set) var originKind: String?
     public private(set) var originID: String?
 
+    /// See *The two sync columns* at the top of this file.
+    public private(set) var originatingDeviceID: UUID?
+    public private(set) var exportedAt: Date?
+
+    /// Stamps the row as carried. **Deliberately does not touch `kid`** — an
+    /// export is our bookkeeping, not something the child or a parent did.
+    public func markExported(at: Date = .now) { exportedAt = at }
+
     public var kid: Kid?
 
-    public init(id: UUID = UUID(), event: BlockEvent) {
+    public init(id: UUID = UUID(), event: BlockEvent, originatingDeviceID: UUID? = nil) {
         let origin = event.origin.stored
         let reason = event.reason.stored
         self.id = id
+        self.originatingDeviceID = originatingDeviceID
         self.at = event.at
         self.itemID = event.itemID.rawValue
         self.itemKind = event.itemID.kind.rawValue
@@ -328,3 +385,26 @@ public final class BlockEventRecord {
         )
     }
 }
+
+/// A row an activity segment can carry off the device.
+///
+/// The four event tables and nothing else. It exists so the exporter can be
+/// written once against a watermark rather than four times against four
+/// classes, and so that adding a fifth event table without an `exportedAt`
+/// fails to conform rather than failing to sync.
+public protocol ExportableEvent: AnyObject {
+    var id: UUID { get }
+    var at: Date { get }
+    var exportedAt: Date? { get }
+    var originatingDeviceID: UUID? { get }
+
+    /// Stamped once the row's contents have been handed to a segment. The
+    /// retention sweep reads it: a row with `nil` here has not left the device
+    /// and deleting it loses it for every other device permanently.
+    func markExported(at: Date)
+}
+
+extension VisitEventRecord: ExportableEvent {}
+extension SearchEventRecord: ExportableEvent {}
+extension PlayEventRecord: ExportableEvent {}
+extension BlockEventRecord: ExportableEvent {}

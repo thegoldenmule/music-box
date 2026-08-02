@@ -9,3 +9,7 @@ Packages/*/Package.resolved
 *.xcodeproj/xcuserdata/
 build/
 *.xcodeproj/project.xcworkspace/
+
+# SQLite sidecars beside checked-in store fixtures
+*.sqlite-wal
+*.sqlite-shm

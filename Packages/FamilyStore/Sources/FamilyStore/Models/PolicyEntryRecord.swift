@@ -51,6 +51,16 @@ public final class PolicyEntryRecord {
     /// see there for why this copy is the exception that gets corrected.
     public private(set) var addedByName: String?
 
+    /// Which device this was typed on. `nil` for every row written before the
+    /// column existed, which is the truthful answer rather than a gap.
+    ///
+    /// `addedBy` says which *grown-up* claims it; this says which *machine*
+    /// wrote it, and the two answer different questions. When a deny turns up
+    /// twice, or turns up and then does not, this is the column that makes it
+    /// diagnosable instead of a mystery — and it cannot be recovered later,
+    /// because it exists nowhere else once the row is written.
+    public private(set) var originatingDeviceID: UUID?
+
     public var kid: Kid?
 
     public init(
@@ -61,9 +71,11 @@ public final class PolicyEntryRecord {
         artworkURL: URL? = nil,
         addedBy: String? = nil,
         addedByName: String? = nil,
+        originatingDeviceID: UUID? = nil,
         at: Date = .now
     ) {
         self.id = id
+        self.originatingDeviceID = originatingDeviceID
         self.kind = kind.rawValue
         self.itemKind = catalogID.kind.rawValue
         self.catalogID = catalogID.rawValue
