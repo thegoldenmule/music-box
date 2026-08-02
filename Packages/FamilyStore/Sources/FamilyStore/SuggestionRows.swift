@@ -64,6 +64,11 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
     /// passed on and offer it again; what does not survive is the allow.
     public let dismissedAt: Date?
 
+    /// When a parent offered it again, or `nil` if they never have. Compared
+    /// with ``dismissedAt`` by ``isDismissed`` — a restore stamps this rather
+    /// than clearing that, so the merge has both facts to order.
+    public let restoredAt: Date?
+
     /// A parent's one line about why. Optional, and shown to the kid.
     public let note: String?
 
@@ -88,7 +93,16 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
     /// up front is what makes the tile mean what it looks like.
     public let entries: [PlaylistEntryRow]
 
-    public var isDismissed: Bool { dismissedAt != nil }
+    /// **Mirrors ``SuggestionRecord/isDismissed`` and must keep mirroring it.**
+    /// This value type is what every screen reads, so a bare `dismissedAt !=
+    /// nil` here left a re-offered suggestion looking passed-on while the record
+    /// said otherwise — the record and its value form disagreeing about the one
+    /// field that decides whether a child can reach the thing.
+    public var isDismissed: Bool {
+        guard let dismissedAt else { return false }
+        guard let restoredAt else { return true }
+        return dismissedAt > restoredAt
+    }
 
     /// The catalog identifier, where there is one. `nil` for a snapshot.
     public var catalogID: CatalogID? {
@@ -114,6 +128,7 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
         suggestedAt: Date,
         position: Int,
         dismissedAt: Date? = nil,
+        restoredAt: Date? = nil,
         note: String? = nil,
         addedBy: String? = nil,
         addedByName: String? = nil,
@@ -127,6 +142,7 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
         self.suggestedAt = suggestedAt
         self.position = position
         self.dismissedAt = dismissedAt
+        self.restoredAt = restoredAt
         self.note = note
         self.addedBy = addedBy
         self.addedByName = addedByName

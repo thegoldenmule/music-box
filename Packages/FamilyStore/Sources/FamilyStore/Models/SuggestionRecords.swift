@@ -78,8 +78,18 @@ public final class SuggestionRecord {
     /// kid made did not exist until they made it.
     public private(set) var sourcePlaylistID: UUID?
 
-    /// When the kid passed on it. `nil` while it is live.
+    /// When the kid passed on it. `nil` if they never have.
+    ///
+    /// Not on its own the answer — see ``isDismissed``, which compares it with
+    /// ``restoredAt``.
     public private(set) var dismissedAt: Date?
+
+    /// When a parent offered it again, or `nil` if they never have.
+    ///
+    /// `nil` is the truthful value for every row written before the column
+    /// existed: nothing had been restored, because restoring cleared the
+    /// dismissal instead of recording anything.
+    public private(set) var restoredAt: Date?
 
     /// A parent's one line about why they picked it. Shown to the kid.
     ///
@@ -239,7 +249,14 @@ public final class SuggestionRecord {
     /// re-suggesting something a kid passed on is a deliberate second act, and it
     /// is worth nothing if the kid never sees it.
     public func restore(position newPosition: Int, at: Date = .now) {
-        dismissedAt = nil
+        // **Stamped rather than cleared**, for the reason
+        // `PolicyEntryRecord.reassert(at:)` gives. Clearing `dismissedAt` throws
+        // away the fact a merge needs: a device that has not seen the restore
+        // holds a copy where the dismissal is simply present, and with nothing
+        // to compare it against the older copy wins and a parent's re-offer
+        // silently disappears. Two timestamps that only move forward let the
+        // comparison decide, from either arrival order.
+        restoredAt = at
         position = newPosition
         suggestedAt = at
         modifiedAt = at
@@ -299,7 +316,18 @@ public final class SuggestionRecord {
         return .snapshotPlaylist(local: sourcePlaylistID ?? id)
     }
 
-    public var isDismissed: Bool { dismissedAt != nil }
+    /// Whether the kid has passed on this and a parent has not since re-offered
+    /// it.
+    ///
+    /// A plain comparison, for the reason ``PolicyEntryRecord/isLive`` gives:
+    /// on one device the order of two actions is not in doubt, and a parent
+    /// re-offering something the kid just passed on must see it come back now
+    /// rather than in two minutes. The cross-device ambiguity is ``Merge``'s.
+    public var isDismissed: Bool {
+        guard let dismissedAt else { return false }
+        guard let restoredAt else { return true }
+        return dismissedAt > restoredAt
+    }
 
     /// Every catalog identifier this suggestion vouches for.
     ///
@@ -309,7 +337,10 @@ public final class SuggestionRecord {
     /// allow on the playlist alone reaches the container and none of its
     /// contents.
     public var allowedIDs: [CatalogID] {
-        guard dismissedAt == nil, let target else { return [] }
+        // `isDismissed`, not `dismissedAt == nil`. A restore no longer clears
+        // the dismissal — it stamps against it — so the bare nil check would
+        // leave a re-offered suggestion granting nothing.
+        guard !isDismissed, let target else { return [] }
         var ids: [CatalogID] = []
         if case .catalog(let id) = target { ids.append(id) }
         ids.append(contentsOf: entries.map(\.itemID))
@@ -328,6 +359,7 @@ public final class SuggestionRecord {
             suggestedAt: suggestedAt,
             position: position,
             dismissedAt: dismissedAt,
+            restoredAt: restoredAt,
             note: note,
             addedBy: addedBy,
             addedByName: addedByName,

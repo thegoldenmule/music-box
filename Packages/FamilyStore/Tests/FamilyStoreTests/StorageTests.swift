@@ -198,54 +198,40 @@ struct Entries {
 
 // MARK: -
 
-@Suite("A withdrawal racing an assertion")
+@Suite("A withdrawal and an assertion on one device")
 @MainActor
-struct RetractionSkew {
-    /// Two devices, two clocks, and no agreement about which came first. Taking
-    /// the later timestamp is taking whichever device ran fast, so inside the
-    /// window the answer is chosen by consequence instead: a **deny stands**.
-    /// A phantom deny hides one item, visibly and fixably. A deny that loses a
-    /// coin toss silently unblocks something a parent refused.
-    @Test("Inside the skew window a deny stands")
-    func denyStandsInsideWindow() throws {
+struct RetractionOrdering {
+    /// **A plain comparison, and the skew rule is deliberately not here.** On
+    /// one device there is one clock and the order of two actions is not in
+    /// doubt: a parent who removes an allow and puts it back a moment later has
+    /// unambiguously done the second thing second. Failing closed on that made
+    /// their own edit appear not to work for two minutes.
+    ///
+    /// The ambiguity a window exists for only arises between two devices, and
+    /// `Merge` in FamilySync is where those meet — see the skew tests there.
+    @Test("A withdrawal a moment after an add takes effect at once")
+    func immediateWithdrawalWorks() throws {
         let context = try newStore()
         let kid = insertKid(context)
         let record = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t0)
 
-        record.retract(at: Fix.t0 + PolicyEntryRecord.clockSkewWindow / 2)
-
-        #expect(record.isLive)
-        #expect(kid.buildPolicy().policy.entries.count == 1)
-    }
-
-    @Test("Inside the skew window an allow does not")
-    func allowFallsInsideWindow() throws {
-        let context = try newStore()
-        let kid = insertKid(context)
-        let record = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
-
-        record.retract(at: Fix.t0 + PolicyEntryRecord.clockSkewWindow / 2)
+        record.retract(at: Fix.t0 + 1)
 
         #expect(record.isLive == false)
         #expect(kid.buildPolicy().policy.entries.isEmpty)
     }
 
-    /// Outside the window the clocks are trusted and the later fact wins,
-    /// whichever kind it is.
-    @Test("Outside the window the later fact wins, either way")
-    func outsideWindowTimestampsDecide() throws {
+    @Test("Putting one back a moment later takes effect at once too")
+    func immediateReassertWorks() throws {
         let context = try newStore()
         let kid = insertKid(context)
-        let beyond = PolicyEntryRecord.clockSkewWindow * 2
+        let record = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
 
-        let denied = kid.addEntry(kind: .deny, id: Fix.artist, displayName: "A Band", at: Fix.t0)
-        denied.retract(at: Fix.t0 + beyond)
-        #expect(denied.isLive == false)
+        record.retract(at: Fix.t0 + 1)
+        record.reassert(at: Fix.t0 + 2)
 
-        let allowed = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
-        allowed.retract(at: Fix.t0 + beyond)
-        allowed.reassert(at: Fix.t0 + beyond * 2)
-        #expect(allowed.isLive)
+        #expect(record.isLive)
+        #expect(kid.buildPolicy().policy.entries.count == 1)
     }
 
     /// A device that has not seen the retraction cannot resurrect the row just
@@ -256,10 +242,9 @@ struct RetractionSkew {
         let context = try newStore()
         let kid = insertKid(context)
         let record = kid.addEntry(kind: .allow, id: Fix.album, displayName: "An Album", at: Fix.t0)
-        let beyond = PolicyEntryRecord.clockSkewWindow * 2
 
-        record.retract(at: Fix.t0 + beyond)
-        record.reassert(at: Fix.t0 + beyond * 2)
+        record.retract(at: Fix.t0 + 60)
+        record.reassert(at: Fix.t0 + 120)
 
         #expect(record.retractedAt != nil)
         #expect(record.isLive)

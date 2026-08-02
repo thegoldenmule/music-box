@@ -267,6 +267,7 @@ public final class PlaylistRecord {
         id catalogID: CatalogID,
         displayName: String,
         artworkURL: URL? = nil,
+        origin: LibraryOrigin = .kid,
         ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) -> PlaylistEntryRecord? {
@@ -278,6 +279,7 @@ public final class PlaylistRecord {
             displayName: displayName,
             artworkURL: artworkURL,
             position: nextPosition,
+            origin: origin,
             ancestry: ancestry,
             at: at
         )
@@ -391,9 +393,26 @@ public final class PlaylistEntryRecord {
     public private(set) var displayName: String = ""
     public private(set) var artworkURL: URL?
 
-    /// 0-based, contiguous after any edit.
+    /// Ascending, with room between neighbours. See ``PlaylistRecord/positionGap``
+    /// — it used to be contiguous after every edit and deliberately is not now.
     public private(set) var position: Int = 0
     public private(set) var addedAt: Date = Date.distantPast
+
+    /// Who put this song here. `LibraryOrigin.rawValue`.
+    ///
+    /// Without it a song a parent placed on a child's shelf is indistinguishable
+    /// from one the child chose, and *"you added 4 of these 12"* is a migration
+    /// rather than a caption.
+    ///
+    /// **Falls back to `kid` on an unreadable value rather than dropping the
+    /// row**, deliberately unlike ``FavoriteRecord/row``: a dropped entry
+    /// silently shortens a playlist a child built, which is worse than one row
+    /// attributed to the commonest case. The default is `kid` for the same
+    /// reason — it is the honest answer for the overwhelming majority of rows
+    /// written before the column existed, and the precedence rule
+    /// (`kid` > `parent` > `appleLibrary`) already says a row the child chose
+    /// never degrades.
+    public private(set) var origin: String = LibraryOrigin.kid.rawValue
 
     /// See the same five on ``FavoriteRecord``.
     public private(set) var albumID: String?
@@ -410,6 +429,7 @@ public final class PlaylistEntryRecord {
         displayName: String,
         artworkURL: URL? = nil,
         position: Int,
+        origin: LibraryOrigin = .kid,
         ancestry: LibraryAncestry = .none,
         at: Date = .now
     ) {
@@ -418,10 +438,14 @@ public final class PlaylistEntryRecord {
         self.displayName = displayName
         self.artworkURL = artworkURL
         self.position = position
+        self.origin = origin.rawValue
         self.addedAt = at
         self.modifiedAt = at
         apply(ancestry)
     }
+
+    /// The typed origin, falling back to `kid`. See ``origin``.
+    public var libraryOrigin: LibraryOrigin { LibraryOrigin(rawValue: origin) ?? .kid }
 
     func move(to newPosition: Int, at: Date = .now) {
         guard position != newPosition else { return }

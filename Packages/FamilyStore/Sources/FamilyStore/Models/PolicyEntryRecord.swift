@@ -176,24 +176,19 @@ public final class PolicyEntryRecord {
 
     /// Whether this row is part of the policy right now.
     ///
-    /// **Fails closed inside the skew window, and the asymmetry is the point.**
-    /// When an assert and a retract land within ``clockSkewWindow`` of each
-    /// other, a **deny stands** and an **allow does not**. A phantom deny hides
-    /// one item a parent meant to allow: visible on the screen they are already
-    /// looking at, and fixable in one tap. A deny that loses a coin-toss against
-    /// a stale retraction silently un-blocks something a parent explicitly
-    /// refused, and nothing on any screen says so.
+    /// A plain comparison, deliberately. **The skew rule is not here** — it
+    /// belongs where two clocks actually meet, which is the merge, and putting
+    /// it here was a mistake worth recording rather than quietly fixing.
     ///
-    /// It is the same direction `buildPolicy()` takes on an unreadable row and
-    /// the same one `UnratedBehavior.block` takes on a missing rating — one
-    /// level up, and for the same reason.
+    /// On one device there is one clock and the order of two actions is not in
+    /// doubt: a parent who removes an allow and puts it back a moment later has
+    /// unambiguously done the second thing second. Failing closed on that made
+    /// their own edit appear not to work for two minutes, on the screen they
+    /// were looking at. The ambiguity the window exists for only arises between
+    /// two devices, and ``Merge`` is where those meet.
     public var isLive: Bool {
         guard let retractedAt else { return true }
-        let interval = assertion.timeIntervalSince(retractedAt)
-        guard abs(interval) >= Self.clockSkewWindow else {
-            return kind == PolicyEntry.Kind.deny.rawValue
-        }
-        return interval > 0
+        return assertion > retractedAt
     }
 
     /// Withdraws the row without destroying it. See ``retractedAt``.
