@@ -137,6 +137,9 @@ public enum FamilySchemaV2: VersionedSchema {
             ConsentRecord.self,
             // The volume leader, batched and keyed so it cannot conflict.
             ActivitySegmentRecord.self,
+            // The one gap a modifiedAt scan cannot cover: a deleted row leaves
+            // nothing to enumerate. See Outbox.
+            PendingDeletionRecord.self,
         ]
     }
 }
@@ -206,6 +209,10 @@ public enum SyncCoverage {
             // column until their phone has walked it.
             RecentTrailRecord.self,
             LibraryIndexRecord.self,
+            // Bookkeeping about what this device still owes the server. It
+            // describes the outbox, not the household, so it is as device-local
+            // as the watermark it is read against.
+            PendingDeletionRecord.self,
         ]
     }
 }

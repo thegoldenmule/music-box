@@ -76,3 +76,28 @@ public struct SyncedRecord: Sendable, Equatable {
         return nil
     }
 }
+
+/// Field names, in one place, because a typo in one of these is a field that
+/// silently never merges.
+public enum Field {
+    public static let id = "id"
+    public static let modifiedAt = "modifiedAt"
+    public static let addedAt = "addedAt"
+    public static let assertedAt = "assertedAt"
+    public static let retractedAt = "retractedAt"
+    public static let dismissedAt = "dismissedAt"
+    public static let restoredAt = "restoredAt"
+    public static let createdAt = "createdAt"
+    public static let favoritedAt = "favoritedAt"
+    public static let suggestedAt = "suggestedAt"
+    public static let decidedAt = "decidedAt"
+    public static let revokedAt = "revokedAt"
+    public static let lastSeenAt = "lastSeenAt"
+    public static let enrolledAt = "enrolledAt"
+    public static let position = "position"
+    public static let sortIndex = "sortIndex"
+    public static let name = "name"
+    public static let displayName = "displayName"
+    public static let kidID = "kidID"
+    public static let familyID = "familyID"
+}

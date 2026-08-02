@@ -260,7 +260,7 @@ struct SchemaVersionShape {
     @Test("V2 is the current version and covers every model")
     func versionIsWhatItSays() {
         #expect(FamilySchemaV2.versionIdentifier == Schema.Version(2, 0, 0))
-        #expect(FamilySchemaV2.models.count == 22)
+        #expect(FamilySchemaV2.models.count == 23)
         #expect(FamilyStore.schema.entities.count == FamilySchemaV2.models.count)
     }
 

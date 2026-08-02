@@ -791,3 +791,36 @@ public final class Kid {
         libraryIndex.removeAll()
     }
 }
+
+// MARK: - Absorbing a record another device wrote
+//
+// Internal, so only this module can call them, and in this file so
+// `private(set)` stays exactly as strict as it was. Each one is **monotonic**:
+// it advances a value or leaves it, and never clears one. That is a second
+// safety net under the merge rather than a duplicate of it — `apply` is supposed
+// to be handed a merged record, but a caller that hands it a raw remote copy
+// still cannot use an *absence* to undo a retraction or a claim.
+//
+// Nothing here stamps the local clock. Every one takes the incoming
+// `modifiedAt`, because stamping now would make an import look like an edit and
+// the next export would send it straight back.
+
+extension Kid {
+    /// Refreshes the cached sandbox columns without inventing a decision.
+    ///
+    /// Deliberately not ``setMode(_:decidedByGrownUpID:decidedByAccountRecordName:originatingDeviceID:at:)``
+    /// — that writes a `SandboxSettingRecord`, and importing one would record a
+    /// decision nobody made, on a device that was not there. Decisions arrive as
+    /// their own records.
+    func applyCachedSandbox(mode: SandboxMode, unratedBehavior: UnratedBehavior, at: Date) {
+        self.mode = mode
+        self.unratedBehavior = unratedBehavior
+        modifiedAt = at
+    }
+
+    func applySync(sortIndex: Int?, boundAccountRecordName: String?, at: Date) {
+        if let sortIndex { self.sortIndex = sortIndex }
+        if let boundAccountRecordName { self.boundAccountRecordName = boundAccountRecordName }
+        modifiedAt = at
+    }
+}

@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 
+@testable import FamilyStore
+
 @testable import FamilySync
 
 private let t0 = Date(timeIntervalSince1970: 1_700_000_000)

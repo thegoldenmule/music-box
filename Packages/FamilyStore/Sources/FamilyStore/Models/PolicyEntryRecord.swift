@@ -209,3 +209,42 @@ public final class PolicyEntryRecord {
         modifiedAt = at
     }
 }
+
+// MARK: - Absorbing a record another device wrote
+//
+// Internal, so only this module can call them, and in this file so
+// `private(set)` stays exactly as strict as it was. Each one is **monotonic**:
+// it advances a value or leaves it, and never clears one. That is a second
+// safety net under the merge rather than a duplicate of it — `apply` is supposed
+// to be handed a merged record, but a caller that hands it a raw remote copy
+// still cannot use an *absence* to undo a retraction or a claim.
+//
+// Nothing here stamps the local clock. Every one takes the incoming
+// `modifiedAt`, because stamping now would make an import look like an edit and
+// the next export would send it straight back.
+
+extension PolicyEntryRecord {
+    func applySync(
+        addedAt: Date,
+        assertedAt: Date?,
+        retractedAt: Date?,
+        originatingDeviceID: UUID?,
+        at: Date
+    ) {
+        // Earliest wins, matching the merge rule: a re-add on another device
+        // must not rewrite the sentence the admin shows a parent.
+        self.addedAt = min(self.addedAt, addedAt)
+
+        // Advance only. A device that has not seen the retraction carries no
+        // `retractedAt` at all, and that absence must never read as "put it
+        // back" — which is the failure the tombstone exists to prevent.
+        if let assertedAt, assertedAt > self.assertedAt { self.assertedAt = assertedAt }
+        if let retractedAt, retractedAt > (self.retractedAt ?? .distantPast) {
+            self.retractedAt = retractedAt
+        }
+        if let originatingDeviceID, self.originatingDeviceID == nil {
+            self.originatingDeviceID = originatingDeviceID
+        }
+        modifiedAt = at
+    }
+}

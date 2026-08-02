@@ -1,4 +1,3 @@
-import FamilyStore
 import Foundation
 import SwiftData
 
@@ -21,7 +20,7 @@ extension SyncEncodable {
     }
 }
 
-/// Turns the store's models into records and back.
+/// Turns the store's models into records.
 ///
 /// **Outbound only, and that is a scoped decision.** Encoding is a total
 /// function of public getters, so it is written and tested here. Applying a
@@ -433,7 +432,7 @@ extension WeeklySummaryRecord: SyncEncodable {
             Field.id: .uuid(id),
             "weekStart": .date(weekStart),
             "payload": .data(payload),
-            Field.modifiedAt: .date(weekStart),
+            Field.modifiedAt: .date(modifiedAt),
         ]
         fields[Field.kidID] = kid.map { .uuid($0.id) }
         return fields

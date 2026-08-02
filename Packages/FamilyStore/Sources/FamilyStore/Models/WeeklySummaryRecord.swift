@@ -24,6 +24,13 @@ public final class WeeklySummaryRecord {
     /// Start of the week this covers. Device time, so approximate.
     public private(set) var weekStart: Date = Date.distantPast
 
+    /// **This table was the one record in the store without it**, against a
+    /// stated invariant that every record carries the time it last changed.
+    /// Nothing writes here yet, so adding it costs nothing today; the outbox
+    /// scan is what needed it, since a record with no `modifiedAt` cannot answer
+    /// whether it has changed since the last export.
+    public private(set) var modifiedAt: Date = Date.distantPast
+
     /// **Held outside the row.** An unbounded opaque blob against a 1 MB
     /// `CKRecord` ceiling, and the failure it prevents is the worst-shaped one
     /// in this store: the sweep rolls a heavy week up, the blob exceeds the
@@ -40,9 +47,10 @@ public final class WeeklySummaryRecord {
 
     public var kid: Kid?
 
-    public init(id: UUID = UUID(), weekStart: Date, payload: Data) {
+    public init(id: UUID = UUID(), weekStart: Date, payload: Data, at: Date = .now) {
         self.id = id
         self.weekStart = weekStart
         self.payload = payload
+        self.modifiedAt = at
     }
 }
