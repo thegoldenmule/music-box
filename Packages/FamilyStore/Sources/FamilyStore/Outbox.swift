@@ -49,6 +49,36 @@ public final class PendingDeletionRecord {
     public func markExported(at: Date = .now) { exportedAt = at }
 }
 
+/// The last version of a record this device and the server agreed on.
+///
+/// **A watermark could not do this job, and finding that out cost an
+/// end-to-end test.** "Everything modified since time T" cannot tell a row
+/// changed *here* from a row changed because we just *imported* it — an import
+/// writes `modifiedAt` from the record, deliberately, so the imported row looks
+/// exactly like a local edit to any timestamp comparison. Every device would
+/// re-export its entire first import, and the other device would do the same
+/// back. Two devices arguing forever about records neither of them changed.
+///
+/// So the question is asked per record instead: *is this row's `modifiedAt`
+/// different from the one we last agreed on?* Marked on export and on import
+/// alike, because both are agreement. A local edit moves `modifiedAt` and the
+/// row becomes owed again; an import moves both together and it does not.
+///
+/// Device-local — it describes what this device has exchanged, not anything
+/// about the household.
+@Model
+public final class SyncMarkRecord {
+    public private(set) var recordName: String = ""
+    public private(set) var syncedModifiedAt: Date = Date.distantPast
+
+    public init(recordName: String, syncedModifiedAt: Date) {
+        self.recordName = recordName
+        self.syncedModifiedAt = syncedModifiedAt
+    }
+
+    func update(to date: Date) { syncedModifiedAt = date }
+}
+
 /// What this device still owes the server.
 ///
 /// **There is no enqueue-at-every-write-site, and that is the design rather
@@ -87,7 +117,8 @@ public enum Outbox {
         }
     }
 
-    /// Everything changed since `watermark`, oldest first.
+    /// Everything this device has that the server has not agreed to, oldest
+    /// first.
     ///
     /// **Oldest first is not cosmetic.** A record has to exist before the rows
     /// pointing at it can be resolved on the other side, and `modifiedAt` order
@@ -95,16 +126,19 @@ public enum Outbox {
     /// does not guarantee arrival order — nothing does — which is why the
     /// receiving side defers rather than drops what it cannot yet place.
     @MainActor
-    public static func pending(
-        since watermark: Date,
-        in context: ModelContext
-    ) throws -> [Change] {
+    public static func pending(in context: ModelContext) throws -> [Change] {
         var changes: [Change] = []
+        let marks = Dictionary(
+            try context.fetch(FetchDescriptor<SyncMarkRecord>())
+                .map { ($0.recordName, $0.syncedModifiedAt) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
         func collect<T: PersistentModel & SyncEncodable>(
             _ type: T.Type, _ touched: (T) -> Date
         ) throws {
-            for row in try context.fetch(FetchDescriptor<T>()) where touched(row) > watermark {
+            for row in try context.fetch(FetchDescriptor<T>())
+            where marks[row.syncRecordName] != touched(row) {
                 changes.append(.upsert(row.syncRecord()))
             }
         }
@@ -176,5 +210,32 @@ public enum Outbox {
             .filter { $0.exportedAt != nil && $0.deletedAt < cutoff }
         for row in doomed { context.delete(row) }
         return doomed.count
+    }
+}
+
+extension Outbox {
+    /// Records that this device and the server now agree on a version.
+    ///
+    /// Called on **both** export and import. An import is agreement just as much
+    /// as an export is — and marking only exports is what would leave every
+    /// imported row looking locally-changed and owed straight back.
+    @MainActor
+    public static func markSynced(
+        name: String, modifiedAt: Date, in context: ModelContext
+    ) {
+        let existing = try? context.fetch(FetchDescriptor<SyncMarkRecord>())
+            .first { $0.recordName == name }
+        if let existing {
+            existing.update(to: modifiedAt)
+        } else {
+            context.insert(SyncMarkRecord(recordName: name, syncedModifiedAt: modifiedAt))
+        }
+    }
+
+    /// Convenience for a whole record.
+    @MainActor
+    public static func markSynced(_ record: SyncedRecord, in context: ModelContext) {
+        guard let touched = record.date(Field.modifiedAt) else { return }
+        markSynced(name: record.name, modifiedAt: touched, in: context)
     }
 }

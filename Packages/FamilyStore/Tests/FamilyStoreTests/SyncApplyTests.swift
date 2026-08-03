@@ -46,7 +46,7 @@ struct Applying {
             kind: .deny, id: CatalogID(.artist, "artist-A"), displayName: "A Band", at: at(120))
         try a.save()
 
-        let outbound = try Outbox.pending(since: .distantPast, in: a)
+        let outbound = try Outbox.pending(in: a)
         let target = SyncApply.Context(b)
         for change in outbound {
             guard case .upsert(let record) = change else { continue }
@@ -271,22 +271,27 @@ struct OutboxTests {
     /// it with nothing able to detect it. Both disappear if the outbox is
     /// *derived* — and `modifiedAt` on every record is enforced structurally, so
     /// the store can already answer the question.
-    @Test("Everything touched since the watermark is pending")
+    @Test("Everything the server has not agreed to is pending")
     func changesAreDerived() throws {
         let context = try newStore()
         let (_, kid) = seedFamily(context)
         try context.save()
 
-        let afterSeed = try Outbox.pending(since: at(-1), in: context)
+        let afterSeed = try Outbox.pending(in: context)
         #expect(afterSeed.count == 2)  // the household and the child
 
-        // Nothing has changed since, so nothing is owed.
-        #expect(try Outbox.pending(since: at(1), in: context).isEmpty)
+        // Once the server has agreed, nothing is owed.
+        for change in afterSeed {
+            if case .upsert(let record) = change { Outbox.markSynced(record, in: context) }
+        }
+        try context.save()
+        #expect(try Outbox.pending(in: context).isEmpty)
 
+        // A local edit moves `modifiedAt`, so the row is owed again.
         kid.rename(to: "Ada B", at: at(600))
         try context.save()
 
-        let pending = try Outbox.pending(since: at(1), in: context)
+        let pending = try Outbox.pending(in: context)
         #expect(pending.count == 1)
         #expect(pending.first?.recordName == kid.syncRecordName)
     }
@@ -305,7 +310,7 @@ struct OutboxTests {
         try context.save()
 
         #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
-        let pending = try Outbox.pending(since: at(300), in: context)
+        let pending = try Outbox.pending(in: context)
         #expect(pending.contains(.delete(name: name, type: "PlaylistRecord")))
     }
 
@@ -340,7 +345,7 @@ struct OutboxTests {
         tombstone.markExported(at: at(700))
         try context.save()
 
-        let pending = try Outbox.pending(since: at(300), in: context)
+        let pending = try Outbox.pending(in: context)
         #expect(pending.contains { if case .delete = $0 { true } else { false } } == false)
     }
 
@@ -434,7 +439,7 @@ struct LibraryRoundTrip {
         try a.save()
 
         let target = SyncApply.Context(b)
-        for change in try Outbox.pending(since: .distantPast, in: a) {
+        for change in try Outbox.pending(in: a) {
             guard case .upsert(let record) = change else { continue }
             _ = SyncApply.apply(record, in: target)
         }

@@ -51,7 +51,11 @@ public enum SyncApply {
     /// every cross-record link is a plain identifier rather than a reference.
     @MainActor
     public struct Context {
-        let modelContext: ModelContext
+        /// Public so the sync layer can save after a batch. It does not get to
+        /// *write models* through it — that is what the apply functions are for
+        /// — but it does have to commit, and hiding the context would only mean
+        /// passing it a second time alongside.
+        public let modelContext: ModelContext
 
         public init(_ modelContext: ModelContext) {
             self.modelContext = modelContext
@@ -774,5 +778,82 @@ extension SyncApply {
         context.modelContext.insert(summary)
         kid.attach(summary)
         return .inserted
+    }
+}
+
+// MARK: - Finding what we already have
+
+extension SyncApply {
+    /// The local row that a record name refers to, encoded for merging.
+    ///
+    /// `nil` when this device does not have it — which is the ordinary case for
+    /// anything a co-parent has just created, and the signal to insert rather
+    /// than merge.
+    ///
+    /// **Matched by recomputing names rather than by storing them.** A record
+    /// name is derived from the row's content, so a stored copy is a second
+    /// source of truth that goes stale the moment the content changes — and the
+    /// content changing is exactly when the name matters. Recomputing is O(n)
+    /// per lookup over one household's rows, which is affordable for the same
+    /// reason the outbox scan is: the four event tables travel as segments and
+    /// are not in this set.
+    @MainActor
+    public static func localRecord(
+        named name: String, type: String, in context: Context
+    ) -> SyncedRecord? {
+        func find<T: PersistentModel & SyncEncodable>(_ type: T.Type) -> SyncedRecord? {
+            context.find(T.self) { $0.syncRecordName == name }?.syncRecord()
+        }
+
+        return switch type {
+        case Family.syncRecordType: find(Family.self)
+        case Kid.syncRecordType: find(Kid.self)
+        case GrownUp.syncRecordType: find(GrownUp.self)
+        case PolicyEntryRecord.syncRecordType: find(PolicyEntryRecord.self)
+        case SandboxSettingRecord.syncRecordType: find(SandboxSettingRecord.self)
+        case SuggestionRecord.syncRecordType: find(SuggestionRecord.self)
+        case SuggestionEntryRecord.syncRecordType: find(SuggestionEntryRecord.self)
+        case FavoriteRecord.syncRecordType: find(FavoriteRecord.self)
+        case PlaylistRecord.syncRecordType: find(PlaylistRecord.self)
+        case PlaylistEntryRecord.syncRecordType: find(PlaylistEntryRecord.self)
+        case DeviceRecord.syncRecordType: find(DeviceRecord.self)
+        case PasscodeEpochRecord.syncRecordType: find(PasscodeEpochRecord.self)
+        case HistoryClearRecord.syncRecordType: find(HistoryClearRecord.self)
+        case ConsentRecord.syncRecordType: find(ConsentRecord.self)
+        case ActivitySegmentRecord.syncRecordType: find(ActivitySegmentRecord.self)
+        case WeeklySummaryRecord.syncRecordType: find(WeeklySummaryRecord.self)
+        default: nil
+        }
+    }
+
+    /// Deletes whatever a record name refers to, for a deletion that arrived
+    /// from another device.
+    ///
+    /// **Does not write a tombstone.** `Outbox.delete` does, because that is a
+    /// deletion *this* device is announcing; echoing one back would have two
+    /// devices telling each other about the same removal forever.
+    @MainActor
+    @discardableResult
+    public static func deleteLocal(named name: String, type: String, in context: Context) -> Bool {
+        func drop<T: PersistentModel & SyncEncodable>(_ type: T.Type) -> Bool {
+            guard let row = context.find(T.self, { $0.syncRecordName == name }) else { return false }
+            context.modelContext.delete(row)
+            return true
+        }
+
+        return switch type {
+        case FavoriteRecord.syncRecordType: drop(FavoriteRecord.self)
+        case PlaylistRecord.syncRecordType: drop(PlaylistRecord.self)
+        case PlaylistEntryRecord.syncRecordType: drop(PlaylistEntryRecord.self)
+        case SuggestionRecord.syncRecordType: drop(SuggestionRecord.self)
+        case SuggestionEntryRecord.syncRecordType: drop(SuggestionEntryRecord.self)
+        case Kid.syncRecordType: drop(Kid.self)
+        case GrownUp.syncRecordType: drop(GrownUp.self)
+        // Policy entries and devices are never deleted — they retract and they
+        // are revoked, and both are rows that stay. A deletion arriving for one
+        // is a bug somewhere else, and honouring it would destroy the tombstone
+        // that carries the withdrawal.
+        default: false
+        }
     }
 }

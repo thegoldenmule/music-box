@@ -140,6 +140,7 @@ public enum FamilySchemaV2: VersionedSchema {
             // The one gap a modifiedAt scan cannot cover: a deleted row leaves
             // nothing to enumerate. See Outbox.
             PendingDeletionRecord.self,
+            SyncMarkRecord.self,
         ]
     }
 }
@@ -209,10 +210,12 @@ public enum SyncCoverage {
             // column until their phone has walked it.
             RecentTrailRecord.self,
             LibraryIndexRecord.self,
-            // Bookkeeping about what this device still owes the server. It
-            // describes the outbox, not the household, so it is as device-local
-            // as the watermark it is read against.
+            // Bookkeeping about what this device still owes the server, and
+            // what it has already agreed on. Both describe this device's
+            // exchange rather than the household, so neither travels.
             PendingDeletionRecord.self,
+            SyncMarkRecord.self,
+            SyncMarkRecord.self,
         ]
     }
 }
