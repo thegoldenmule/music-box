@@ -33,10 +33,21 @@ public struct ShareParticipantSummary: Sendable, Equatable, Identifiable {
 public protocol FamilySharing: Sendable {
     /// Makes sure every zone exists and is shared, and returns the link to send.
     ///
-    /// The link is for the **household** zone. The other zones are shared too,
-    /// but a link carries one share, so joining the rest happens by the owner
-    /// adding the participant once they have an identity to add.
-    func invitationURL(zones: [FamilyZone]) async throws -> URL
+    /// The link is for the role's **anchor** zone — see ``SharePlan/anchor(for:)``.
+    /// A link carries one share and a household has more than one zone, so
+    /// every invitation is an anchor plus a second step.
+    func invitation(for role: ShareRole, kids: [UUID]) async throws -> URL
+
+    /// The second step: puts everyone who has joined onto the zones the anchor
+    /// did not cover. Returns how many participants were changed.
+    ///
+    /// **Idempotent and safe to run repeatedly**, because there is no moment
+    /// anything can hook to know when somebody accepted. A share does not call
+    /// back; the owner's device finds out by looking. So this runs whenever the
+    /// admin screen is opened rather than once, and doing nothing is the normal
+    /// outcome.
+    @discardableResult
+    func reconcileGrants(for role: ShareRole, kids: [UUID]) async throws -> Int
 
     /// Accepts an invitation from a link somebody pasted or tapped.
     func accept(url: URL) async throws
@@ -46,12 +57,6 @@ public protocol FamilySharing: Sendable {
 
     /// Everyone on the household share, joined or merely invited.
     func participants() async throws -> [ShareParticipantSummary]
-
-    /// Grants an already-known participant the rest of the zones they need.
-    ///
-    /// The second half of the invite: a link carries one share, so a co-parent
-    /// arrives holding the household and nothing else until this runs.
-    func grant(_ grants: [ZoneGrant], to participantID: String) async throws
 
     /// Takes somebody off every share.
     ///
@@ -80,20 +85,55 @@ public struct CloudKitSharing: FamilySharing {
 
     private var db: CKDatabase { container.privateCloudDatabase }
 
-    public func invitationURL(zones: [FamilyZone]) async throws -> URL {
-        guard let household = zones.first(where: { $0 == .household }) else {
-            throw SharingFailure.noHouseholdZone
-        }
-
+    public func invitation(for role: ShareRole, kids: [UUID]) async throws -> URL {
         // Every zone first. A share can only be attached to a zone that exists,
         // and a household half-created is one a co-parent joins into gaps.
-        for zone in zones {
+        for zone in SharePlan.zones(kids: kids) {
             _ = try? await db.save(CKRecordZone(zoneID: zone.id))
         }
+        // And a share on each, so the second step has something to add to.
+        for grant in SharePlan.grants(for: role, kids: kids) {
+            _ = try await ensureShare(for: grant.zone)
+        }
 
-        let share = try await ensureShare(for: household)
+        let share = try await ensureShare(for: SharePlan.anchor(for: role))
         guard let url = share.url else { throw SharingFailure.shareHasNoURL }
         return url
+    }
+
+    public func reconcileGrants(for role: ShareRole, kids: [UUID]) async throws -> Int {
+        let anchor = try await ensureShare(for: SharePlan.anchor(for: role))
+        let joiners = anchor.participants.filter {
+            $0.role != .owner && $0.acceptanceStatus == .accepted
+        }
+        guard !joiners.isEmpty else { return 0 }
+
+        let userIDs = joiners.compactMap(\.userIdentity.userRecordID)
+        // **Looked up rather than reused.** A `CKShare.Participant` belongs to
+        // the share it came from; adding that object to another share is not
+        // the supported move. The identity is what carries across.
+        let resolved = try await container.shareParticipants(forUserRecordIDs: userIDs)
+
+        var changed = 0
+        for grant in SharePlan.grantsAfterAnchor(for: role, kids: kids) {
+            let share = try await ensureShare(for: grant.zone)
+            var dirty = false
+
+            for userID in userIDs {
+                let name = userID.recordName
+                if share.participants.contains(where: {
+                    $0.userIdentity.userRecordID?.recordName == name
+                }) { continue }
+                guard case .success(let participant)? = resolved[userID] else { continue }
+                participant.permission = grant.permission.ck
+                share.addParticipant(participant)
+                dirty = true
+                changed += 1
+            }
+
+            if dirty { _ = try await db.save(share) }
+        }
+        return changed
     }
 
     public func accept(url: URL) async throws {
@@ -108,25 +148,6 @@ public struct CloudKitSharing: FamilySharing {
     public func participants() async throws -> [ShareParticipantSummary] {
         let share = try await ensureShare(for: .household)
         return share.participants.compactMap(Self.summary)
-    }
-
-    public func grant(_ grants: [ZoneGrant], to participantID: String) async throws {
-        for grant in grants where grant.zone != .household {
-            let share = try await ensureShare(for: grant.zone)
-            guard
-                let participant = share.participants.first(where: {
-                    $0.userIdentity.userRecordID?.recordName == participantID
-                })
-            else {
-                // The participant is not on this share yet. Adding them needs
-                // their identity, which only the household share can supply —
-                // so this is the caller's ordering mistake rather than a
-                // transient failure, and saying so beats retrying forever.
-                throw SharingFailure.participantNotFound(participantID)
-            }
-            participant.permission = grant.permission.ck
-            _ = try await db.save(share)
-        }
     }
 
     public func removeParticipant(_ participantID: String) async throws {
@@ -204,13 +225,25 @@ public final class StubSharing: FamilySharing, @unchecked Sendable {
     private var joined: [ShareParticipantSummary]
     public private(set) var accepted: [URL] = []
     public private(set) var granted: [String: [ZoneGrant]] = [:]
+    public private(set) var anchored: FamilyZone?
 
     public init(participants: [ShareParticipantSummary] = []) {
         joined = participants
     }
 
-    public func invitationURL(zones: [FamilyZone]) async throws -> URL {
-        URL(string: "https://www.icloud.com/share/stub")!
+    public func invitation(for role: ShareRole, kids: [UUID]) async throws -> URL {
+        lock.withLock { anchored = SharePlan.anchor(for: role) }
+        return URL(string: "https://www.icloud.com/share/stub")!
+    }
+
+    @discardableResult
+    public func reconcileGrants(for role: ShareRole, kids: [UUID]) async throws -> Int {
+        let outstanding = SharePlan.grantsAfterAnchor(for: role, kids: kids)
+        return lock.withLock {
+            let joiners = joined.filter { !$0.isOwner }
+            for joiner in joiners { granted[joiner.id] = outstanding }
+            return joiners.isEmpty ? 0 : outstanding.count * joiners.count
+        }
     }
 
     public func accept(url: URL) async throws {
@@ -221,10 +254,6 @@ public final class StubSharing: FamilySharing, @unchecked Sendable {
 
     public func participants() async throws -> [ShareParticipantSummary] {
         lock.withLock { joined }
-    }
-
-    public func grant(_ grants: [ZoneGrant], to participantID: String) async throws {
-        lock.withLock { granted[participantID] = grants }
     }
 
     public func removeParticipant(_ participantID: String) async throws {

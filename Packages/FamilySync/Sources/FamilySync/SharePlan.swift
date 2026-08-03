@@ -87,3 +87,36 @@ public enum SharePlan {
         [.household] + kids.flatMap { [FamilyZone.kidPolicy($0), .kidWork($0)] }
     }
 }
+
+extension SharePlan {
+    /// The zone whose share carries the invitation link.
+    ///
+    /// **A link carries one share, and a household has more than one zone.** So
+    /// an invitation is always an anchor plus a second step: the invitee joins
+    /// one share by tapping, and the owner adds them to the rest once they have
+    /// an identity to add. The anchor has to be a zone the role actually gets,
+    /// or the link points at something they may not have.
+    ///
+    /// A child's anchor is their **work** zone rather than their policy zone.
+    /// Either would do for joining, and work is the half they may write — so if
+    /// the second step never runs, a child is left able to keep their own
+    /// favorites and unable to see their own rules, which is the harmless way
+    /// round. The reverse would leave them holding the rules and unable to save
+    /// anything.
+    public static func anchor(for role: ShareRole) -> FamilyZone {
+        switch role {
+        case .coParent: .household
+        case .child(let kid): .kidWork(kid)
+        }
+    }
+
+    /// Everything the anchor did not cover.
+    ///
+    /// What the second step has to grant. Empty for a household with no
+    /// children, which is the one case where an invitation is complete on
+    /// acceptance.
+    public static func grantsAfterAnchor(for role: ShareRole, kids: [UUID]) -> [ZoneGrant] {
+        let anchor = anchor(for: role)
+        return grants(for: role, kids: kids).filter { $0.zone != anchor }
+    }
+}

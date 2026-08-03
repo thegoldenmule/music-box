@@ -24,6 +24,16 @@ struct SharingView: View {
     @State private var trouble: String?
     @State private var accepted = false
 
+    /// Who the next invitation is for. A co-parent and a child get different
+    /// zones at different permissions, so this is not cosmetic — see
+    /// ``SharePlan``.
+    @State private var inviting: InviteTarget = .grownUp
+
+    private enum InviteTarget: Hashable {
+        case grownUp
+        case kid(UUID)
+    }
+
     private var sharing: any FamilySharing { session.sharing }
 
     var body: some View {
@@ -70,6 +80,13 @@ struct SharingView: View {
 
     private var inviteSection: some View {
         Section {
+            Picker("Invite", selection: $inviting) {
+                Text("Another grown-up").tag(InviteTarget.grownUp)
+                ForEach(session.kids, id: \.id) { kid in
+                    Text("\(kid.name)'s own device").tag(InviteTarget.kid(kid.id))
+                }
+            }
+
             Button(busy ? "Working…" : "Create an invitation") {
                 Task { await makeInvitation() }
             }
@@ -87,9 +104,20 @@ struct SharingView: View {
             // scoping in this design — every participant holds the whole
             // household — so the copy has to say that plainly before somebody
             // taps it.
+            // Two different sentences, because they are two different asks and
+            // the second is not a smaller version of the first.
             Text(
-                "Whoever accepts will be able to see everything this app records about every child in this family — every song they played, every search they typed, and everything that was blocked. Only send this to someone you would tell all of that."
+                inviting == .grownUp
+                    ? "Whoever accepts will be able to see everything this app records about every child in this family — every song they played, every search they typed, and everything that was blocked. Only send this to someone you would tell all of that."
+                    : "This lets your child use their own Apple Account on their own device. They will be able to keep their own favourites and playlists, and they will not be able to change what they are allowed to reach — or see anything of a brother or sister's."
             )
+        }
+    }
+
+    private var role: ShareRole {
+        switch inviting {
+        case .grownUp: .coParent
+        case .kid(let id): .child(id)
         }
     }
 
@@ -97,8 +125,8 @@ struct SharingView: View {
         busy = true
         defer { busy = false }
         do {
-            let kids = session.kids.map(\.id)
-            invitation = try await sharing.invitationURL(zones: SharePlan.zones(kids: kids))
+            invitation = try await sharing.invitation(
+                for: role, kids: session.kids.map(\.id))
             await refresh()
         } catch {
             trouble = error.localizedDescription
@@ -201,7 +229,18 @@ struct SharingView: View {
         }
     }
 
+    /// Reads the roster, and finishes any invitation that has been accepted
+    /// since last time.
+    ///
+    /// **The second step runs here rather than on acceptance, because there is
+    /// no acceptance to hook.** A share does not call back; the owner's device
+    /// finds out somebody joined by looking. So this happens whenever the screen
+    /// opens, it is idempotent, and doing nothing is the normal outcome.
     private func refresh() async {
         participants = (try? await sharing.participants()) ?? []
+        _ = try? await sharing.reconcileGrants(for: .coParent, kids: session.kids.map(\.id))
+        for kid in session.kids {
+            _ = try? await sharing.reconcileGrants(for: .child(kid.id), kids: session.kids.map(\.id))
+        }
     }
 }

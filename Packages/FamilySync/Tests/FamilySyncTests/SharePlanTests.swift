@@ -113,12 +113,10 @@ struct SharingSeam {
             ShareParticipantSummary(id: "_me", hasAccepted: true, permission: .readWrite, isOwner: true)
         ])
 
-        let url = try await stub.invitationURL(zones: SharePlan.zones(kids: kids))
+        let url = try await stub.invitation(for: .coParent, kids: kids)
         try await stub.accept(url: url)
         #expect(stub.accepted == [url])
-
-        try await stub.grant(SharePlan.grants(for: .child(ada), kids: kids), to: "_ada")
-        #expect(stub.granted["_ada"]?.count == 2)
+        #expect(stub.anchored == .household)
 
         #expect(try await stub.participants().count == 1)
         try await stub.removeParticipant("_me")
@@ -198,5 +196,83 @@ struct ZonePlacement {
     func householdRecordsNeedNoKid() {
         let device = DeviceRecord(label: "iPad", role: .kidOnly, platform: .pad)
         #expect(FamilyZone.placing(device.syncRecord().type, kidID: nil) == .household)
+    }
+}
+
+
+// MARK: -
+
+@Suite("An invitation is an anchor plus a second step")
+struct AnchorAndGrants {
+    /// A link carries one share and a household has more than one zone, so the
+    /// anchor is only ever part of an invitation.
+    @Test("A co-parent's link anchors on the household")
+    func coParentAnchorsOnHousehold() {
+        #expect(SharePlan.anchor(for: .coParent) == .household)
+
+        let rest = SharePlan.grantsAfterAnchor(for: .coParent, kids: kids)
+        #expect(rest.count == 4)
+        #expect(rest.contains { $0.zone == .household } == false)
+    }
+
+    /// **A child anchors on their work zone, and the choice is not arbitrary.**
+    /// If the second step never runs, this leaves them able to keep their own
+    /// favorites and unable to read their own rules — the harmless way round.
+    /// Anchoring on policy would leave them holding the rules and unable to save
+    /// anything they did.
+    @Test("A child's link anchors on the half they may write")
+    func childAnchorsOnWork() {
+        #expect(SharePlan.anchor(for: .child(ada)) == .kidWork(ada))
+
+        let rest = SharePlan.grantsAfterAnchor(for: .child(ada), kids: kids)
+        #expect(rest == [ZoneGrant(zone: .kidPolicy(ada), permission: .readOnly)])
+    }
+
+    /// The one case where an invitation is complete on acceptance.
+    @Test("A childless household needs no second step")
+    func childlessNeedsNoSecondStep() {
+        #expect(SharePlan.grantsAfterAnchor(for: .coParent, kids: []).isEmpty)
+    }
+
+    /// The anchor has to be a zone the role actually gets, or the link points at
+    /// something they may not hold.
+    @Test("Every anchor is a zone that role is granted")
+    func anchorIsAlwaysGranted() {
+        for role in [ShareRole.coParent, .child(ada), .child(sam)] {
+            let zones = SharePlan.grants(for: role, kids: kids).map(\.zone)
+            #expect(zones.contains(SharePlan.anchor(for: role)))
+        }
+    }
+
+    /// Anchor plus remainder must be the whole grant, with nothing dropped
+    /// between them — a missing zone is a co-parent whose data never arrives.
+    @Test("Anchor plus the second step is the whole invitation")
+    func nothingIsLostBetweenTheTwo() {
+        for role in [ShareRole.coParent, .child(ada)] {
+            let all = Set(SharePlan.grants(for: role, kids: kids).map(\.zone))
+            let covered = Set(
+                SharePlan.grantsAfterAnchor(for: role, kids: kids).map(\.zone)
+            ).union([SharePlan.anchor(for: role)])
+            #expect(all == covered)
+        }
+    }
+
+    /// The second step runs whenever the admin screen opens, because a share
+    /// does not call back — so doing it twice has to be free.
+    @Test("Reconciling twice is not different from reconciling once")
+    func reconcileIsIdempotent() async throws {
+        let stub = StubSharing(participants: [
+            ShareParticipantSummary(id: "_me", hasAccepted: true, permission: .readWrite, isOwner: true),
+            ShareParticipantSummary(id: "_them", hasAccepted: true, permission: .readWrite, isOwner: false),
+        ])
+
+        _ = try await stub.reconcileGrants(for: .coParent, kids: kids)
+        let after = stub.granted
+        _ = try await stub.reconcileGrants(for: .coParent, kids: kids)
+
+        #expect(stub.granted.keys.sorted() == after.keys.sorted())
+        #expect(stub.granted["_them"]?.count == 4)
+        // The owner is never granted anything — they already own it.
+        #expect(stub.granted["_me"] == nil)
     }
 }
