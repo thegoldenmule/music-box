@@ -1416,7 +1416,7 @@ final class Session {
             await refreshLibrary()
             return nil
         } catch {
-            return Self.message(for: error)
+            return Self.kidMessage(for: error)
         }
         await refreshLibrary()
         return nil
@@ -1550,7 +1550,7 @@ final class Session {
             )
             return nil
         } catch {
-            return Self.message(for: error)
+            return Self.kidMessage(for: error)
         }
         await refreshLibrary()
         return nil
@@ -1577,7 +1577,7 @@ final class Session {
         do {
             try await body()
         } catch {
-            return Self.message(for: error)
+            return Self.kidMessage(for: error)
         }
         await refreshLibrary()
         return nil
@@ -2018,7 +2018,59 @@ final class Session {
         }
     }
 
+    /// What a **grown-up** is told went wrong.
+    ///
+    /// Diagnostic on purpose: a parent can act on the difference between a
+    /// missing subscription and Screen Time, and the whole point of
+    /// ``CatalogError`` is that a named case is a sentence we can write rather
+    /// than a support ticket. The `localizedDescription` fallback is right here
+    /// — an adult reading a framework's own words is better served than an adult
+    /// reading "something went wrong".
+    ///
+    /// **Never call this from a kid surface.** See ``kidMessage(for:)``.
     static func message(for error: any Error) -> String {
         (error as? CatalogError)?.errorDescription ?? error.localizedDescription
+    }
+
+    /// What a **child** is told went wrong.
+    ///
+    /// **No string a framework wrote ever reaches this screen.** That rule was
+    /// stated in ``NowPlayingBar`` and ``NowPlayingView`` from the beginning —
+    /// "plain words, no error code, and no mention of the rule" — and was not
+    /// true: this used to be ``message(for:)``, whose fallback is
+    /// `localizedDescription`, and a kid was shown *"The operation couldn't be
+    /// completed. (MPMusicPlayerControllerErrorDomain error 6.)"* on the
+    /// full-screen player. Found by running the app, not by reading it.
+    ///
+    /// ``CatalogError``'s own descriptions are no better here, which is the part
+    /// that makes this a separate function rather than a better fallback: they
+    /// are written for the person who can fix the problem. "Check Screen Time's
+    /// music restriction and Apple Music's parental controls" is a correct
+    /// sentence addressed to nobody in this room.
+    ///
+    /// So the mapping is deliberately lossy, and collapses to **what the child
+    /// can do about it**. Four outcomes, because a six-year-old has four moves:
+    /// wait, pick something else, fetch an adult, or try again. The distinction
+    /// between no subscription, revoked permission, Sync Library and an outside
+    /// restriction is real and is invisible from here — all four are "fetch an
+    /// adult", and spending four sentences on it would only be the app showing a
+    /// child its own bookkeeping.
+    ///
+    /// The detail is not lost: every grown-up surface still calls
+    /// ``message(for:)`` with the same error.
+    static func kidMessage(for error: any Error) -> String {
+        switch error as? CatalogError {
+        case .offline:
+            "No internet right now. Let's try again in a bit."
+        case .itemUnavailable:
+            "This one isn't here anymore."
+        case .notAuthorized, .noSubscription, .cloudLibraryDisabled, .restrictedOutsideApp:
+            "Ask a grown-up to help with this one."
+        // `.underlying` carries a framework's words, so it belongs here with the
+        // errors that are not `CatalogError` at all rather than with the named
+        // cases above.
+        case .underlying, .none:
+            "That didn't work. Let's try again."
+        }
     }
 }

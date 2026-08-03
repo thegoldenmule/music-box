@@ -324,7 +324,7 @@ struct SuggestionsView: View {
             if let found = shelf?.name { name = found }
             trouble = nil
         } catch {
-            trouble = Session.message(for: error)
+            trouble = Session.kidMessage(for: error)
         }
     }
 

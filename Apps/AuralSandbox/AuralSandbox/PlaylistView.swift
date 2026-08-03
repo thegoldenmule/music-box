@@ -112,7 +112,7 @@ struct PlaylistView: View {
         do {
             songs = try await session.playlistSongs(handle)
         } catch {
-            trouble = Session.message(for: error)
+            trouble = Session.kidMessage(for: error)
         }
     }
 

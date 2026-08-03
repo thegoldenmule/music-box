@@ -240,7 +240,7 @@ final class KidPlayerModel {
             }
             syncStatus()
         } catch {
-            message = Session.message(for: error)
+            message = Session.kidMessage(for: error)
         }
     }
 
@@ -539,7 +539,7 @@ final class KidPlayerModel {
             // Everything else is surfaced. Silently skipping on any error made
             // every playback failure invisible and burned through the queue
             // looking for one that worked.
-            message = Session.message(for: error)
+            message = Session.kidMessage(for: error)
             status = .stopped
             // Still written down: the queue is intact and the kid can press play
             // again, now or after relaunching, and the failure was the network's

@@ -54,7 +54,7 @@ struct BrowseView: View {
             // even though nothing here was ever rendered.
             session.logBlocked(results.blocked, origin: .browse(container.id))
         } catch {
-            trouble = Session.message(for: error)
+            trouble = Session.kidMessage(for: error)
         }
     }
 
