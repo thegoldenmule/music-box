@@ -21,8 +21,14 @@ private func seeded() throws -> (ModelContext, Family, Kid) {
     return (context, family, kid)
 }
 
+/// The tests are all owner-side, so they say so once here rather than at every
+/// call. See ``HouseholdSide`` for why `ckRecord` will not assume it.
+func ownedZoneID(_ zone: FamilyZone) -> CKRecordZone.ID {
+    HouseholdSide.owner.zoneID(for: zone)
+}
+
 private func roundTrip(_ record: SyncedRecord, in zone: FamilyZone = .household) -> SyncedRecord {
-    CloudKitCodec.syncedRecord(for: CloudKitCodec.ckRecord(for: record, in: zone))
+    CloudKitCodec.syncedRecord(for: CloudKitCodec.ckRecord(for: record, in: ownedZoneID(zone)))
 }
 
 // MARK: -
@@ -60,7 +66,7 @@ struct ValueRoundTrip {
     @Test("The name and type are the record's identity, not the payload's")
     func identitySurvives() {
         let original = SyncedRecord(name: "abc123", type: "FavoriteRecord", fields: [:])
-        let ck = CloudKitCodec.ckRecord(for: original, in: .kidWork(kidID))
+        let ck = CloudKitCodec.ckRecord(for: original, in: ownedZoneID(.kidWork(kidID)))
 
         #expect(ck.recordID.recordName == "abc123")
         #expect(ck.recordType == "FavoriteRecord")
@@ -99,7 +105,7 @@ struct WireRules {
 
         for record in [family.syncRecord(), kid.syncRecord(), entry.syncRecord()] {
             let zone = try #require(FamilyZone.placing(record.type, kidID: kidID))
-            let ck = CloudKitCodec.ckRecord(for: record, in: zone)
+            let ck = CloudKitCodec.ckRecord(for: record, in: ownedZoneID(zone))
             for key in ck.allKeys() {
                 #expect(ck[key] as? CKRecord.Reference == nil, "\(record.type).\(key)")
             }
@@ -186,7 +192,7 @@ struct EncryptionDisposition {
     func freeTextIsEncrypted() throws {
         let (_, _, kid) = try seeded()
         let playlist = kid.addPlaylist(named: "Car songs", at: t0)
-        let ck = CloudKitCodec.ckRecord(for: playlist.syncRecord(), in: .kidWork(kid.id))
+        let ck = CloudKitCodec.ckRecord(for: playlist.syncRecord(), in: ownedZoneID(.kidWork(kid.id)))
 
         #expect(ck.encryptedValues["name"] as? String == "Car songs")
         // And not in the clear alongside it.
@@ -196,7 +202,7 @@ struct EncryptionDisposition {
     @Test("A child's name is encrypted, and their sandbox level is not")
     func namesEncryptedLevelsNot() throws {
         let (_, _, kid) = try seeded()
-        let ck = CloudKitCodec.ckRecord(for: kid.syncRecord(), in: .kidPolicy(kid.id))
+        let ck = CloudKitCodec.ckRecord(for: kid.syncRecord(), in: ownedZoneID(.kidPolicy(kid.id)))
 
         #expect(ck.encryptedValues["name"] as? String == "Ada")
         // The sandbox level is not a secret, and keeping it clear leaves it
@@ -208,7 +214,7 @@ struct EncryptionDisposition {
     @Test("The passcode verifier and its salt are encrypted")
     func verifierIsEncrypted() {
         let epoch = PasscodeEpochRecord(epoch: 1, salt: Data([1]), verifier: Data([2]), at: t0)
-        let ck = CloudKitCodec.ckRecord(for: epoch.syncRecord(), in: .household)
+        let ck = CloudKitCodec.ckRecord(for: epoch.syncRecord(), in: ownedZoneID(.household))
 
         #expect(ck["verifier"] == nil)
         #expect(ck["salt"] == nil)
@@ -236,7 +242,7 @@ struct EncryptionDisposition {
             kidID: kidID, deviceID: UUID(), dayUTC: "2026-08-02", table: "plays", index: 0,
             payload: Data([1, 2, 3]), at: t0)
         let record = segment.syncRecord()
-        let ck = CloudKitCodec.ckRecord(for: record, in: .kidWork(kidID))
+        let ck = CloudKitCodec.ckRecord(for: record, in: ownedZoneID(.kidWork(kidID)))
 
         #expect(ck["payload"] == nil)
         #expect(roundTrip(record, in: .kidWork(kidID)).fields["payload"] == .data(Data([1, 2, 3])))

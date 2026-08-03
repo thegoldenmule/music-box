@@ -73,8 +73,16 @@ public enum FamilyZone: Sendable, Equatable, Hashable {
         }
     }
 
-    public var id: CKRecordZone.ID {
-        CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+    /// This zone's record ID, for a household owned by `owner`.
+    ///
+    /// **There is deliberately no zero-argument version.** It used to be a
+    /// property that supplied `CKCurrentUserDefaultName`, which is right on the
+    /// device that created the household and wrong on every device that joined
+    /// one — and wrong in the worst way, because CloudKit answers a request for
+    /// a zone you claim to own by creating it. See ``HouseholdSide``. Requiring
+    /// the owner name makes each call site say which household it means.
+    public func id(ownedBy owner: String) -> CKRecordZone.ID {
+        CKRecordZone.ID(zoneName: zoneName, ownerName: owner)
     }
 
     /// Reads a zone back from its name, so an arriving record can say where it

@@ -107,20 +107,34 @@ struct SharingSeam {
     /// without an account — which is what the stub is for, and what makes the
     /// unverifiable part exactly the CloudKit implementation and nothing above
     /// it.
-    @Test("A stub can stand in for the whole protocol")
-    func stubConforms() async throws {
+    /// **Two devices, because one cannot do both.** The original version of this
+    /// test invited and then accepted on the same stub, which reads fine and
+    /// describes a household that cannot exist: accepting is what makes a device
+    /// a joiner, and a joiner has nothing to invite anyone to.
+    @Test("A stub can stand in for the whole protocol, from the owner's side")
+    func stubConformsAsOwner() async throws {
         let stub = StubSharing(participants: [
             ShareParticipantSummary(id: "_me", hasAccepted: true, permission: .readWrite, isOwner: true)
         ])
 
-        let url = try await stub.invitation(for: .coParent, kids: kids)
-        try await stub.accept(url: url)
-        #expect(stub.accepted == [url])
+        #expect(try await stub.side() == .owner)
+        _ = try await stub.invitation(for: .coParent, kids: kids)
         #expect(stub.anchored == .household)
 
         #expect(try await stub.participants().count == 1)
         try await stub.removeParticipant("_me")
         #expect(try await stub.participants().isEmpty)
+    }
+
+    @Test("And from the side that accepted")
+    func stubConformsAsJoiner() async throws {
+        let stub = StubSharing()
+        let url = URL(string: "https://www.icloud.com/share/stub")!
+
+        try await stub.accept(url: url)
+
+        #expect(stub.accepted == [url])
+        #expect(try await stub.side().ownsTheHousehold == false)
     }
 
     /// An invited-but-not-yet-joined participant is a state the roster has to be

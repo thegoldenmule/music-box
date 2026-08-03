@@ -80,22 +80,41 @@ public struct SyncStatus: Sendable, Equatable {
 public final class SyncEngineHost: NSObject {
     public private(set) var status = SyncStatus()
 
+    /// Which side of the share this device is on, and therefore which engine
+    /// sends and which zone IDs are correct. `.owner` until `start` says
+    /// otherwise, because a device with no shared zones is one.
+    public private(set) var side: HouseholdSide = .owner
+
     private let modelContext: ModelContext
     private let stateStore: SyncStateStore
+    private let sides: HouseholdSideProvider
     private let container: CKContainer
 
     private var privateEngine: CKSyncEngine?
     private var sharedEngine: CKSyncEngine?
+
+    /// The engine that carries this device's own writes.
+    ///
+    /// **The bug this replaced sent everything to the private engine.** On the
+    /// device that owns the household that is right and on every device that
+    /// joined one it is silently wrong: the writes land in the joiner's own
+    /// private database, in zones nobody else can see, and the outbox drains
+    /// exactly as it would on success.
+    private var outbound: CKSyncEngine? {
+        side.ownsTheHousehold ? privateEngine : sharedEngine
+    }
 
     private var target: SyncApply.Context { SyncApply.Context(modelContext) }
 
     public init(
         modelContext: ModelContext,
         containerIdentifier: String = "iCloud.com.thegoldenmule.auralsanbox",
-        stateStore: SyncStateStore = UserDefaultsSyncState()
+        stateStore: SyncStateStore = UserDefaultsSyncState(),
+        sides: HouseholdSideProvider? = nil
     ) {
         self.modelContext = modelContext
         self.stateStore = stateStore
+        self.sides = sides ?? HouseholdSideProvider(containerIdentifier: containerIdentifier)
         container = CKContainer(identifier: containerIdentifier)
         super.init()
     }
@@ -105,14 +124,35 @@ public final class SyncEngineHost: NSObject {
     /// Separate from `init` because it talks to CloudKit, and a store that
     /// cannot be opened is a startup failure while a sync that cannot start is
     /// not — the app works offline and must keep working when iCloud is absent.
-    public func start(kids: [UUID]) {
+    ///
+    /// **The side is resolved first and the rest waits on it**, because there is
+    /// no safe default to start under: guessing `.owner` on a joined device is
+    /// what creates a second, empty household. A device that cannot reach
+    /// CloudKit to find out does not sync at all, which is the harmless way to
+    /// be wrong.
+    public func start(kids: [UUID]) async {
+        do {
+            let resolved = try await sides.current()
+            side = resolved.side
+            if !resolved.ambiguousOwners.isEmpty {
+                status.lastError = "This device has joined more than one family."
+            }
+        } catch {
+            status.lastError = error.localizedDescription
+            return
+        }
+
         privateEngine = makeEngine(database: container.privateCloudDatabase, scope: "private")
         sharedEngine = makeEngine(database: container.sharedCloudDatabase, scope: "shared")
 
-        // The zones have to exist before anything can be written into them.
-        // Only on the private side: zones in the shared database belong to
-        // whoever shared them.
-        let zones = SharePlan.zones(kids: kids).map { CKRecordZone(zoneID: $0.id) }
+        // The zones have to exist before anything can be written into them —
+        // but only the owner creates them. A joined device's zones arrived with
+        // the share and belong to whoever sent it; asking for them here would
+        // mint private duplicates beside the real ones.
+        guard side.ownsTheHousehold else { return }
+        let zones = SharePlan.zones(kids: kids).map {
+            CKRecordZone(zoneID: side.zoneID(for: $0))
+        }
         privateEngine?.state.add(pendingDatabaseChanges: zones.map { .saveZone($0) })
     }
 
@@ -136,7 +176,7 @@ public final class SyncEngineHost: NSObject {
     /// Called after a local edit and on launch. Deriving rather than being told
     /// means a caller that forgets costs a delay, not a lost change.
     public func pushPendingChanges() {
-        guard let privateEngine else { return }
+        guard let outbound else { return }
         do {
             let owed = try Reconcile.outgoing(in: target)
             status.pendingCount = owed.count
@@ -149,7 +189,7 @@ public final class SyncEngineHost: NSObject {
                 case .delete: .deleteRecord(id)
                 }
             }
-            privateEngine.state.add(pendingRecordZoneChanges: changes)
+            outbound.state.add(pendingRecordZoneChanges: changes)
         } catch {
             status.lastError = error.localizedDescription
         }
@@ -166,14 +206,14 @@ public final class SyncEngineHost: NSObject {
             guard let zone = FamilyZone.placing(record.type, kidID: kidID(of: record)) else {
                 return nil
             }
-            return CKRecord.ID(recordName: record.name, zoneID: zone.id)
+            return CKRecord.ID(recordName: record.name, zoneID: side.zoneID(for: zone))
         case .delete(let name, let type):
             // A deleted row cannot say which kid it belonged to, so the
             // tombstone's zone has to come from the type alone. Household-scoped
             // types are unambiguous; kid-scoped ones are not, which is why
             // `PendingDeletionRecord` will eventually need the zone on it.
             guard let zone = FamilyZone.placing(type, kidID: nil) else { return nil }
-            return CKRecord.ID(recordName: name, zoneID: zone.id)
+            return CKRecord.ID(recordName: name, zoneID: side.zoneID(for: zone))
         }
     }
 
@@ -240,15 +280,15 @@ extension SyncEngineHost: CKSyncEngineDelegate {
     /// right for a row that has since been deleted locally and wrong for
     /// anything else — so the only `nil` here is genuine absence.
     private func record(for id: CKRecord.ID) -> CKRecord? {
-        guard let zone = FamilyZone(zoneName: id.zoneID.zoneName) else { return nil }
-        _ = zone
+        guard FamilyZone(zoneName: id.zoneID.zoneName) != nil else { return nil }
         guard
             let owed = try? Reconcile.outgoing(in: target),
             case .upsert(let synced)? = owed.first(where: { $0.recordName == id.recordName })
         else { return nil }
 
-        let ck = CloudKitCodec.ckRecord(for: synced, in: FamilyZone(zoneName: id.zoneID.zoneName)!)
-        return ck
+        // The ID already carries the zone and its owner, decided in
+        // `recordID(for:)` where the side is known.
+        return CloudKitCodec.ckRecord(for: synced, in: id.zoneID)
     }
 
     private func absorb(

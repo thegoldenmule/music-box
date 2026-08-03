@@ -42,7 +42,7 @@ private final class Device {
             switch change {
             case .upsert(let record):
                 let zone = FamilyZone.placing(record.type, kidID: UUID()) ?? .household
-                let ck = CloudKitCodec.ckRecord(for: record, in: zone)
+                let ck = CloudKitCodec.ckRecord(for: record, in: ownedZoneID(zone))
                 return .upsert(CloudKitCodec.syncedRecord(for: ck))
             case .delete: return change
             }

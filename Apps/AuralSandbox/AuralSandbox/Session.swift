@@ -150,7 +150,20 @@ final class Session {
     /// Behind a protocol for the reason ``CatalogSource`` is: the admin screen
     /// and its copy have to be reachable with no account and no network, and
     /// the only part that genuinely needs a device is the implementation.
-    let sharing: any FamilySharing = CloudKitSharing()
+    /// **One provider, shared by both, and that is not a tidiness argument.**
+    /// The sharing layer and the sync engine each need to know whether this
+    /// device owns the household or joined one, and two caches can disagree:
+    /// accepting an invitation invalidates the one it went through and leaves
+    /// the other still answering `.owner`, which is exactly the state where
+    /// writes go to the wrong database.
+    @ObservationIgnored private let sides = HouseholdSideProvider()
+
+    /// Sending and accepting invitations.
+    ///
+    /// Behind a protocol for the reason ``CatalogSource`` is: the admin screen
+    /// and its copy have to be reachable with no account and no network, and
+    /// the only part that genuinely needs a device is the implementation.
+    @ObservationIgnored lazy var sharing: any FamilySharing = CloudKitSharing(sides: sides)
 
     /// The sync engine, built lazily and **not started on launch**.
     ///
@@ -160,20 +173,28 @@ final class Session {
     /// half-shared household, and that gap closes before this runs by itself.
     private(set) var syncEngine: SyncEngineHost?
 
+    /// Guards the gap between deciding to build the engine and finishing, which
+    /// is now `await`-wide: resolving the side talks to CloudKit, and two taps
+    /// during it would otherwise build two engines over one store.
+    private var startingSync = false
+
     /// Sends whatever the store owes, once.
     ///
     /// Builds the engine on first use rather than at launch: constructing it
     /// reaches for a CloudKit container, and an app that must keep working with
     /// no iCloud account should not do that on the way to the first screen.
-    func startSyncEngineIfNeeded() {
-        guard syncEngine == nil else { return }
-        let engine = SyncEngineHost(modelContext: context)
-        engine.start(kids: kids.map(\.id))
+    func startSyncEngineIfNeeded() async {
+        guard syncEngine == nil, !startingSync else { return }
+        startingSync = true
+        defer { startingSync = false }
+
+        let engine = SyncEngineHost(modelContext: context, sides: sides)
+        await engine.start(kids: kids.map(\.id))
         syncEngine = engine
     }
 
-    func syncNow() {
-        startSyncEngineIfNeeded()
+    func syncNow() async {
+        await startSyncEngineIfNeeded()
         syncEngine?.pushPendingChanges()
     }
 

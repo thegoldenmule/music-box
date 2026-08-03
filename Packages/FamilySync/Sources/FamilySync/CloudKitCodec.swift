@@ -126,8 +126,13 @@ enum Encrypted {
 ///   UUID. Two devices producing one logical row produce one record.
 public enum CloudKitCodec {
     /// The `CKRecord` for a record, placed in a zone.
-    public static func ckRecord(for record: SyncedRecord, in zone: FamilyZone) -> CKRecord {
-        let id = CKRecord.ID(recordName: record.name, zoneID: zone.id)
+    ///
+    /// Takes the zone's `ID` rather than a ``FamilyZone`` because the zone alone
+    /// does not say whose it is — see ``HouseholdSide``. The caller has already
+    /// had to decide, so it passes the decision in rather than letting this
+    /// re-derive it as "mine".
+    public static func ckRecord(for record: SyncedRecord, in zoneID: CKRecordZone.ID) -> CKRecord {
+        let id = CKRecord.ID(recordName: record.name, zoneID: zoneID)
         let ck = CKRecord(recordType: record.type, recordID: id)
         for (field, value) in record.fields {
             write(value, to: ck, as: field)

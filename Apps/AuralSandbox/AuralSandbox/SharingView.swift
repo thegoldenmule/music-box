@@ -29,6 +29,12 @@ struct SharingView: View {
     /// ``SharePlan``.
     @State private var inviting: InviteTarget = .grownUp
 
+    /// Which side of the share this device is on. **Nothing owner-side is drawn
+    /// until this is known**, because the buttons are not merely inapplicable on
+    /// a joined device — they write to the wrong database and mint a second,
+    /// empty household. See ``HouseholdSide``.
+    @State private var side: HouseholdSide?
+
     private enum InviteTarget: Hashable {
         case grownUp
         case kid(UUID)
@@ -36,12 +42,18 @@ struct SharingView: View {
 
     private var sharing: any FamilySharing { session.sharing }
 
+    private var owns: Bool { side?.ownsTheHousehold ?? false }
+
     var body: some View {
         Form {
             syncSection
-            inviteSection
+            if owns {
+                inviteSection
+                if !participants.isEmpty { peopleSection }
+            } else if side != nil {
+                joinedSection
+            }
             acceptSection
-            if !participants.isEmpty { peopleSection }
         }
         .navigationTitle("Sharing")
         .task { await refresh() }
@@ -53,9 +65,28 @@ struct SharingView: View {
         )
     }
 
+    /// What a device that joined somebody else's family sees instead of the
+    /// invite controls.
+    ///
+    /// **It says who is in charge rather than hiding the section**, because the
+    /// absence of a button is indistinguishable from a bug — and the answer to
+    /// "why can't I invite anyone" is a fact about the household, not a failure.
+    private var joinedSection: some View {
+        Section {
+            Label("This device joined a family somebody else set up.", systemImage: "person.2")
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("This family")
+        } footer: {
+            Text(
+                "Whoever set the family up is the one who can invite or remove people. Everything else works the same here."
+            )
+        }
+    }
+
     private var syncSection: some View {
         Section {
-            Button("Sync now") { session.syncNow() }
+            Button("Sync now") { Task { await session.syncNow() } }
             let status = session.syncEngine?.status ?? SyncStatus()
             if status.pendingCount > 0 {
                 Text("\(status.pendingCount) record(s) waiting to go out")
@@ -237,7 +268,13 @@ struct SharingView: View {
     /// finds out somebody joined by looking. So this happens whenever the screen
     /// opens, it is idempotent, and doing nothing is the normal outcome.
     private func refresh() async {
+        // First, because everything below is owner-side and would write into
+        // the wrong database on a device that joined.
+        side = try? await sharing.side()
+
         participants = (try? await sharing.participants()) ?? []
+        guard owns else { return }
+
         _ = try? await sharing.reconcileGrants(for: .coParent, kids: session.kids.map(\.id))
         for kid in session.kids {
             _ = try? await sharing.reconcileGrants(for: .child(kid.id), kids: session.kids.map(\.id))
