@@ -23,7 +23,7 @@ Nine things, in the order they pay off. Detail for each is further down.
 | 2 | **One motion vocabulary** (`enum Motion`) | Floor | Nine animation sites, five distinct curves, no shared names, and eight of the nine are easing. Springs are interruptible; `.easeInOut(duration:)` is not. |
 | 3 | **Symbol transitions + press feedback** | Floor | `.contentTransition(.symbolEffect(.replace))` and a pressed-state `ButtonStyle`. Two modifiers each, felt on every tap. |
 | 4 | **Artwork at the right resolution** | Floor | `artworkSize: 512` feeds a 420pt hero — ~1260px of target from 512px of source. The kid's full-screen album art is soft, and the 56pt row thumb decodes a 512px bitmap. Both ends wrong. |
-| 5 | **Dynamic Type + hit targets** | Floor | Four `.font(.system(size:))`, a `.frame(height: tileWidth + 84)` that will clip, and 28pt controls where HIG's *default* is 44. |
+| 5 | **Dynamic Type + hit targets** | Floor | **Observed, not predicted:** at AX5 the shelf's fixed `.frame(height:)` makes the *artwork collapse to a thumbnail* while text takes the tile. Plus four `.font(.system(size:))` and 28pt controls where HIG's *default* is 44. |
 | 6 | **Scroll behaviour on the shelves** | Floor | `.scrollTargetBehavior(.viewAligned)` + `.contentMargins`. Every first-party shelf snaps; these do not. |
 | 7 | **Title hand-off on Album/Artist** | Floor | Those screens force `.inline` *and* have an empty bar, so scrolling past the cover leaves the screen with no name anywhere. |
 | 8 | **The floating capsule bottom chrome** | Gated | The look the request actually described. Also deletes the double-`.bar` compositing defect. |
@@ -451,10 +451,28 @@ A pleasant accident worth knowing: `.font(.system(size:))` resolves to the iOS
 four sites will *inherit* `.rounded` rather than opting out of it. They still opt
 out of Dynamic Type, which is the actual defect.
 
-**Fixed heights that Dynamic Type will overflow** are the same bug wearing a
-different hat: `KidHomeView.swift:1095` `.frame(height: tileWidth + 84)` and
-`KidSearchBar.swift:37` `height: 52`. Use `@ScaledMetric` (iOS 14) or drop the
-outer frame and let the stack size itself.
+**Fixed heights and Dynamic Type — observed on a running build at AX5, not
+predicted.** `KidHomeView.swift:1095` `.frame(height: tileWidth + 84)` and
+`KidSearchBar.swift:37` `height: 52`.
+
+The failure is worse than "the frame clips." Because the shelf height is fixed
+and `Tile`'s artwork is `.aspectRatio(1, contentMode: .fit)` *inside* it, growing
+text does not overflow the tile — **it evicts the artwork.** At
+`accessibility-extra-extra-extra-large` the album covers shrink to roughly a
+quarter of their normal size, sitting as postage stamps above two lines of
+truncated title ("Tig r…", "In a…"). A shelf of tiles is the one surface in this
+app that a pre-literate child navigates *entirely by picture*, so the accessibility
+size that exists for people who cannot read small text is the exact size at which
+this app removes the pictures and leaves the words.
+
+The heart glyph also scales while its reserved 28pt gutter does not, so it
+overflows its column; the now-playing bar's title becomes "Al…" / "Mi…"; and the
+bottom chrome grows to roughly 30% of the screen.
+
+Fix: `@ScaledMetric(relativeTo: .headline)` on `tileWidth`, derive the height from
+the same metric rather than the literal `84`, and cap growth — or drop the outer
+`.frame(height:)` entirely and let the `HStack` size itself. Either way the
+artwork must have a floor it cannot be squeezed below.
 
 ### 3.5 Colour scheme
 
@@ -608,11 +626,27 @@ is showing a child a block message. At the 60pt design height, r=28 against a
 capsule's r=30 is indistinguishable. This also keeps the shape `InsettableShape`,
 which the stroke needs (below), and deletes `AnyShape` entirely.
 
-**The `.background(.bar)` fix is one surface per floating shape, and the shapes
-must never overlap.** Delete `.background(.bar)` from `NowPlayingBar.swift:138`
-and `KidSearchBar.swift:58`; each capsule gets exactly one surface, and the 8pt
-gap means nothing composites. (Only if the flush slab were kept would "one
-background on the `bottomBars` VStack" be the answer.)
+**The `.background(.bar)` situation — corrected by observation, 2026-08-03.**
+
+An earlier draft of this file called the two `.background(.bar)` applications
+(`NowPlayingBar.swift:138`, `KidSearchBar.swift:58`) a *double-darkening
+compositing defect*. **That was wrong.** The two bars are **adjacent siblings** in
+the `bottomBars` `VStack` (`KidHomeView.swift:327-331`), not stacked views — each
+material covers its own band and nothing composites through anything else.
+Sampling a vertical strip down the left edge of a running build gives
+`(246,249,250)` in the now-playing band and `(246,248,246)` in the search band:
+no doubling.
+
+What is *actually* there is a **visible tonal seam** at the boundary between the
+two bands, because each material resolves against whatever content sits behind
+its own band. It is subtle in light mode and clearly visible in dark. That is a
+cosmetic argument for the single floating treatment, not a correctness one — so
+this section's recommendation stands, but on aesthetic grounds alone. Do not
+repeat the compositing claim.
+
+The fix remains **one surface per floating shape, and the shapes must never
+overlap**: delete `.background(.bar)` from both, give each capsule exactly one
+surface, and let the 8pt gap separate them.
 
 **Use `strokeBorder`, not `stroke`.** `stroke` centres the 0.5pt hairline *on*
 the path, so half of it lands outside the material as a fringe over the content
@@ -910,14 +944,29 @@ iOS-only enhancement with a plain push underneath.
 
 ## 7. Verification, under the no-simulator rule
 
-**Never run the simulator.** The gates are:
+Per `CLAUDE.md`, do not run the simulator *to look at the app* without the
+maintainer asking for it. A headless probe behind a launch argument is always
+legitimate. The screenshots that produced the "observed" notes in this file were
+taken on 2026-08-03 with explicit permission.
+
+The gates are:
 
 ```sh
 for p in Packages/*/; do swift test --package-path "$p"; done
 cd Apps/AuralSandbox
-xcodebuild build -scheme AuralSandbox -destination 'platform=macOS'
 xcodebuild build -scheme AuralSandbox -sdk iphonesimulator
+xcodebuild build -scheme AuralSandbox -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
+
+**`CODE_SIGNING_ALLOWED=NO` is what makes the macOS gate usable again, and it is
+worth keeping.** `CLAUDE.md` records that the plain macOS app build now fails on
+provisioning (the iCloud entitlements moved the Mac target onto a real
+development profile this machine is not registered on) and says not to chase it.
+That is right — but dropping the macOS build entirely would silently lose the
+*availability* check, and there is no substitute for it. Verified on 2026-08-03:
+with `CODE_SIGNING_ALLOWED=NO` the macOS build reaches `** BUILD SUCCEEDED **`
+on a clean tree, so it still compiles every line and still type-checks every
+`@available`.
 
 **The build gate is stronger than it looks — this was proved, not assumed.** An
 unfenced `.scrollEdgeEffectStyle(.soft, for: .bottom)` at file scope produces:
@@ -930,12 +979,20 @@ Not a warning. `IPHONEOS_DEPLOYMENT_TARGET = 17.0` is what the checker compares
 against and the iOS 26.5 SDK supplies the annotation, so **every gated
 recommendation in this file is enforced by the build, not merely advised.**
 
-**Run both commands, always.** The same unfenced call inside `#if os(macOS)` was
-**not** reported by the iOS build; only the macOS build caught it, as
-`only available in macOS 26.0 or newer`. A `#if os(macOS)` branch is invisible to
-the iOS gate and a `#if os(iOS)` branch is invisible to the macOS one — and
-`NowPlayingBar.swift:139-159`, `KidPlayerModel` and `PlayerExpansion` all have
-such branches.
+**Run both commands, always — re-proved on 2026-08-03 against this exact
+toolchain.** A `ZZProbe.swift` carrying an unfenced
+`.scrollEdgeEffectStyle(.soft, for: .bottom)` inside a `#if os(macOS)` branch
+gave:
+
+| Gate | Result |
+| --- | --- |
+| `-sdk iphonesimulator` | `** BUILD SUCCEEDED **` — did **not** catch it |
+| `-destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO` | `error: 'scrollEdgeEffectStyle(_:for:)' is only available in macOS 26.0 or newer` |
+
+A `#if os(macOS)` branch is invisible to the iOS gate and a `#if os(iOS)` branch
+is invisible to the macOS one — and `NowPlayingBar.swift:139-159`,
+`KidPlayerModel` and `PlayerExpansion` all have such branches. Dropping the macOS
+gate means those branches are compiled by nothing.
 
 **`#Preview` bodies are compiled and availability-checked by both gates.** Also
 proved: an unfenced iOS 26 call inside a `#Preview` failed both builds, attributed
@@ -981,12 +1038,33 @@ grep -rn '\.background(\.bar)' Apps/              # Group G (2 admin sites stay)
 grep -c '150' Apps/AuralSandbox/AuralSandbox/KidHomeView.swift   # Group D: 4 -> 1
 ```
 
-**Not verifiable from this side — hand to the maintainer.** Everything visual.
-Specifically: the scroll-edge-effect band height under the floating capsules
-(§4.1); whether the morph's cover lands exactly on the hero (§4.2 fix 2); whether
-the opacity-0 hero slot still takes the album tap (§4.2); whether the capsule's
-clipped corners still mis-catch a tap; every contrast and colour judgement; and
-anything at all about MusicKit, which is not yet enabled on the App ID.
+**Seen on a running build (iPhone 17 Pro simulator, iOS 26.5, 2026-08-03).**
+Liquid Glass is confirmed active — the toolbar lock button renders as a circular
+glass control. The tint is confirmed stock system blue in both appearances.
+Dark mode is confirmed correct: every semantic style resolves and nothing is
+hardcoded. The bottom chrome is confirmed a full-width flush slab with a visible
+seam. The AX5 artwork collapse (§3.4) was *found* this way, not predicted. The
+double-darkening claim was *refuted* this way (§4.1). MusicKit worked in the
+simulator against a signed-in account, contrary to the assumption that nothing
+could be fetched.
+
+**Still not verified — the simulator could not be driven.** Tapping requires
+Accessibility permission for System Events, which is not granted on this machine,
+so nothing behind an interaction was reachable: the full-screen player and its
+hero artwork, the drag expansion, the Album/Artist screens and their empty
+navigation bar, search results, and every scrolled state. If those matter, the
+fastest path is for the maintainer to tap through while a screenshot loop runs.
+
+**Not verifiable from this side at all.** How the motion *feels* — no screenshot
+answers that. Whether the morph's cover lands exactly on the hero (§4.2 fix 2).
+Whether the opacity-0 hero slot still takes the album tap (§4.2). Whether the
+capsule's clipped corners mis-catch a tap (§4.1). The scroll-edge-effect band
+height under the floating capsules (§4.1). Every contrast judgement, which needs
+a real display. And anything about behaviour on the real under-13 account.
+
+**The hero artwork softness (§4.4) is arithmetic, not observation.** 512px source
+into a 420pt frame is a 2.46× upscale on a 3× device. That does not need to be
+seen to be true, but it has not been seen.
 
 ---
 
