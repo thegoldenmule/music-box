@@ -42,6 +42,14 @@ struct AdminView: View {
             deviceSection
 
             Section {
+                NavigationLink("Sharing") { SharingView(session: session) }
+            } footer: {
+                Text(
+                    "Let another grown-up curate for these kids from their own phone, or join a family somebody else set up."
+                )
+            }
+
+            Section {
                 NavigationLink("Diagnostics") { SearchView(session: session) }
             } footer: {
                 Text(

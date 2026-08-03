@@ -45,12 +45,16 @@ import Foundation
 /// `CKShare(recordZoneID:)` instead, which is a different API and the one with
 /// reported participant-write trouble. Nothing above tells us it works.
 ///
-/// **And the fallback is not the cheap swap it was described as.** Dropping to
-/// hierarchy sharing means parent references, and `RecordMapper` forbids
-/// references outright — that rule is precisely what lets a kid's rows sit in a
-/// different zone from the household they point at. Hierarchy sharing would
-/// pull the reachable graph into one zone and collapse the topology, taking the
-/// per-kid `policy`/`work` split with it. It is a redesign, not a substitution.
+/// **There is no fallback, by decision.** Hierarchy sharing was briefly written
+/// down as one, and it is not: it needs parent references, and `RecordMapper`
+/// forbids references outright — that rule is precisely what lets a kid's rows
+/// sit in a different zone from the household they point at. It would pull the
+/// reachable graph into one zone and take the per-kid `policy`/`work` split
+/// with it, which is the split stopping a child from writing their own policy
+/// entries. So this design commits to zone-wide sharing with an explicit invite
+/// flow, and if the participant-write probe comes back negative the answer is a
+/// redesign rather than a switch. Do not write a second path on the strength of
+/// it being cheap; it is not.
 ///
 /// **One thing to get right when the invite is built:** Apple's sample sets
 /// `share.publicPermission = .readWrite`, which means anyone holding the link

@@ -1,6 +1,7 @@
 import AdminGate
 import CatalogKit
 import FamilyStore
+import FamilySync
 import Foundation
 import KidLibrary
 import SwiftData
@@ -143,6 +144,13 @@ final class Session {
     /// inside ``KidPlayerModel`` so a history wipe can reach it — see
     /// ``deleteHistory(for:)``.
     let playQueues: any PlayQueueStore = UserDefaultsPlayQueueStore()
+
+    /// Sending and accepting invitations.
+    ///
+    /// Behind a protocol for the reason ``CatalogSource`` is: the admin screen
+    /// and its copy have to be reachable with no account and no network, and
+    /// the only part that genuinely needs a device is the implementation.
+    let sharing: any FamilySharing = CloudKitSharing()
 
     /// Bumped whenever the active kid's history is cleared.
     ///
