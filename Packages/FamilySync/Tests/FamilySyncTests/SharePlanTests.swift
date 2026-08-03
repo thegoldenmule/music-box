@@ -1,6 +1,9 @@
 import Foundation
+import PolicyEngine
+import SwiftData
 import Testing
 
+@testable import FamilyStore
 @testable import FamilySync
 
 private let ada = UUID(uuidString: "A0000000-0000-0000-0000-00000000000A")!
@@ -135,5 +138,65 @@ struct SharingSeam {
         let people = try await stub.participants()
         #expect(people.filter(\.hasAccepted).count == 1)
         #expect(people.filter { !$0.hasAccepted }.count == 1)
+    }
+}
+
+// MARK: -
+
+@Suite("Every record knows where it lives")
+@MainActor
+struct ZonePlacement {
+    /// **The check that would have caught a bug the tests did not.** A record
+    /// whose zone cannot be resolved is never sent, and nothing reports it —
+    /// the outbox simply never drains. A playlist song reached the server only
+    /// after `PlaylistEntryRecord` started carrying the kid it belongs to.
+    ///
+    /// So: every kid-scoped record an encoder produces must be placeable, and
+    /// placeable in a zone the household actually owns.
+    @Test("Every encoded record lands in a zone the household owns")
+    func everyRecordIsPlaceable() throws {
+        let context = ModelContext(try FamilyStore.inMemoryContainer())
+        let family = Family(at: .now)
+        let kid = Kid(name: "Ada", mode: .denyPlusAuto, at: .now)
+        context.insert(family)
+        context.insert(kid)
+        family.addKid(kid, at: .now)
+
+        kid.setMode(.allowOnly, at: .now)
+        let entry = kid.addEntry(kind: .deny, id: CatalogID(.artist, "a"), displayName: "A")
+        let favorite = try #require(kid.addFavorite(id: CatalogID(.album, "b"), displayName: "B"))
+        let playlist = kid.addPlaylist(named: "Car songs")
+        let song = try #require(playlist.addSong(id: CatalogID(.song, "c"), displayName: "C"))
+        let suggestion = kid.addSuggestion(
+            target: .catalog(CatalogID(.album, "d")), displayName: "D")
+        let suggested = try #require(
+            suggestion.addSong(id: CatalogID(.song, "e"), displayName: "E"))
+
+        let owned = Set(SharePlan.zones(kids: [kid.id]))
+        let records: [SyncedRecord] = [
+            family.syncRecord(), kid.syncRecord(), entry.syncRecord(),
+            try #require(kid.sandboxSettings.first).syncRecord(),
+            favorite.syncRecord(), playlist.syncRecord(), song.syncRecord(),
+            suggestion.syncRecord(), suggested.syncRecord(),
+        ]
+
+        for record in records {
+            // The same rule the engine host uses: a `Kid`'s own id names the
+            // kid, everything else has to carry one.
+            let owner =
+                record.type == Kid.syncRecordType
+                ? record.uuid(Field.id) : record.uuid(Field.kidID)
+            let zone = FamilyZone.placing(record.type, kidID: owner)
+
+            let placed = try #require(zone, "\(record.type) could not be placed")
+            #expect(owned.contains(placed), "\(record.type) → \(placed.zoneName), not owned")
+        }
+    }
+
+    /// Household-scoped records have no kid and must still place.
+    @Test("Household records place without a kid")
+    func householdRecordsNeedNoKid() {
+        let device = DeviceRecord(label: "iPad", role: .kidOnly, platform: .pad)
+        #expect(FamilyZone.placing(device.syncRecord().type, kidID: nil) == .household)
     }
 }

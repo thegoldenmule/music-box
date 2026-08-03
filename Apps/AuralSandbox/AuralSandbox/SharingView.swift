@@ -28,6 +28,7 @@ struct SharingView: View {
 
     var body: some View {
         Form {
+            syncSection
             inviteSection
             acceptSection
             if !participants.isEmpty { peopleSection }
@@ -40,6 +41,29 @@ struct SharingView: View {
             actions: { Button("OK") { trouble = nil } },
             message: { Text(trouble ?? "") }
         )
+    }
+
+    private var syncSection: some View {
+        Section {
+            Button("Sync now") { session.syncNow() }
+            let status = session.syncEngine?.status ?? SyncStatus()
+            if status.pendingCount > 0 {
+                Text("\(status.pendingCount) record(s) waiting to go out")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let last = status.lastSucceeded {
+                Text("Last sent \(last.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let trouble = status.lastError {
+                Text(trouble).font(.caption).foregroundStyle(.red)
+            }
+        } header: {
+            Text("This device")
+        } footer: {
+            // Manual on purpose. See `Session.syncEngine`.
+            Text("Sync does not run on its own yet.")
+        }
     }
 
     // MARK: - Sending

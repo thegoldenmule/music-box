@@ -226,6 +226,12 @@ extension SuggestionEntryRecord: SyncEncodable {
             Field.modifiedAt: .date(modifiedAt),
         ]
         fields["suggestionID"] = suggestion.map { .uuid($0.id) }
+        // **The owning kid, carried even though the parent already implies it.**
+        // Zone placement happens before anything is resolved, so a record that
+        // cannot name its kid has nowhere to go — and the sync engine found this
+        // out the hard way, by silently routing playlist songs into a zone
+        // derived from their own identifier.
+        fields[Field.kidID] = suggestion?.kid.map { .uuid($0.id) }
         fields["artworkURL"] = artworkURL.map { .url($0) }
         return fields
     }
@@ -299,6 +305,9 @@ extension PlaylistEntryRecord: SyncEncodable {
             Field.modifiedAt: .date(modifiedAt),
         ]
         fields["playlistID"] = playlist.map { .uuid($0.id) }
+        // See ``SuggestionEntryRecord`` — the owning kid decides the zone, and
+        // the zone is chosen before any relationship is walked.
+        fields[Field.kidID] = playlist?.kid.map { .uuid($0.id) }
         fields["artworkURL"] = artworkURL.map { .url($0) }
         fields["origin"] = .string(origin)
         return fields

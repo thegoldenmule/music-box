@@ -152,6 +152,31 @@ final class Session {
     /// the only part that genuinely needs a device is the implementation.
     let sharing: any FamilySharing = CloudKitSharing()
 
+    /// The sync engine, built lazily and **not started on launch**.
+    ///
+    /// Proven to work against the real container — zones created, records
+    /// accepted, outbox drained — and deliberately still manual, because a
+    /// co-parent arriving holding the household and none of the kid zones is a
+    /// half-shared household, and that gap closes before this runs by itself.
+    private(set) var syncEngine: SyncEngineHost?
+
+    /// Sends whatever the store owes, once.
+    ///
+    /// Builds the engine on first use rather than at launch: constructing it
+    /// reaches for a CloudKit container, and an app that must keep working with
+    /// no iCloud account should not do that on the way to the first screen.
+    func startSyncEngineIfNeeded() {
+        guard syncEngine == nil else { return }
+        let engine = SyncEngineHost(modelContext: context)
+        engine.start(kids: kids.map(\.id))
+        syncEngine = engine
+    }
+
+    func syncNow() {
+        startSyncEngineIfNeeded()
+        syncEngine?.pushPendingChanges()
+    }
+
     /// Bumped whenever the active kid's history is cleared.
     ///
     /// A counter rather than a callback into the player, which would be a
