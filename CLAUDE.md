@@ -95,15 +95,33 @@ line. Anything needing entitlements, signing, or an Info.plist goes under
 for p in Packages/*/; do swift test --package-path "$p"; done
 
 cd Apps/AuralSandbox
-xcodebuild build -scheme AuralSandbox -destination 'platform=macOS'
 xcodebuild build -scheme AuralSandbox -sdk iphonesimulator   # checks the iOS floor
 ```
 
-`swift build` targets **macOS**, so an iOS-only availability mistake compiles
-clean here. That already happened once: the packages declared iOS 15 while using
-iOS 16 and 17 APIs, and nothing caught it. When adding an API, check its
-availability annotation against the declared floor by hand. Building the app
-against `iphonesimulator` is the closest thing to a real check.
+**The macOS app is not a concern right now, and its build is expected to fail.**
+Do not chase it, and do not treat it as a regression introduced by whatever you
+are working on. The failure is provisioning, not code: adding the iCloud
+entitlements moved the Mac target off profile-free ad-hoc signing onto a real
+development profile, and this Mac is not registered on it —
+*"Provisioning profile … doesn't include the currently selected device
+'Constantine'"*. Confirmed by overriding `CODE_SIGN_ENTITLEMENTS` back to the
+sandbox-only file, which builds clean. Unsticking it means registering the
+machine, either in Xcode or with `-allowProvisioningDeviceRegistration`
+alongside `-allowProvisioningUpdates` — a decision for the maintainer, since it
+consumes a device slot on the account.
+
+**None of this means macOS support is being dropped.** The floor stays macOS 14,
+the packages still build and test on macOS, and code must keep compiling for it
+— `swift test` runs there and is still the main check. What is deprioritised is
+the *app target* on macOS: its build failing is not news, and time spent on its
+signing is time not spent on the thing being built.
+
+So the app-level check that matters is the `iphonesimulator` build. `swift build`
+targets **macOS**, so an iOS-only availability mistake compiles clean here. That
+already happened once: the packages declared iOS 15 while using iOS 16 and 17
+APIs, and nothing caught it. When adding an API, check its availability
+annotation against the declared floor by hand. Building the app against
+`iphonesimulator` is the closest thing to a real check.
 
 Building to a **device** does not work on this machine yet —
 `generic/platform=iOS` reports *iOS 26.5 is not installed*, and the iOS platform
