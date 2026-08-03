@@ -18,27 +18,13 @@ struct AuralSandboxApp: App {
         }
     }()
 
-    /// Set by `-runCloudKitProbe YES`, so the probes can be run and their
-    /// output captured without anyone tapping through the gate. Throwaway,
-    /// alongside the probe screen itself.
-    private var isProbing: Bool {
-        UserDefaults.standard.bool(forKey: "runCloudKitProbe")
-    }
-
     var body: some Scene {
         WindowGroup {
-            if isProbing {
-                Color.clear.task {
-                    await CloudKitProbe.runHeadless()
-                    print("probe finished")
-                }
-            } else {
-                switch startup {
-                case .ready(let session):
-                    RootView(session: session)
-                case .failed(let message):
-                    StartupFailureView(message: message)
-                }
+            switch startup {
+            case .ready(let session):
+                RootView(session: session)
+            case .failed(let message):
+                StartupFailureView(message: message)
             }
         }
         #if os(macOS)
