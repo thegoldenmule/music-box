@@ -530,7 +530,39 @@ The bar's play/pause and skip buttons (`NowPlayingBar.swift:119-134`) have **no
 frame at all** — the target is the glyph's own bounds, ~24–28pt. That one is a
 plain defect; `NowPlayingView.swift:323` already does it correctly.
 
-### 3.8 macOS
+### 3.8 What the child actually reads
+
+**Found by running the app on 2026-08-03. This is a real defect, not a
+refinement.** The kid's player displayed, in the message slot under the scrubber:
+
+> The operation couldn't be completed. (MPMusicPlayerControllerErrorDomain error 6.)
+
+`NowPlayingBar.swift:46-48` and `NowPlayingView.swift:124-125` both describe that
+slot as *"The only block a kid is ever shown... Plain words, no error code, and no
+mention of the rule."* The invariant is right; the implementation does not hold it.
+
+`Session.swift:2021` is the leak:
+
+```swift
+static func message(for error: any Error) -> String {
+    (error as? CatalogError)?.errorDescription ?? error.localizedDescription
+}
+```
+
+Anything that is not a `CatalogError` reaches the child verbatim — domain, code and
+all. `KidPlayerModel` uses it at `:243` and `:542`. Line `:527` shows what the
+right answer looks like and is the only one written for the reader:
+`"Skipping this one — let's try the next."`
+
+**Rule: no string originating from a framework is ever rendered on a kid surface.**
+`message(for:)` should map to a small, closed set of hand-written sentences and
+fall back to a generic kid-safe one, with the underlying error logged rather than
+displayed. Framework text is fine on the parent side, where it is diagnostic.
+
+This is a styling concern in the only sense that matters here: it is what a
+six-year-old who cannot read sees on the largest screen in the app.
+
+### 3.9 macOS
 
 The Mac is the half that will look worst, and it has the *wider* gap: floor
 macOS 14, glass at macOS 26.
@@ -838,10 +870,17 @@ above the source and softens exactly when it is largest.
 ### 4.4 Artwork resolution · **Floor**
 
 `MusicKitCatalogSource.swift:27` and `:419` default to `artworkSize: Int = 512`,
-and `NowPlayingView.swift:211` draws the hero at `.frame(maxWidth: 420)`. On a 3×
-phone that is ~1260px of target from a 512px source. **Both ends are wrong**: the
-hero upscales 512→1260 and looks soft, and the 56pt row thumbnail downloads and
-decodes the same 512px bitmap (~1MB resident) to draw it at 168px.
+and `NowPlayingView.swift:211` draws the hero at `.frame(maxWidth: 420)` inside
+`.padding(.horizontal, 32)`.
+
+**Measured on a running build (iPhone 17 Pro, 2026-08-03), not calculated:** the
+hero renders **1077px wide — about 359pt — from a 512px source, a 2.1× upscale.**
+On a wider phone it hits the 420pt cap and reaches 2.46×. Magnifying the fine
+credits text on *Kind of Blue* shows smooth interpolation gradients where a native
+render would give crisp pixel edges: it is visibly, confirmably soft.
+
+**Both ends are wrong**: the hero upscales ~2×, and the 56pt row thumbnail
+downloads and decodes that same 512px bitmap (~1MB resident) to draw it at 168px.
 
 The fix has one real constraint: **a second size means a second URL, which means
 a second `ArtworkCache` entry and a second download for the same artwork.** So it
@@ -1048,12 +1087,25 @@ double-darkening claim was *refuted* this way (§4.1). MusicKit worked in the
 simulator against a signed-in account, contrary to the assumption that nothing
 could be fetched.
 
-**Still not verified — the simulator could not be driven.** Tapping requires
-Accessibility permission for System Events, which is not granted on this machine,
-so nothing behind an interaction was reachable: the full-screen player and its
-hero artwork, the drag expansion, the Album/Artist screens and their empty
-navigation bar, search results, and every scrolled state. If those matter, the
-fastest path is for the maintainer to tap through while a screenshot loop runs.
+**Driving the simulator, once permissions are granted.** Terminal needs
+Automation (System Events) *and* Accessibility. Get the device rect from the
+window's `AXGroup` rather than guessing at the title bar — it reports the exact
+logical screen:
+
+```sh
+osascript -e 'tell application "System Events" to tell process "Simulator" \
+  to tell window 1 to get {position, size} of (first UI element whose role is "AXGroup")'
+# → 844, 119, 402, 874    (origin, then device points)
+```
+
+Screenshot pixels ÷ 3 = device points; add the origin for screen coordinates.
+**`activate` and `click` must be in the same `osascript` invocation with a delay
+between them** — clicking from a separate call silently does nothing, which reads
+exactly like a dead control and cost two false findings here.
+
+**Still not verified.** The drag expansion (a click cannot express a drag), the
+Album and Artist screens and their empty navigation bar, search results, and
+every scrolled state.
 
 **Not verifiable from this side at all.** How the motion *feels* — no screenshot
 answers that. Whether the morph's cover lands exactly on the hero (§4.2 fix 2).
@@ -1062,9 +1114,8 @@ capsule's clipped corners mis-catch a tap (§4.1). The scroll-edge-effect band
 height under the floating capsules (§4.1). Every contrast judgement, which needs
 a real display. And anything about behaviour on the real under-13 account.
 
-**The hero artwork softness (§4.4) is arithmetic, not observation.** 512px source
-into a 420pt frame is a 2.46× upscale on a 3× device. That does not need to be
-seen to be true, but it has not been seen.
+**The hero artwork softness (§4.4) is now measured, not inferred** — 2.1× upscale
+on an iPhone 17 Pro, visible as interpolation blur in the cover's fine text.
 
 ---
 
