@@ -25,6 +25,37 @@ import Foundation
 /// rejecting a child tapping "no thanks" while the allow stayed live forever.
 /// The narrower guarantee — a child cannot write their own policy entries — is
 /// kept; the tidier one is not available.
+/// ## What is assumed here, and what is documented
+///
+/// **Apple Family Sharing grants nothing in CloudKit.** The two systems are
+/// unrelated, and this is worth stating because the shorthand "the family can
+/// see it" is wrong in a way that reads as right. Every participant is
+/// explicitly invited and must accept — Apple's *Sharing CloudKit Data with
+/// Other iCloud Users* has both accounts logging in on separate devices and a
+/// link sent between them. There is no membership that confers access.
+///
+/// So the working assumption is narrower than it sounds: **an adult who has
+/// been invited and has accepted, holding `readWrite`, can write.** That half
+/// is documented — Apple's sample has device B editing a shared record and the
+/// change landing in device A's private database.
+///
+/// **What is still unverified is the zone-wide part specifically.** Apple's
+/// article describes *hierarchy* sharing: a root record, with children pulled
+/// in by `newNoteRecord.parent = CKRecord.Reference(...)`. This design uses
+/// `CKShare(recordZoneID:)` instead, which is a different API and the one with
+/// reported participant-write trouble. Nothing above tells us it works.
+///
+/// **And the fallback is not the cheap swap it was described as.** Dropping to
+/// hierarchy sharing means parent references, and `RecordMapper` forbids
+/// references outright — that rule is precisely what lets a kid's rows sit in a
+/// different zone from the household they point at. Hierarchy sharing would
+/// pull the reachable graph into one zone and collapse the topology, taking the
+/// per-kid `policy`/`work` split with it. It is a redesign, not a substitution.
+///
+/// **One thing to get right when the invite is built:** Apple's sample sets
+/// `share.publicPermission = .readWrite`, which means anyone holding the link
+/// can write. For a store holding a child's search history that is the wrong
+/// default. Participants are added explicitly; the link is not the credential.
 public enum FamilyZone: Sendable, Equatable, Hashable {
     case household
     case kidPolicy(UUID)
