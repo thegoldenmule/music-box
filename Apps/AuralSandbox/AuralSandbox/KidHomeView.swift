@@ -681,7 +681,7 @@ struct KidHomeView: View {
             async let grownUp = session.grownUpShelves()
             (recents, libraryItems, grownUpShelves) = try await (recentItems, favorites, grownUp)
         } catch {
-            trouble = Session.message(for: error)
+            trouble = Session.kidMessage(for: error)
         }
     }
 
@@ -752,7 +752,7 @@ struct KidHomeView: View {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                trouble = Session.message(for: error)
+                trouble = Session.kidMessage(for: error)
                 withAnimation(.easeInOut(duration: 0.2)) { search = .trouble }
             }
         }
@@ -1031,8 +1031,10 @@ struct PlaylistCard: View {
 /// because it predicts what lands — the count is scenery, and a shelf that
 /// turns out to be empty simply is not drawn a moment later.
 struct HomeSkeleton: View {
-    /// Matches ``TileShelf``, so nothing jumps sideways on the swap.
-    private let tileWidth: CGFloat = 150
+    /// Matches ``TileShelf``, so nothing jumps sideways on the swap — including
+    /// the scaling, or the placeholders would be one width and the tiles that
+    /// replace them another.
+    @ScaledMetric(relativeTo: .headline) private var tileWidth: CGFloat = 150
 
     /// The pulse. Without it a grey screen reads as broken rather than busy;
     /// slow enough to be calm, since a kid is looking at it.
@@ -1076,7 +1078,7 @@ struct HomeSkeleton: View {
             block(width: 80, height: 13, radius: 4)
         }
         .padding(Tile.padding)
-        .frame(width: tileWidth)
+        .frame(width: min(tileWidth, TileShelf.maxTileWidth))
     }
 
     private func block(width: CGFloat?, height: CGFloat, radius: CGFloat) -> some View {
@@ -1102,21 +1104,49 @@ struct TileShelf: View {
     /// A grid column has a width and hands it to the tile. An `HStack` does
     /// not: the tile sizes to its content, so a long song title stretches the
     /// tile instead of wrapping inside it, and one tile fills the screen.
-    private let tileWidth: CGFloat = 150
+    ///
+    /// **Scaled, because the words inside it scale.** At a fixed 150 the title
+    /// truncated to "Tig r…" long before the type stopped growing, which on the
+    /// one shelf a pre-literate child navigates by sight is the wrong thing to
+    /// give up. ``HomeSkeleton`` scales the same way so nothing jumps sideways
+    /// on the swap.
+    @ScaledMetric(relativeTo: .headline) private var tileWidth: CGFloat = 150
+
+    /// Past this the tile is wider than the phone it is on and one tile fills
+    /// the screen. A judgement, not a measurement — worth a look on a device at
+    /// the largest sizes.
+    ///
+    /// Not private, because ``HomeSkeleton`` has to clamp at the same number or
+    /// the placeholders are one width and the tiles that replace them another.
+    static let maxTileWidth: CGFloat = 280
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(items, id: \.id) { item in
                     TileCell(session: session, item: item, origin: origin, onPlay: onPlay)
-                        .frame(width: tileWidth)
+                        .frame(width: min(tileWidth, Self.maxTileWidth))
                 }
             }
             .padding(.horizontal)
         }
-        // Tall enough for artwork at this width plus two lines of title and one
-        // of subtitle, so a long name does not crop the artwork above it.
-        .frame(height: tileWidth + 84)
+        // **No height here, and that is the fix rather than an omission.**
+        //
+        // This used to be `.frame(height: tileWidth + 84)`, where 84 was a
+        // hand-computed allowance for two lines of title and one of subtitle.
+        // It was redundant — `titleRow` already reserves both lines with
+        // `lineLimit(2, reservesSpace:)` and `subtitleRow` carries a `minHeight`,
+        // so every tile is the same height by construction — and it was actively
+        // harmful, because the artwork is `aspectRatio(1, contentMode: .fit)` and
+        // therefore the one flexible thing in the stack. Constrain the height and
+        // growing text does not overflow the tile: it *evicts the picture*. At
+        // the largest accessibility sizes the covers shrank to roughly a quarter
+        // size, so the setting that exists for people who cannot read small text
+        // was where this app took the pictures away and kept the words.
+        //
+        // Unconstrained, the stack sizes to artwork plus text and the artwork is
+        // never squeezed. Found by running the app at
+        // `accessibility-extra-extra-extra-large`; see `STYLE.md` §3.4.
     }
 }
 
