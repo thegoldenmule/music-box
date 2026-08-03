@@ -388,21 +388,38 @@ without saying so.
    versus keeping until deletion. Shortening it later destroys data a parent
    relied on.
 
-The MusicKit capability is not yet enabled on the App ID, which blocks
-everything Apple-facing. `MusicKitCatalogSource`, `MusicKitLibrarySource` and
-`MusicKitAccess` compile against the real SDK and are otherwise unverified.
+**The App ID is fully provisioned. MusicKit and iCloud are both enabled**, and
+the CloudKit container `iCloud.com.thegoldenmule.auralsanbox` exists and is
+assigned. This paragraph used to say the opposite about MusicKit and it was
+stale by months — the wiki's own *Open Questions* records device-run MusicKit
+results from July 2026 (ratings, ancestry, the 25-result search cap), which
+could not exist if it were true. Do not repeat the claim; check the
+provisioning profiles under `~/Library/Developer/Xcode/UserData/Provisioning
+Profiles` if in doubt. Note that MusicKit is an App Service rather than an
+entitlement, so it does *not* appear in a profile — its absence there is not
+evidence.
 
 **The simulator is not evidence.** MusicKit behaves unreliably there and Screen
 Time cannot be tested at all. Claims about child-account behavior hold only after
 running on the real under-13 account.
 
-**Never run this app in the simulator.** Not to check a layout, not to take a
-screenshot, not to confirm a change "works" — do not boot a device, install, or
-launch. It proves nothing here for the reason above, it is slow, and it takes
-over the maintainer's machine. The verification available from this side is
-`swift test` for the packages and the two `xcodebuild build` invocations for the
-app. Anything that needs to be *seen* is the maintainer's to run on a device;
-say what you changed and what remains unverified, and let them look.
+**Do not run this app in the simulator to look at it.** Not to check a layout,
+not to take a screenshot, not to confirm a change "works". It proves nothing
+about how the app feels, it is slow, and it takes over the maintainer's machine.
+Anything that needs to be *seen* is the maintainer's to run on a device; say
+what you changed and what remains unverified, and let them look.
+
+**But it is the right tool for a probe against a real service, and refusing to
+use it has already cost something.** The store's whole sync design rests on
+SwiftData never mirroring it, and that was true only by accident: omitting
+`cloudKitDatabase` gives you `.automatic`, which means *on if entitled*. Adding
+the iCloud entitlement turned mirroring on by itself and the store stopped
+opening. No amount of `swift test` would have found it, because no test carries
+an entitlement. The same run answered a question the encryption design depended
+on. So: a headless probe behind a launch argument, run with
+`simctl launch --console-pty` (plain `--console` swallows `print()`), is a
+legitimate and cheap way to answer a question about a real API. Write down what
+it answered and delete the probe.
 
 ## Style
 
