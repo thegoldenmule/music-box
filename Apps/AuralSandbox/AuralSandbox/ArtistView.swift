@@ -100,6 +100,8 @@ struct ArtistView: View {
                 } actions: {
                     Button("Try again") { Task { await load() } }
                         .buttonStyle(.borderedProminent)
+                        // The fill rather than the tint — see ``AlbumView``.
+                        .tint(Color(.kidAccentFill))
                 }
             }
         } else if albums.isEmpty && songs.isEmpty {

@@ -408,12 +408,31 @@ and both. Set
 `ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = KidAccent` in **both** build
 configurations (beside `ASSETCATALOG_COMPILER_APPICON_NAME`). Do not create a set
 literally named `AccentColor` — the setting takes a name.
-`ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOL_FRAMEWORKS = SwiftUI` is already set,
-so `Color.kidAccent` appears with no string literal.
+
+**The generated symbol is `Color(.kidAccent)`, not `Color.kidAccent`.** An
+earlier draft of this file said the latter and it does not compile.
+`ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOL_FRAMEWORKS = SwiftUI` generates
+**only** `extension DeveloperToolsSupport.ColorResource { static let kidAccent }`
+— there is no static member on `Color` and none on `ShapeStyle where Self ==
+Color`, so a leading-dot `.kidAccent` in a `.tint(…)` fails to infer as well
+(`.tint` is overloaded on `Color?` and `some ShapeStyle`). Use the
+`Color(_:ColorResource)` initializer and it is unambiguous everywhere. Check
+`GeneratedAssetSymbols.swift` in DerivedData if in doubt rather than guessing.
 
 Per CLAUDE.md's warning about silently-ignored build settings: verify with
-`plutil -p` on the built app, look for `NSAccentColorName`, and never use
-`plutil -extract` without `-o -`.
+`plutil -p` on the built app and look for `NSAccentColorName` — never
+`plutil -extract` without `-o -`. Confirmed present on 2026-08-03, along with all
+three colour sets in `Assets.car` via `xcrun assetutil --info`.
+
+**A fill colour is needed wherever the accent is a background under a white
+label**, and `.borderedProminent` is exactly that — so those sites carry an
+explicit `.tint(Color(.kidAccentFill))`. Note the asymmetry that makes this
+necessary is *dark mode only*: contrast is symmetric, so a colour at 4.6:1
+against white works both as text on white and as a background carrying white
+text. It is the dark variants that diverge — a foreground tint has to be light to
+read on a dark background, and a light fill cannot carry a white label. The same
+trap applies to `swipeActions`, which is why `AdminView`'s "Rename" keeps
+`.tint(.blue)`: it needs an `AdminAccentFill` that does not exist.
 
 **Splitting kid and parent accents is deliberate.** The passcode gate is a mode
 boundary and a parent should see at a glance which half they are in; the admin

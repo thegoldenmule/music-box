@@ -231,6 +231,19 @@ struct KidHomeView: View {
                     AdminGateView(session: session) {}
                 }
             }
+            // **The grown-up half is a different colour, and that is the point.**
+            //
+            // The passcode is a mode boundary, and a parent who has just come
+            // through it should be able to tell at a glance which half of the app
+            // they are looking at — not from the words, which are the thing they
+            // are about to change, but from the room. It also means a screenshot
+            // of the admin can never be mistaken for a screenshot of the player.
+            //
+            // Applied here rather than inside ``AdminView`` because the gate is
+            // behind the same door and wants the same room, and because a sheet
+            // is exactly the scope this should have: it cannot leak back onto the
+            // kid's stack underneath.
+            .tint(Color(.adminAccent))
         }
         .task {
             // The trail before the shelf that draws from it: `homeItems()` reads
@@ -500,6 +513,8 @@ struct KidHomeView: View {
         } actions: {
             Button("Try again") { runSearch() }
                 .buttonStyle(.borderedProminent)
+                // The fill rather than the tint — see ``AlbumView``.
+                .tint(Color(.kidAccentFill))
         }
     }
 

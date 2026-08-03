@@ -73,6 +73,10 @@ struct SharedDeviceOnboardingView: View {
                 Text("Continue").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            // The fill rather than the tint — see ``AlbumView``. This screen is
+            // parent-facing but runs *before* there is an admin to be inside, so
+            // it wears the app's own colour rather than the grown-up one.
+            .tint(Color(.kidAccentFill))
             .controlSize(.large)
 
             Text("You can change this whenever you like, in the admin.")

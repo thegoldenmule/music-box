@@ -61,6 +61,12 @@ struct AlbumView: View {
             } actions: {
                 Button("Try again") { Task { await load() } }
                     .buttonStyle(.borderedProminent)
+                    // The fill, not the tint. `.borderedProminent` paints the
+                    // accent *behind* a white label, and the two roles cannot be
+                    // one colour: a value light enough to read as text on a dark
+                    // background is too light to carry white on top of it. See
+                    // `STYLE.md` §3.3.
+                    .tint(Color(.kidAccentFill))
             }
         } else if tracks.isEmpty {
             ContentUnavailableView {

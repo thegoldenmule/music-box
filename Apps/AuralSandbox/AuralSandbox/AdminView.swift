@@ -108,6 +108,14 @@ struct AdminView: View {
                 }
                 .swipeActions {
                     Button("Remove", role: .destructive) { show(session.delete(grownUp)) }
+                    // **Deliberately not `AdminAccent`.** A swipe action is a
+                    // filled slab carrying a white label in *both* appearances,
+                    // and `AdminAccent` is solved as a foreground tint — its dark
+                    // variant is light, so white on it would fail. Using it here
+                    // would look right in light mode and be unreadable in dark.
+                    // Doing this properly wants an `AdminAccentFill`, which one
+                    // button does not justify; `.blue` is the system's own
+                    // convention for the non-destructive swipe action anyway.
                     Button("Rename") { renaming = grownUp }.tint(.blue)
                 }
             }
