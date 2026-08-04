@@ -49,7 +49,7 @@ struct RootView: View {
                 // read from the Apple Music library, and this is the last point
                 // where nothing has been.
                 if session.hasAnsweredSharedDevice {
-                    KidHomeView(session: session)
+                    bound
                 } else {
                     SharedDeviceOnboardingView(session: session)
                 }
@@ -62,7 +62,54 @@ struct RootView: View {
         // somewhere unexpected animates normally rather than silently behaving as
         // though the accessibility setting were turned on.
         .resolvingMotion()
-        .task { await session.start() }
+        .task {
+            await session.start()
+            // After `start`, because it needs the roster loaded to tell a bound
+            // child from a missing one — and before anything draws a player,
+            // because which child that is, is what this decides.
+            await session.resolveBinding()
+        }
+    }
+
+    /// Which child this device opens into — or why it does not.
+    ///
+    /// **The lock cases draw a dead end on purpose.** `BindingResolver`'s rule
+    /// is that a mismatch never falls back to another kid, so this switch must
+    /// not acquire a "pick someone" escape hatch; that is what would turn a
+    /// hand-me-down iPad into a sibling's sandbox.
+    @ViewBuilder private var bound: some View {
+        switch session.binding {
+        case .open, .parentOnly:
+            // `parentOnly` still lands here for now: the admin surface is inside
+            // the kid screen's gate, and giving a grown-up's phone its own root
+            // is a separate piece of work. Naming the case rather than folding
+            // it into a default is what will make that obvious when it happens.
+            KidHomeView(session: session)
+
+        case .unenrolled:
+            DeviceSetupView(session: session)
+
+        // **Three locks that setup can fix, and it must be allowed to.** Each of
+        // these is an incomplete setup rather than a refusal: nobody has said
+        // whose device this is, or there is no passcode, or the child it points
+        // at has left the family. A dead end here would brick the only device a
+        // family owns, with the instructions on it describing a screen they
+        // cannot reach — the admin surface lives behind the kid's player, which
+        // is the thing being withheld.
+        //
+        // It gives nothing away. Setup opens no player, and `Enrollment` will
+        // not bind a child without a passcode, so the way out is gated by the
+        // same code the lock is protecting.
+        case .locked(.notBound), .locked(.noGate), .locked(.boundKidMissing):
+            DeviceSetupView(session: session)
+
+        // And the two that are refusals. A revoked device and a device under an
+        // account it was not set up with are the cases where somebody has
+        // decided something, or something has happened nobody told us about —
+        // see `BindingResolver`. Neither may be argued with from the device.
+        case .locked(let reason):
+            DeviceLockedView(reason: reason, kids: session.kids)
+        }
     }
 
     private func explanation(for status: AuthorizationStatus) -> String {

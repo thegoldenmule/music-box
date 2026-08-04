@@ -156,6 +156,79 @@ final class Session {
     /// accepting an invitation invalidates the one it went through and leaves
     /// the other still answering `.owner`, which is exactly the state where
     /// writes go to the wrong database.
+    /// Which child this device opens into. See ``resolveBinding()``.
+    ///
+    /// **`.unenrolled` until resolved**, which is the honest starting value:
+    /// nothing has been read yet, and it is the state that runs setup rather
+    /// than one that opens a player.
+    private(set) var binding: BindingOutcome = .unenrolled
+
+    /// Set only when the device could not resolve *at all* — a Keychain it
+    /// cannot read. Distinct from a lock, which is an answer.
+    private(set) var bindingTrouble: String?
+
+    /// This device's row in the household roster, once it has one.
+    private(set) var deviceRow: DeviceRecord?
+
+    private(set) var signedInAccount: AccountState = .noOpinion
+
+    /// This device's own identifier, minted into the Keychain on first read.
+    /// Never derived from the hardware — see ``DeviceIdentityStore``.
+    @ObservationIgnored let deviceIdentity: any DeviceIdentityStore = KeychainDeviceIdentity()
+
+    @ObservationIgnored let accountIdentity: any AccountIdentitySource = CloudKitAccountIdentity()
+
+    /// This household's identifier, for a record that points at it by id rather
+    /// than by relationship — see ``DeviceRecord``.
+    var householdID: UUID { family.id }
+
+    /// This device's row in the roster, if it has been enrolled.
+    ///
+    /// Here rather than in `SessionBinding.swift` only because `context` is
+    /// private to this file, and it should stay that way: a view reaching the
+    /// model context directly is how writes end up somewhere nothing can find
+    /// them. The *decisions* about enrolment are all in the other file.
+    func deviceRecord(id: UUID) -> DeviceRecord? {
+        var descriptor = FetchDescriptor<DeviceRecord>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try? context.fetch(descriptor).first
+    }
+
+    /// Adds a device row and commits it.
+    func addDevice(_ record: DeviceRecord) {
+        context.insert(record)
+        commitDeviceChanges()
+    }
+
+    /// Commits a change to this device's row.
+    ///
+    /// Awaited-and-surfaced is the rule for policy writes; a device row is not
+    /// one — the worst case is a `lastSeenAt` that is a launch stale, which the
+    /// next launch fixes.
+    func commitDeviceChanges() {
+        try? context.save()
+    }
+
+    /// The one way the binding state changes.
+    ///
+    /// A single seam rather than four `internal(set)` properties, because these
+    /// four are one answer and a partial update is a device showing a child's
+    /// player while `deviceRow` still describes the previous setup. Written by
+    /// ``resolveBinding()`` in `SessionBinding.swift`, which is a different file
+    /// and so cannot reach a `private(set)` setter — that restriction is doing
+    /// useful work here rather than being worked around.
+    func applyBinding(
+        _ outcome: BindingOutcome,
+        device: DeviceRecord?,
+        account: AccountState,
+        trouble: String? = nil
+    ) {
+        binding = outcome
+        deviceRow = device
+        signedInAccount = account
+        bindingTrouble = trouble
+    }
+
     @ObservationIgnored private let sides = HouseholdSideProvider()
 
     /// Sending and accepting invitations.
