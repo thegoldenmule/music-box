@@ -41,6 +41,17 @@ struct KidSearchBar: View {
             Button(action: home) {
                 Image(systemName: "house.fill")
                     .font(.title2)
+                    // **The one control that always means "back to safety",
+                    // and it was the least visible thing on the screen** — a
+                    // black glyph in a grey circle, quieter than the search box
+                    // beside it. A lost kid cannot be asked to hunt for the way
+                    // back, so this is the one place on the kid's chrome the
+                    // accent is spent.
+                    //
+                    // The glyph rather than the circle: a filled tangerine disc
+                    // beside a grey search capsule reads as the primary thing to
+                    // press, and the primary thing to press is the search box.
+                    .foregroundStyle(.tint)
                     .frame(width: height, height: height)
                     .background(.quaternary, in: Circle())
                     .contentShape(Circle())
@@ -93,6 +104,19 @@ struct KidSearchBar: View {
         .padding(.horizontal, 14)
         .frame(height: height)
         .background(.quaternary, in: Capsule())
+        // **The box says when it is listening.** Nothing did: the field looked
+        // identical whether or not the keyboard was up and whether or not a tap
+        // had landed, so a kid who missed it had no way to tell. A ring rather
+        // than a fill, so the words inside keep their contrast.
+        .overlay {
+            Capsule()
+                .strokeBorder(.tint, lineWidth: 2)
+                .opacity(isTyping ? 1 : 0)
+        }
+        // Cheap enough to animate and worth animating: the ring arriving is the
+        // answer to the tap, and a hard cut reads as a redraw rather than as a
+        // reply.
+        .animation(.easeOut(duration: 0.18), value: isTyping)
         // The capsule is the target, not the words inside it — a kid aiming at
         // a text field aims at the box.
         .contentShape(Capsule())

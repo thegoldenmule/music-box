@@ -444,6 +444,47 @@ child's colour because the child is the one holding the device.
 applies *their* colour throughout the app. An explicit `.tint(_:)` still wins;
 the global accent does not.
 
+#### What the accent *means*
+
+The count of tinted surfaces matters far less than whether they agree on
+something. Before this was decided the accent effectively meant **"a control you
+can press"** — which in this app is nearly everything, so it signalled nothing.
+
+The accent now says one of two things, and nothing else:
+
+1. **"This one, right now."** The current track, wherever it appears — `SongRow`,
+   `AlbumTrackRow`, `Tile`. This is the meaning that earns the colour, and it is
+   worth stating why: `NowPlayingBar` says *what* is playing, but until this
+   existed nothing said *which row in front of the child* that was. On an album
+   screen those two facts were never connected, so matching them meant reading
+   twelve titles — the one thing this app cannot ask of the person using it.
+2. **"Mine."** The filled heart, and the kid's own playlists.
+
+Both reduce to *the thing that is yours or live*, which is why one colour can
+carry them.
+
+Three rules fall out, and they are the useful part:
+
+- **A mark beats a tint for the actual user.** A tinted title says nothing to a
+  child who cannot read. ``NowPlayingMark`` — the bouncing bars — is the signal;
+  the tinted title is a bonus for whoever can read it. Deliberately the same
+  figure as ``SearchingView``, so bars mean *sound* in both places.
+- **Take a slot, don't add one.** The mark replaces the track number in
+  `AlbumTrackRow`, the kind glyph in `Tile`, and the play button in `SongRow` —
+  each the most disposable thing in its row. Nothing reflows, and nothing is lost:
+  the row is a play button regardless.
+- **Only songs are ever marked.** An album or artist on a shelf may be what the
+  current track came *from*; marking those would say "this is playing" about four
+  tiles at once.
+
+Beyond those, the accent is spent in exactly one more place on the kid's chrome:
+the **home button**, which always means "back to safety" and was previously the
+least visible control on screen. Everything else — chevrons, carets, kind glyphs,
+subtitles, tile backgrounds — stays neutral on purpose. Colouring them is what
+turns an accent back into noise.
+
+Never on artwork, never composited over it, never on body text.
+
 ### 3.4 Typography
 
 **`.fontDesign(.rounded)` is the one-line lever for the kid half** — iOS 16.1 /

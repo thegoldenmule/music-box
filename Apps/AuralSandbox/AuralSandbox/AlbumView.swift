@@ -338,6 +338,12 @@ struct AlbumTrackRow<Accessory: View>: View {
     let onPlay: () -> Void
     @ViewBuilder var accessory: () -> Accessory
 
+    /// Optional, so a row drawn where nobody put a player up simply never marks
+    /// anything. See ``KidHomeView``.
+    @Environment(KidPlayerModel.self) private var player: KidPlayerModel?
+
+    private var isCurrent: Bool { player?.current?.item.id == item.id }
+
     var body: some View {
         HStack(spacing: 4) {
             Button(action: onPlay) {
@@ -347,6 +353,7 @@ struct AlbumTrackRow<Accessory: View>: View {
                         Text(item.title)
                             .font(.headline)
                             .lineLimit(2)
+                            .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                         // Only when it differs from the record's own credit —
                         // otherwise every line on an album repeats the name
                         // written twice above it already. This is what makes a
@@ -373,6 +380,8 @@ struct AlbumTrackRow<Accessory: View>: View {
             .buttonStyle(.plain)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Text(accessibilityLabel))
+            // What the mark says, for somebody who cannot see it.
+            .accessibilityValue(isCurrent ? Text("Playing") : Text(""))
             .accessibilityHint(Text("Plays"))
 
             accessory()
@@ -383,7 +392,15 @@ struct AlbumTrackRow<Accessory: View>: View {
 
     @ViewBuilder
     private var number: some View {
-        if let trackNumber = item.trackNumber {
+        // **The mark stands where the number does.** A track number is the most
+        // disposable thing in the row — it names a position a kid is not
+        // counting — so the one row that has something better to say puts it
+        // there. It is also the column the eye is already scanning down, and it
+        // is what the Music app does with the same slot.
+        if isCurrent {
+            NowPlayingMark(isAnimating: player?.isPlaying == true)
+                .frame(width: AlbumTrackMetrics.numberWidth, alignment: .trailing)
+        } else if let trackNumber = item.trackNumber {
             Text("\(trackNumber)")
                 .font(.subheadline)
                 .monospacedDigit()

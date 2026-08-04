@@ -220,6 +220,18 @@ struct KidHomeView: View {
         // — every sheet and cover they present, and the player over the top of
         // them.
         .environment(router)
+        // **The player, for the rows that only want to know which one is
+        // playing.** Screens that *drive* playback still take it as a parameter;
+        // this is for ``NowPlayingMark`` at the bottom of the view tree, where
+        // threading it through would be an initializer argument on ``SongRow``,
+        // ``Tile``, ``TileCell``, ``AlbumTrackRow`` and every container that
+        // builds one — the same argument that put ``KidRouter`` here.
+        //
+        // Read-only by convention: nothing that reaches it this way calls a
+        // method on it. A row that could start playback from the environment
+        // would be a play path with no origin and no list, which is the one
+        // thing ``KidPlayerModel/play(_:from:origin:)`` exists to prevent.
+        .environment(player)
         .sheet(isPresented: $showingAdmin, onDismiss: reload) {
             NavigationStack {
                 if session.isAdminOpen {
@@ -1313,6 +1325,12 @@ struct SongRow<Accessory: View>: View {
     let onPlay: () -> Void
     @ViewBuilder var accessory: () -> Accessory
 
+    /// Optional, because this row is drawn in places nobody put a player up —
+    /// and absent, it simply never marks anything. See ``KidHomeView``.
+    @Environment(KidPlayerModel.self) private var player: KidPlayerModel?
+
+    private var isCurrent: Bool { player?.current?.item.id == item.id }
+
     var body: some View {
         HStack(spacing: 4) {
             Button(action: onPlay) {
@@ -1326,6 +1344,10 @@ struct SongRow<Accessory: View>: View {
                         Text(item.title)
                             .font(.headline)
                             .lineLimit(2)
+                            // The weaker half of the signal, and the half a kid
+                            // who cannot read gets nothing from — which is why
+                            // the mark beside it carries the meaning.
+                            .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                         if let subtitle = item.subtitle {
                             Text(subtitle)
                                 .font(.subheadline)
@@ -1344,6 +1366,10 @@ struct SongRow<Accessory: View>: View {
             .accessibilityLabel(
                 Text([item.title, item.subtitle].compactMap { $0 }.joined(separator: ", "))
             )
+            // What the mark says, for somebody who cannot see it. On the value
+            // rather than folded into the label, so VoiceOver reads the song and
+            // then its state instead of a sentence that changes shape.
+            .accessibilityValue(isCurrent ? Text("Playing") : Text(""))
             .accessibilityHint(Text("Plays"))
 
             // The heart at the leading edge of the trailing controls, beside the
@@ -1351,15 +1377,24 @@ struct SongRow<Accessory: View>: View {
             // compositing onto Apple's pixels is not. See `Tile.artwork`.
             accessory()
 
-            Button(action: onPlay) {
-                Image(systemName: "play.circle.fill")
-                    .font(.title)
-                    .foregroundStyle(.tint)
+            // **The mark takes the play button's slot rather than sitting beside
+            // it.** Same size, same column, and nothing is lost: the row itself
+            // is a play button, so a kid who taps the one row that no longer has
+            // a triangle still gets what they expected.
+            if isCurrent {
+                NowPlayingMark(isAnimating: player?.isPlaying == true)
                     .frame(width: HeartButton.size, height: HeartButton.size)
-                    .contentShape(Rectangle())
+            } else {
+                Button(action: onPlay) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(.tint)
+                        .frame(width: HeartButton.size, height: HeartButton.size)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Play")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Play")
         }
         .padding(.horizontal, SongRowMetrics.margin)
         .padding(.vertical, 10)
@@ -1382,6 +1417,17 @@ struct SongRow<Accessory: View>: View {
 
 struct Tile: View {
     let item: CatalogItem
+
+    /// Optional, so a tile drawn where nobody put a player up never marks
+    /// anything. See ``KidHomeView``.
+    @Environment(KidPlayerModel.self) private var player: KidPlayerModel?
+
+    /// Only ever true of a song. A shelf's albums and artists are containers the
+    /// current track may have come *from*, and marking those would say "this is
+    /// playing" about four tiles at once.
+    private var isCurrent: Bool {
+        item.id.kind == .song && player?.current?.item.id == item.id
+    }
 
     /// Whether to leave a gap on the subtitle line for a heart.
     ///
@@ -1504,11 +1550,22 @@ struct Tile: View {
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Image(systemName: glyph)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // **The mark takes the kind glyph's slot.** Same position, same
+            // size, and the trade is right: the kind is already legible from the
+            // tile's own shape — a circle is an artist, a card is something that
+            // opens — while "this is the one playing" is said nowhere else on a
+            // shelf.
+            if isCurrent {
+                NowPlayingMark(isAnimating: player?.isPlaying == true)
+                    .frame(height: 12, alignment: .bottom)
+            } else {
+                Image(systemName: glyph)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Text(item.title)
                 .font(.headline)
+                .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                 // Two lines whether or not the title needs them. Without it a
                 // one-line title makes a shorter tile than a two-line one and
                 // every grid row sits on a ragged baseline — invisible while
