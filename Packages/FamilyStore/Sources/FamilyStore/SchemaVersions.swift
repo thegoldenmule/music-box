@@ -215,7 +215,6 @@ public enum SyncCoverage {
             // exchange rather than the household, so neither travels.
             PendingDeletionRecord.self,
             SyncMarkRecord.self,
-            SyncMarkRecord.self,
         ]
     }
 }

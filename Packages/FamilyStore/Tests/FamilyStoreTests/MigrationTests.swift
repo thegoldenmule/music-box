@@ -299,6 +299,24 @@ struct SyncCoverageTests {
         #expect(all.subtracting(declared).isEmpty, "undeclared: \(all.subtracting(declared))")
     }
 
+    /// **Both existing checks compare `Set`s, so neither can see a repeat.**
+    /// `SyncMarkRecord` was listed twice in `neverSyncs` and every assertion
+    /// still passed. Harmless there — nothing consumes these as arrays — but the
+    /// same slip in `syncedModels` is a mapper written twice or a model quietly
+    /// counted against the wrong half, and a list nobody can miscount is cheaper
+    /// than deciding each time whether this one mattered.
+    @Test("Neither list repeats itself")
+    func listsHaveNoDuplicates() {
+        for (name, models) in [
+            ("syncedModels", SyncCoverage.syncedModels),
+            ("neverSyncs", SyncCoverage.neverSyncs),
+        ] {
+            let names = models.map { String(describing: $0) }
+            let repeated = Set(names.filter { name in names.filter { $0 == name }.count > 1 })
+            #expect(repeated.isEmpty, "\(name) repeats: \(repeated.sorted())")
+        }
+    }
+
     @Test("Nothing is in both lists")
     func listsAreDisjoint() {
         let synced = Set(SyncCoverage.syncedModels.map { String(describing: $0) })
