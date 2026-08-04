@@ -93,6 +93,12 @@ public final class SyncEngineHost: NSObject {
     private var privateEngine: CKSyncEngine?
     private var sharedEngine: CKSyncEngine?
 
+    /// The batch currently being sent, keyed by record name.
+    ///
+    /// Held for the length of one `nextRecordZoneChangeBatch` and cleared after
+    /// — the per-record callback reads it instead of re-deriving the outbox.
+    private var outgoing: [String: SyncedRecord] = [:]
+
     /// The engine that carries this device's own writes.
     ///
     /// **The bug this replaced sent everything to the private engine.** On the
@@ -269,6 +275,24 @@ extension SyncEngineHost: CKSyncEngineDelegate {
         let pending = syncEngine.state.pendingRecordZoneChanges.filter {
             context.options.scope.contains($0)
         }
+
+        // **Derived once for the batch, not once per record.** The per-record
+        // callback below used to call `Reconcile.outgoing` itself, which fetches
+        // every syncable table and the whole marks table — so sending *n*
+        // records cost *n* full passes over the store, and the total grew with
+        // its square. A family with a year of playlists would have watched it
+        // take minutes with nothing on screen to say why.
+        //
+        // A snapshot is also more correct than re-reading: every record in one
+        // batch now comes from a single consistent view of the store.
+        outgoing = Dictionary(
+            ((try? Reconcile.outgoing(in: target)) ?? []).compactMap { change in
+                if case .upsert(let record) = change { (record.name, record) } else { nil }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        defer { outgoing = [:] }
+
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { id in
             await self.record(for: id)
         }
@@ -281,10 +305,8 @@ extension SyncEngineHost: CKSyncEngineDelegate {
     /// anything else — so the only `nil` here is genuine absence.
     private func record(for id: CKRecord.ID) -> CKRecord? {
         guard FamilyZone(zoneName: id.zoneID.zoneName) != nil else { return nil }
-        guard
-            let owed = try? Reconcile.outgoing(in: target),
-            case .upsert(let synced)? = owed.first(where: { $0.recordName == id.recordName })
-        else { return nil }
+        // From the batch's snapshot — see `nextRecordZoneChangeBatch`.
+        guard let synced = outgoing[id.recordName] else { return nil }
 
         // The ID already carries the zone and its owner, decided in
         // `recordID(for:)` where the side is known.

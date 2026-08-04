@@ -288,16 +288,55 @@ extension Outbox {
     /// Called on **both** export and import. An import is agreement just as much
     /// as an export is — and marking only exports is what would leave every
     /// imported row looking locally-changed and owed straight back.
+    /// **Asks SQLite for the one row rather than materialising the table.**
+    /// This used to `fetch` every `SyncMarkRecord` and filter in memory, once
+    /// per record marked — so agreeing on a batch of *n* rows cost *n* full
+    /// scans, and the cost grew with the square of the store. Nothing was wrong
+    /// with the answer; it just got slower the more a family used the app,
+    /// which is the shape of performance bug that never looks like one until it
+    /// is unusable.
     @MainActor
     public static func markSynced(
         name: String, modifiedAt: Date, in context: ModelContext
     ) {
-        let existing = try? context.fetch(FetchDescriptor<SyncMarkRecord>())
-            .first { $0.recordName == name }
-        if let existing {
+        var descriptor = FetchDescriptor<SyncMarkRecord>(
+            predicate: #Predicate { $0.recordName == name }
+        )
+        descriptor.fetchLimit = 1
+
+        if let existing = try? context.fetch(descriptor).first {
             existing.update(to: modifiedAt)
         } else {
             context.insert(SyncMarkRecord(recordName: name, syncedModifiedAt: modifiedAt))
+        }
+    }
+
+    /// Agreement on a whole batch, with one pass over the marks.
+    ///
+    /// The batch path is the hot one — a first sync marks everything the store
+    /// owes — and doing it a record at a time is *n* predicate fetches where one
+    /// fetch and a dictionary will do.
+    @MainActor
+    public static func markSynced(_ records: [SyncedRecord], in context: ModelContext) {
+        guard !records.isEmpty else { return }
+
+        var known = Dictionary(
+            (try? context.fetch(FetchDescriptor<SyncMarkRecord>()))?.map { ($0.recordName, $0) }
+                ?? [],
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        for record in records {
+            guard let touched = record.date(Field.modifiedAt) else { continue }
+            if let existing = known[record.name] {
+                existing.update(to: touched)
+            } else {
+                let mark = SyncMarkRecord(recordName: record.name, syncedModifiedAt: touched)
+                context.insert(mark)
+                // Kept, so a batch carrying the same name twice updates the row
+                // it just inserted instead of inserting a second one.
+                known[record.name] = mark
+            }
         }
     }
 

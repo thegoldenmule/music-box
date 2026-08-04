@@ -88,16 +88,28 @@ public enum Reconcile {
     /// send rather than on acknowledgement is how a change goes missing with
     /// everything reporting success.
     @MainActor
+    /// **One pass over each table, not one per change.** Both halves of this
+    /// used to rescan: a mark per upsert and the whole tombstone table per
+    /// deletion, so accepting a batch of *n* cost *n* full fetches. On a first
+    /// sync, where the batch is everything the store owes, that is the store
+    /// squared.
     public static func accepted(_ changes: [Outbox.Change], in context: SyncApply.Context) {
+        var upserts: [SyncedRecord] = []
+        var deleted: Set<String> = []
         for change in changes {
             switch change {
-            case .upsert(let record):
-                Outbox.markSynced(record, in: context.modelContext)
-            case .delete(let name, _):
-                let tombstones = try? context.modelContext.fetch(
-                    FetchDescriptor<PendingDeletionRecord>())
-                tombstones?.first { $0.recordName == name }?.markExported()
+            case .upsert(let record): upserts.append(record)
+            case .delete(let name, _): deleted.insert(name)
             }
+        }
+
+        Outbox.markSynced(upserts, in: context.modelContext)
+
+        guard !deleted.isEmpty else { return }
+        let tombstones =
+            (try? context.modelContext.fetch(FetchDescriptor<PendingDeletionRecord>())) ?? []
+        for tombstone in tombstones where deleted.contains(tombstone.recordName) {
+            tombstone.markExported()
         }
     }
 }
