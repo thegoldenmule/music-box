@@ -73,7 +73,18 @@ final class PlayerExpansion {
     }
 
     /// A finger has moved, from whichever of the two views the drag began in.
-    func pull(by translation: CGFloat) {
+    ///
+    /// **Nothing happens under Reduce Motion, and that is the whole of it.** With
+    /// the setting on ``ExpandedPlayer`` pins the player in place and cross-fades
+    /// instead, so a drag has nothing to move — and a gesture that visibly does
+    /// nothing is worse than one that politely declines. The tap is untouched,
+    /// and this file has said from the start that the tap is the way this is
+    /// meant to be found: "everything a drag can do, a tap already did".
+    ///
+    /// The guard lives here rather than at the two gesture sites so there is one
+    /// rule instead of four closures that have to remember it.
+    func pull(by translation: CGFloat, motion: MotionPalette = MotionPalette()) {
+        guard !motion.reduceMotion else { return }
         if isOpen {
             // Downward is followed point for point; upward is resisted rather
             // than refused, so a finger that wanders gets an answer without the
@@ -96,6 +107,8 @@ final class PlayerExpansion {
     /// second constant — and a second constant here would double-count what the
     /// gesture already said. See ``Motion``.
     func release(projected: CGFloat, motion: MotionPalette = MotionPalette()) {
+        // Nothing was pulled, so there is nothing to settle — see ``pull(by:motion:)``.
+        guard !motion.reduceMotion else { return }
         if isOpen {
             if projected > Self.threshold {
                 close(motion)
@@ -169,6 +182,22 @@ struct ExpandedPlayer: View {
     @Bindable var player: KidPlayerModel
     let expansion: PlayerExpansion
 
+    /// **Reduce Motion replaces the travel, not just the curve.**
+    ///
+    /// Swapping the spring for a gentler one is what the rest of the app does and
+    /// it is not enough here: HIG Accessibility asks for "replacing transitions in
+    /// x-, y-, and z-axes with fades to avoid motion", and a screen-sized surface
+    /// flying up from the bottom is the largest piece of x/y travel in the app. So
+    /// with the setting on it does not travel at all — it is already in place and
+    /// only its opacity changes.
+    ///
+    /// Read here rather than taken from ``MotionPalette`` because this is a
+    /// question about *what is drawn*, not about which animation to use, and
+    /// because it has to be answered on every layout rather than at the moment
+    /// something was opened — a parent can turn the setting on while the player
+    /// is up.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         NowPlayingView(session: session, player: player, isShowing: expansion.isShowing)
             // The safe area, put back by hand. `ignoresSafeArea` first so the
@@ -180,7 +209,15 @@ struct ExpandedPlayer: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Rectangle().fill(.background))
             .ignoresSafeArea()
-            .offset(y: expansion.offset)
+            // Pinned in place under Reduce Motion. `offset` still computes the
+            // travel and is simply not asked for, so nothing about the drag model
+            // changes shape — see ``PlayerExpansion/offset``.
+            .offset(y: reduceMotion ? 0 : expansion.offset)
+            // The cross-fade. Driven by `isOpen`, which changes inside the
+            // `withAnimation` in ``PlayerExpansion/open(_:)`` — and that animation
+            // is already ``Motion/reduced`` when the setting is on, so the fade
+            // gets the right curve without asking for it twice.
+            .opacity(reduceMotion && !expansion.isOpen ? 0 : 1)
             // Closed, this is a screen-sized opaque thing sitting just off the
             // bottom. Off-screen views take no touches, but the flag says so
             // out loud, and it is what keeps the bar's own drag alive while the
@@ -188,6 +225,14 @@ struct ExpandedPlayer: View {
             // appeared under a finger mid-drag would take the gesture away from
             // the view that started it.
             .allowsHitTesting(expansion.isOpen)
+            // **Necessary because of the line above it.** Closed with Reduce
+            // Motion on, this is no longer parked off the bottom of the screen —
+            // it is lying invisible directly over the home screen, and an
+            // `opacity(0)` view is still in the accessibility tree. Without this
+            // VoiceOver would read the whole player over the top of the shelves,
+            // which is a worse bug than the one being fixed. True in both modes,
+            // so it is stated unconditionally: closed is closed.
+            .accessibilityHidden(!expansion.isOpen)
     }
 }
 #endif

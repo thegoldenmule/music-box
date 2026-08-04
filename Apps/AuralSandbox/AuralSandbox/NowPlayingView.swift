@@ -305,7 +305,7 @@ struct NowPlayingView: View {
     /// under a finger that was aiming at the playhead.
     private var closeDrag: some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
-            .onChanged { expansion?.pull(by: $0.translation.height) }
+            .onChanged { expansion?.pull(by: $0.translation.height, motion: motion) }
             .onEnded { expansion?.release(projected: $0.translation.height + $0.velocity.height / 4, motion: motion) }
     }
     #endif

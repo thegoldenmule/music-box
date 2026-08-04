@@ -316,9 +316,40 @@ fades to avoid motion"* and *"tightening animation springs to reduce bounce."*
 That is a cross-fade, not `nil` — which is why only `pulse` returns `nil`.
 
 **One friction point, stated honestly:** `PlayerExpansion` is a model, not a view,
-so it cannot read the environment. `open()`, `close()` and `release(projected:)`
-must take the palette as a parameter from the view owning the gesture. That is the
-right shape anyway — it makes the dependency visible.
+so it cannot read the environment. `open()`, `close()`, `pull(by:)` and
+`release(projected:)` take the palette as a parameter from the view owning the
+gesture. That is the right shape anyway — it makes the dependency visible.
+
+#### Reduce Motion replaces travel, not just the curve
+
+Swapping a spring for a gentler curve is what most of this app does under Reduce
+Motion and it is **not sufficient for a screen-sized surface**. HIG Accessibility
+asks for *"replacing transitions in x-, y-, and z-axes with fades to avoid
+motion"*, and the full-screen player flying up from the bottom is the largest
+piece of travel in the app. A gentler spring still flies.
+
+So `ExpandedPlayer` pins itself (`offset` forced to 0) and cross-fades on
+`isOpen` instead. Three consequences, each of which is easy to get wrong:
+
+- **The drag stands down.** With nothing travelling there is nothing for a pull
+  to move, and a gesture that visibly does nothing is worse than one that
+  declines. The guard lives in `PlayerExpansion.pull(by:motion:)` and
+  `release(projected:motion:)` — one rule, not four gesture closures. The tap is
+  untouched, and this design always held that "everything a drag can do, a tap
+  already did".
+- **`accessibilityHidden` becomes load-bearing.** Closed with the setting on, the
+  player is no longer parked off the bottom of the screen — it lies invisible
+  *directly over* the home screen, and an `opacity(0)` view is still in the
+  accessibility tree. Without `.accessibilityHidden(!isOpen)` VoiceOver reads the
+  whole player over the shelves, which is a worse bug than the one being fixed.
+- **The setting is read in the view, not taken from `MotionPalette`.** Whether
+  the player *travels* is a question about what is drawn and has to be answered on
+  every layout — a parent can turn the setting on while the player is open.
+  `MotionPalette` only answers "which animation", which is a different question.
+
+The fade needs no animation of its own: `isOpen` changes inside the
+`withAnimation` in `open(_:)`, and that animation is already `Motion.reduced`
+when the setting is on.
 
 #### The play/pause glyph — settled
 
