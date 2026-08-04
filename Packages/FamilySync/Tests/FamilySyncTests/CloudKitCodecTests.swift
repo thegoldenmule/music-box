@@ -103,7 +103,7 @@ struct WireRules {
         let entry = kid.addEntry(
             kind: .deny, id: CatalogID(.artist, "artist-A"), displayName: "A Band", at: t0)
 
-        for record in [family.syncRecord(), kid.syncRecord(), entry.syncRecord()] {
+        for record in [family.record, kid.record, entry.record] {
             let zone = try #require(FamilyZone.placing(record.type, kidID: kidID))
             let ck = CloudKitCodec.ckRecord(for: record, in: ownedZoneID(zone))
             for key in ck.allKeys() {
@@ -112,7 +112,7 @@ struct WireRules {
         }
 
         // And the link is still there, as a string.
-        #expect(kid.syncRecord().fields[Field.familyID] == .uuid(family.id))
+        #expect(kid.record.fields[Field.familyID] == .uuid(family.id))
     }
 
     /// Every field any encoder emits has a declared shape. Without this a new
@@ -145,13 +145,17 @@ struct WireRules {
             kidID: kid.id, deviceID: device.id, dayUTC: "2026-08-02", table: "plays", index: 0,
             payload: Data([3]), at: t0)
         let summary = WeeklySummaryRecord(weekStart: t0, payload: Data([4]), at: t0)
+        // Attached, because a summary keys on `(kid, weekStart)` and a detached
+        // one has no name — which is now a nil record rather than a fabricated
+        // identity, and is what this fixture was silently relying on.
+        summary.kid = kid
 
         let everything: [SyncedRecord] = [
-            family.syncRecord(), kid.syncRecord(), grownUp.syncRecord(), entry.syncRecord(),
-            try #require(kid.sandboxSettings.first).syncRecord(),
-            suggestion.syncRecord(), suggested.syncRecord(), favorite.syncRecord(),
-            playlist.syncRecord(), song.syncRecord(), device.syncRecord(), epoch.syncRecord(),
-            clear.syncRecord(), consent.syncRecord(), segment.syncRecord(), summary.syncRecord(),
+            family.record, kid.record, grownUp.record, entry.record,
+            try #require(kid.sandboxSettings.first).record,
+            suggestion.record, suggested.record, favorite.record,
+            playlist.record, song.record, device.record, epoch.record,
+            clear.record, consent.record, segment.record, summary.record,
         ]
 
         var undeclared: Set<String> = []
@@ -172,7 +176,7 @@ struct WireRules {
             kind: .deny, id: CatalogID(.artist, "a"), displayName: "A Band", at: t0)
         let playlist = kid.addPlaylist(named: "Car songs", at: t0)
 
-        for record in [family.syncRecord(), kid.syncRecord(), entry.syncRecord(), playlist.syncRecord()] {
+        for record in [family.record, kid.record, entry.record, playlist.record] {
             let zone = try #require(FamilyZone.placing(record.type, kidID: kid.id))
             #expect(roundTrip(record, in: zone).fields == record.fields, "\(record.type)")
         }
@@ -192,7 +196,7 @@ struct EncryptionDisposition {
     func freeTextIsEncrypted() throws {
         let (_, _, kid) = try seeded()
         let playlist = kid.addPlaylist(named: "Car songs", at: t0)
-        let ck = CloudKitCodec.ckRecord(for: playlist.syncRecord(), in: ownedZoneID(.kidWork(kid.id)))
+        let ck = CloudKitCodec.ckRecord(for: playlist.record, in: ownedZoneID(.kidWork(kid.id)))
 
         #expect(ck.encryptedValues["name"] as? String == "Car songs")
         // And not in the clear alongside it.
@@ -202,7 +206,7 @@ struct EncryptionDisposition {
     @Test("A child's name is encrypted, and their sandbox level is not")
     func namesEncryptedLevelsNot() throws {
         let (_, _, kid) = try seeded()
-        let ck = CloudKitCodec.ckRecord(for: kid.syncRecord(), in: ownedZoneID(.kidPolicy(kid.id)))
+        let ck = CloudKitCodec.ckRecord(for: kid.record, in: ownedZoneID(.kidPolicy(kid.id)))
 
         #expect(ck.encryptedValues["name"] as? String == "Ada")
         // The sandbox level is not a secret, and keeping it clear leaves it
@@ -214,7 +218,7 @@ struct EncryptionDisposition {
     @Test("The passcode verifier and its salt are encrypted")
     func verifierIsEncrypted() {
         let epoch = PasscodeEpochRecord(epoch: 1, salt: Data([1]), verifier: Data([2]), at: t0)
-        let ck = CloudKitCodec.ckRecord(for: epoch.syncRecord(), in: ownedZoneID(.household))
+        let ck = CloudKitCodec.ckRecord(for: epoch.record, in: ownedZoneID(.household))
 
         #expect(ck["verifier"] == nil)
         #expect(ck["salt"] == nil)
@@ -227,7 +231,7 @@ struct EncryptionDisposition {
     func encryptedRoundTrips() throws {
         let (_, _, kid) = try seeded()
         let playlist = kid.addPlaylist(named: "Car songs", at: t0)
-        let record = playlist.syncRecord()
+        let record = playlist.record
 
         #expect(roundTrip(record, in: .kidWork(kid.id)).fields == record.fields)
     }
@@ -241,7 +245,7 @@ struct EncryptionDisposition {
         let segment = ActivitySegmentRecord(
             kidID: kidID, deviceID: UUID(), dayUTC: "2026-08-02", table: "plays", index: 0,
             payload: Data([1, 2, 3]), at: t0)
-        let record = segment.syncRecord()
+        let record = segment.record
         let ck = CloudKitCodec.ckRecord(for: record, in: ownedZoneID(.kidWork(kidID)))
 
         #expect(ck["payload"] == nil)

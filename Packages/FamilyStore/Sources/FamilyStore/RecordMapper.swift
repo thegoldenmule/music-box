@@ -7,7 +7,14 @@ import SwiftData
 /// a separate decision rather than an omission.
 public protocol SyncEncodable {
     /// The record's identity on the server, derived from its natural key.
-    var syncRecordName: String { get }
+    ///
+    /// **`nil` when the key cannot be derived**, which for every type below
+    /// means the relationship it reads through is gone. It used to fall back to
+    /// a fresh `UUID()`, which is not a weaker identity but *no* identity: the
+    /// row got a different name on every export, so the outbox re-sent it
+    /// forever and never drained. A row that cannot name itself is not a record,
+    /// and ``Outbox`` holds it back rather than inventing one.
+    var syncRecordName: String? { get }
     /// The type name, which is also what picks the merge rules.
     static var syncRecordType: String { get }
     /// Every field that travels.
@@ -15,8 +22,11 @@ public protocol SyncEncodable {
 }
 
 extension SyncEncodable {
-    public func syncRecord() -> SyncedRecord {
-        SyncedRecord(name: syncRecordName, type: Self.syncRecordType, fields: syncFields())
+    /// This row as a record, or `nil` when it cannot name itself.
+    public func syncRecord() -> SyncedRecord? {
+        guard let syncRecordName else { return nil }
+        return SyncedRecord(
+            name: syncRecordName, type: Self.syncRecordType, fields: syncFields())
     }
 }
 
@@ -73,7 +83,7 @@ public enum RecordMapper {
 
 extension Family: SyncEncodable {
     public static var syncRecordType: String { "Family" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         [Field.id: .uuid(id), Field.modifiedAt: .date(modifiedAt)]
@@ -82,7 +92,7 @@ extension Family: SyncEncodable {
 
 extension Kid: SyncEncodable {
     public static var syncRecordType: String { "Kid" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -104,7 +114,7 @@ extension Kid: SyncEncodable {
 
 extension GrownUp: SyncEncodable {
     public static var syncRecordType: String { "GrownUp" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -128,9 +138,10 @@ extension PolicyEntryRecord: SyncEncodable {
     /// parents denying the same artist offline both mint a row; content
     /// addressing makes them one record with a save conflict the merge settles,
     /// rather than two rows meaning one thing.
-    public var syncRecordName: String {
-        NaturalKey.policyEntry(
-            kid: kid?.id ?? UUID(), kind: kind, itemKind: itemKind, catalogID: catalogID)
+    public var syncRecordName: String? {
+        guard let kid else { return nil }
+        return NaturalKey.policyEntry(
+            kid: kid.id, kind: kind, itemKind: itemKind, catalogID: catalogID)
     }
 
     public func syncFields() -> [String: SyncValue] {
@@ -156,7 +167,7 @@ extension PolicyEntryRecord: SyncEncodable {
 
 extension SandboxSettingRecord: SyncEncodable {
     public static var syncRecordType: String { "SandboxSettingRecord" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -182,9 +193,10 @@ extension SuggestionRecord: SyncEncodable {
     /// Keyed on `(kid, target)`. The target string is the catalog identifier, or
     /// the local playlist UUID for a snapshot — read through `sourcePlaylistID`
     /// so a row written before that column keys the same way it always did.
-    public var syncRecordName: String {
+    public var syncRecordName: String? {
+        guard let kid else { return nil }
         let target = catalogID ?? (sourcePlaylistID ?? id).uuidString
-        return NaturalKey.suggestion(kid: kid?.id ?? UUID(), target: target)
+        return NaturalKey.suggestion(kid: kid.id, target: target)
     }
 
     public func syncFields() -> [String: SyncValue] {
@@ -213,8 +225,9 @@ extension SuggestionRecord: SyncEncodable {
 extension SuggestionEntryRecord: SyncEncodable {
     public static var syncRecordType: String { "SuggestionEntryRecord" }
 
-    public var syncRecordName: String {
-        NaturalKey.suggestionEntry(suggestion: suggestion?.id ?? UUID(), catalogID: catalogID)
+    public var syncRecordName: String? {
+        guard let suggestion else { return nil }
+        return NaturalKey.suggestionEntry(suggestion: suggestion.id, catalogID: catalogID)
     }
 
     public func syncFields() -> [String: SyncValue] {
@@ -242,8 +255,9 @@ extension SuggestionEntryRecord: SyncEncodable {
 extension FavoriteRecord: SyncEncodable {
     public static var syncRecordType: String { "FavoriteRecord" }
 
-    public var syncRecordName: String {
-        NaturalKey.favorite(kid: kid?.id ?? UUID(), itemKind: itemKind, catalogID: catalogID)
+    public var syncRecordName: String? {
+        guard let kid else { return nil }
+        return NaturalKey.favorite(kid: kid.id, itemKind: itemKind, catalogID: catalogID)
     }
 
     public func syncFields() -> [String: SyncValue] {
@@ -268,7 +282,7 @@ extension FavoriteRecord: SyncEncodable {
 
 extension PlaylistRecord: SyncEncodable {
     public static var syncRecordType: String { "PlaylistRecord" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -291,8 +305,9 @@ extension PlaylistEntryRecord: SyncEncodable {
     /// Keyed on `(playlist, catalogID)` and **not on position** — the same song
     /// at a different position is the same song moved, and keying on position
     /// would make a reorder look like a bulk delete and re-insert.
-    public var syncRecordName: String {
-        NaturalKey.playlistEntry(playlist: playlist?.id ?? UUID(), catalogID: catalogID)
+    public var syncRecordName: String? {
+        guard let playlist else { return nil }
+        return NaturalKey.playlistEntry(playlist: playlist.id, catalogID: catalogID)
     }
 
     public func syncFields() -> [String: SyncValue] {
@@ -318,7 +333,7 @@ extension PlaylistEntryRecord: SyncEncodable {
 
 extension DeviceRecord: SyncEncodable {
     public static var syncRecordType: String { "DeviceRecord" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -341,7 +356,7 @@ extension DeviceRecord: SyncEncodable {
 
 extension PasscodeEpochRecord: SyncEncodable {
     public static var syncRecordType: String { "PasscodeEpochRecord" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -360,7 +375,7 @@ extension PasscodeEpochRecord: SyncEncodable {
 
 extension HistoryClearRecord: SyncEncodable {
     public static var syncRecordType: String { "HistoryClearRecord" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -377,7 +392,7 @@ extension HistoryClearRecord: SyncEncodable {
 
 extension ConsentRecord: SyncEncodable {
     public static var syncRecordType: String { "ConsentRecord" }
-    public var syncRecordName: String { NaturalKey.identity(id) }
+    public var syncRecordName: String? { NaturalKey.identity(id) }
 
     public func syncFields() -> [String: SyncValue] {
         var fields: [String: SyncValue] = [
@@ -404,10 +419,11 @@ extension ActivitySegmentRecord: SyncEncodable {
     /// this store no conflict surface at all — two devices never write the same
     /// segment. See ``NaturalKey/activitySegment(kid:device:dayUTC:table:index:)``
     /// for the limit of that claim.
-    public var syncRecordName: String {
-        NaturalKey.activitySegment(
-            kid: kidID ?? UUID(),
-            device: deviceID ?? UUID(),
+    public var syncRecordName: String? {
+        guard let kidID, let deviceID else { return nil }
+        return NaturalKey.activitySegment(
+            kid: kidID,
+            device: deviceID,
             dayUTC: dayUTC,
             table: table,
             index: index
@@ -432,8 +448,9 @@ extension ActivitySegmentRecord: SyncEncodable {
 extension WeeklySummaryRecord: SyncEncodable {
     public static var syncRecordType: String { "WeeklySummaryRecord" }
 
-    public var syncRecordName: String {
-        NaturalKey.weeklySummary(kid: kid?.id ?? UUID(), weekStart: weekStart)
+    public var syncRecordName: String? {
+        guard let kid else { return nil }
+        return NaturalKey.weeklySummary(kid: kid.id, weekStart: weekStart)
     }
 
     public func syncFields() -> [String: SyncValue] {

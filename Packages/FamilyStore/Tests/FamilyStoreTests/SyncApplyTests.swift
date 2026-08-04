@@ -77,7 +77,7 @@ struct Applying {
         try a.save()
 
         // The entry arrives before its kid.
-        let outcome = SyncApply.apply(deny.syncRecord(), in: SyncApply.Context(b))
+        let outcome = SyncApply.apply(deny.record, in: SyncApply.Context(b))
         #expect(outcome == .deferred(.missingParent(Field.kidID)))
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).isEmpty)
     }
@@ -91,11 +91,11 @@ struct Applying {
         try a.save()
 
         let target = SyncApply.Context(b)
-        #expect(SyncApply.apply(deny.syncRecord(), in: target) == .deferred(.missingParent(Field.kidID)))
+        #expect(SyncApply.apply(deny.record, in: target) == .deferred(.missingParent(Field.kidID)))
 
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
-        #expect(SyncApply.apply(deny.syncRecord(), in: target) == .inserted)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
+        #expect(SyncApply.apply(deny.record, in: target) == .inserted)
         try b.save()
 
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
@@ -114,10 +114,10 @@ struct Applying {
         try a.save()
 
         let target = SyncApply.Context(b)
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
-        #expect(SyncApply.apply(deny.syncRecord(), in: target) == .inserted)
-        #expect(SyncApply.apply(deny.syncRecord(), in: target) == .updated)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
+        #expect(SyncApply.apply(deny.record, in: target) == .inserted)
+        #expect(SyncApply.apply(deny.record, in: target) == .updated)
         try b.save()
 
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
@@ -132,8 +132,8 @@ struct Applying {
         try a.save()
 
         let target = SyncApply.Context(b)
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
 
         // B already has its own row for the same deny.
         let localKid = try #require(try b.fetch(FetchDescriptor<Kid>()).first)
@@ -145,7 +145,7 @@ struct Applying {
         #expect(mine.id != theirs.id)
         #expect(mine.syncRecordName == theirs.syncRecordName)
 
-        #expect(SyncApply.apply(theirs.syncRecord(), in: target) == .updated)
+        #expect(SyncApply.apply(theirs.record, in: target) == .updated)
         try b.save()
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
     }
@@ -161,15 +161,15 @@ struct Applying {
         try a.save()
 
         let target = SyncApply.Context(b)
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
-        _ = SyncApply.apply(allow.syncRecord(), in: target)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
+        _ = SyncApply.apply(allow.record, in: target)
 
         let arrived = try #require(try b.fetch(FetchDescriptor<Kid>()).first)
         #expect(arrived.liveEntries.count == 1)
 
         kid.removeEntry(allow, at: at(600))
-        _ = SyncApply.apply(allow.syncRecord(), in: target)
+        _ = SyncApply.apply(allow.record, in: target)
 
         #expect(arrived.liveEntries.isEmpty)
         #expect(arrived.entries.count == 1)  // the tombstone stays
@@ -185,7 +185,7 @@ struct Applying {
         let (_, kid) = seedFamily(context)
         let allow = kid.addEntry(
             kind: .allow, id: CatalogID(.album, "album-A"), displayName: "An Album", at: at(60))
-        let staleCopy = allow.syncRecord()  // captured before the withdrawal
+        let staleCopy = allow.record  // captured before the withdrawal
 
         kid.removeEntry(allow, at: at(600))
         #expect(allow.isLive == false)
@@ -205,8 +205,8 @@ struct Applying {
         try a.save()
 
         let target = SyncApply.Context(b)
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
 
         let arrived = try #require(try b.fetch(FetchDescriptor<Kid>()).first)
         #expect(arrived.modifiedAt == at(600))
@@ -223,12 +223,12 @@ struct Applying {
         try a.save()
 
         let target = SyncApply.Context(b)
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
         let decision = try #require(kid.sandboxSettings.first)
-        #expect(SyncApply.apply(decision.syncRecord(), in: target) == .inserted)
+        #expect(SyncApply.apply(decision.record, in: target) == .inserted)
         // Twice is once — a decision is never edited.
-        #expect(SyncApply.apply(decision.syncRecord(), in: target) == .updated)
+        #expect(SyncApply.apply(decision.record, in: target) == .updated)
 
         let arrived = try #require(try b.fetch(FetchDescriptor<Kid>()).first)
         #expect(arrived.sandboxSettings.count == 1)
@@ -243,7 +243,7 @@ struct Applying {
         let context = try newStore()
         let target = SyncApply.Context(context)
 
-        var record = Kid(name: "Ada", mode: .reportOnly, at: t0).syncRecord()
+        var record = Kid(name: "Ada", mode: .reportOnly, at: t0).record
         record["mode"] = .string("someLevelFromTheFuture")
         #expect(SyncApply.apply(record, in: target) == .inserted)
 
@@ -304,7 +304,7 @@ struct OutboxTests {
         let (_, kid) = seedFamily(context)
         let playlist = kid.addPlaylist(named: "Car songs", at: t0)
         try context.save()
-        let name = playlist.syncRecordName
+        let name = try #require(playlist.syncRecordName)
 
         Outbox.delete(playlist, in: context, at: at(600))
         try context.save()
@@ -465,7 +465,7 @@ struct LibraryRoundTrip {
             kid.addFavorite(
                 id: CatalogID(.album, "album-A"), displayName: "A", origin: .kid, at: t0))
 
-        var incoming = mine.syncRecord()
+        var incoming = mine.record
         incoming["origin"] = .string(LibraryOrigin.appleLibrary.rawValue)
         incoming[Field.modifiedAt] = .date(at(600))
         _ = SyncApply.apply(incoming, in: SyncApply.Context(context))
@@ -485,9 +485,9 @@ struct LibraryRoundTrip {
         try a.save()
 
         let target = SyncApply.Context(b)
-        _ = SyncApply.apply(family.syncRecord(), in: target)
-        _ = SyncApply.apply(kid.syncRecord(), in: target)
-        _ = SyncApply.apply(suggestion.syncRecord(), in: target)
+        _ = SyncApply.apply(family.record, in: target)
+        _ = SyncApply.apply(kid.record, in: target)
+        _ = SyncApply.apply(suggestion.record, in: target)
 
         let arrived = try #require(try b.fetch(FetchDescriptor<SuggestionRecord>()).first)
         #expect(arrived.isDismissed)
@@ -495,11 +495,11 @@ struct LibraryRoundTrip {
 
         // The parent re-offers it, and that crosses too.
         kid.restoreSuggestion(suggestion, at: at(1200))
-        _ = SyncApply.apply(suggestion.syncRecord(), in: target)
+        _ = SyncApply.apply(suggestion.record, in: target)
         #expect(arrived.isDismissed == false)
 
         // And a stale copy taken before the restore cannot undo it.
-        var stale = suggestion.syncRecord()
+        var stale = suggestion.record
         stale[Field.restoredAt] = nil
         _ = SyncApply.apply(stale, in: target)
         #expect(arrived.isDismissed == false)
@@ -512,7 +512,7 @@ struct LibraryRoundTrip {
         let context = try newStore()
         let device = DeviceRecord(label: "Sam's iPad", role: .kidOnly, platform: .pad, at: t0)
         context.insert(device)
-        let beforeRevoking = device.syncRecord()
+        let beforeRevoking = device.record
 
         device.revoke(at: at(600))
         let target = SyncApply.Context(context)

@@ -186,10 +186,10 @@ struct ZonePlacement {
 
         let owned = Set(SharePlan.zones(kids: [kid.id]))
         let records: [SyncedRecord] = [
-            family.syncRecord(), kid.syncRecord(), entry.syncRecord(),
-            try #require(kid.sandboxSettings.first).syncRecord(),
-            favorite.syncRecord(), playlist.syncRecord(), song.syncRecord(),
-            suggestion.syncRecord(), suggested.syncRecord(),
+            family.record, kid.record, entry.record,
+            try #require(kid.sandboxSettings.first).record,
+            favorite.record, playlist.record, song.record,
+            suggestion.record, suggested.record,
         ]
 
         for record in records {
@@ -209,7 +209,7 @@ struct ZonePlacement {
     @Test("Household records place without a kid")
     func householdRecordsNeedNoKid() {
         let device = DeviceRecord(label: "iPad", role: .kidOnly, platform: .pad)
-        #expect(FamilyZone.placing(device.syncRecord().type, kidID: nil) == .household)
+        #expect(FamilyZone.placing(device.record.type, kidID: nil) == .household)
     }
 }
 

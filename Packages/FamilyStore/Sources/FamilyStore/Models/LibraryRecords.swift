@@ -289,8 +289,19 @@ public final class PlaylistRecord {
         return record
     }
 
+    /// Pulls a song out, **off the disk and off the other device**.
+    ///
+    /// `removeAll` alone left the row attached to nothing, which is invisible to
+    /// every query here and was re-uploaded under a fresh name on every sync.
+    /// The tombstone has to be written while the row can still say what it is
+    /// called, which is why it comes before the detach and not after.
     public func removeSong(_ catalogID: CatalogID, at: Date = .now) {
         // No renumbering. A hole is not a problem — see ``positionGap``.
+        if let context = modelContext {
+            for row in entries where row.catalogID == catalogID.rawValue {
+                Outbox.delete(row, in: context, at: at)
+            }
+        }
         entries.removeAll { $0.catalogID == catalogID.rawValue }
         modifiedAt = at
     }

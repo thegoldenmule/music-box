@@ -134,12 +134,24 @@ public enum Outbox {
             uniquingKeysWith: { first, _ in first }
         )
 
+        // **An orphan is skipped, not sent.** A row whose parent relationship
+        // has been nulled cannot derive its natural key, and the old mapper
+        // answered that with a fresh `UUID()` — so the same dead row uploaded
+        // under a new name on every pass. The outbox never drained, the zone
+        // grew by one record per orphan per sync, and nothing errored, because
+        // from here it looked exactly like ordinary work.
+        //
+        // Skipping rather than repairing is deliberate: this is the read path,
+        // and a read that silently rewrote the store would make every caller a
+        // writer. `Outbox.orphans` is the repair, and it is a separate,
+        // counted, explicit call.
         func collect<T: PersistentModel & SyncEncodable>(
             _ type: T.Type, _ touched: (T) -> Date
         ) throws {
-            for row in try context.fetch(FetchDescriptor<T>())
-            where marks[row.syncRecordName] != touched(row) {
-                changes.append(.upsert(row.syncRecord()))
+            for row in try context.fetch(FetchDescriptor<T>()) {
+                guard let name = row.syncRecordName, marks[name] != touched(row) else { continue }
+                guard let record = row.syncRecord() else { continue }
+                changes.append(.upsert(record))
             }
         }
 
@@ -174,14 +186,29 @@ public enum Outbox {
     /// afterwards.** The tombstone captures the record's name while the row is
     /// still there to be asked; the delete follows in the same transaction. A
     /// caller that saves in between has opened the window this exists to close.
-    @MainActor
-    public static func delete<T: PersistentModel & SyncEncodable>(
+    /// `nonisolated` because the model methods that must call it are.
+    ///
+    /// The rest of this type fetches, which is why it is `@MainActor`; this one
+    /// only inserts and deletes through a context a model already holds — the
+    /// same thing `Kid.delete(_:)` does beside it. Requiring the main actor here
+    /// is what kept ``removeFavorite`` and friends from writing tombstones at
+    /// all, which is most of why deletions never reached a second device.
+    nonisolated public static func delete<T: PersistentModel & SyncEncodable>(
         _ row: T,
         in context: ModelContext,
         at: Date = .now
     ) {
+        // A row that cannot name itself was never on the server under any name,
+        // so there is nothing to tell anyone about. It still has to go — that is
+        // the whole point of deleting it — but a tombstone for a name nobody
+        // ever saw is a delete instruction aimed at nothing.
+        guard let name = row.syncRecordName else {
+            context.delete(row)
+            return
+        }
+
         let tombstone = PendingDeletionRecord(
-            recordName: row.syncRecordName,
+            recordName: name,
             recordType: T.syncRecordType,
             at: at
         )
@@ -200,6 +227,48 @@ public enum Outbox {
     /// accumulate. It is a number that wants measuring on real devices rather
     /// than choosing here.
     public static let tombstoneRetention: TimeInterval = 60 * 60 * 24 * 90
+
+    /// Rows left on disk by a removal that only detached them.
+    ///
+    /// **These are not data anybody can reach.** Every query in the store is
+    /// `kid?.id == kidID` or the equivalent, so a row whose parent is nil is
+    /// invisible to the app that wrote it — a favourite the child un-hearted, a
+    /// song pulled out of a playlist, a playlist thrown away. The removal the
+    /// parent asked for happened on screen; only the disk half did not finish.
+    ///
+    /// Counted and returned rather than swept silently, for the reason
+    /// ``FamilyResolution`` counts merged households: this deletes rows, and a
+    /// repair that says nothing is indistinguishable from the bug it repairs.
+    ///
+    /// **Deliberately not called on launch.** It is offered, not imposed —
+    /// deleting during an upgrade is the one thing there is no undo for, and
+    /// `pending` already declines to export these, so nothing is broken while
+    /// they sit there.
+    @MainActor
+    public static func orphans(in context: ModelContext) throws -> Int {
+        var found = 0
+
+        func reap<T: PersistentModel & SyncEncodable>(_ type: T.Type, _ isOrphan: (T) -> Bool)
+            throws
+        {
+            for row in try context.fetch(FetchDescriptor<T>()) where isOrphan(row) {
+                context.delete(row)
+                found += 1
+            }
+        }
+
+        // Only types whose key reads through a relationship can be orphaned;
+        // the rest carry their own identifier and are always nameable.
+        try reap(PolicyEntryRecord.self) { $0.kid == nil }
+        try reap(SuggestionRecord.self) { $0.kid == nil }
+        try reap(SuggestionEntryRecord.self) { $0.suggestion == nil }
+        try reap(FavoriteRecord.self) { $0.kid == nil }
+        try reap(PlaylistEntryRecord.self) { $0.playlist == nil }
+        try reap(WeeklySummaryRecord.self) { $0.kid == nil }
+        try reap(ActivitySegmentRecord.self) { $0.kidID == nil || $0.deviceID == nil }
+
+        return found
+    }
 
     @MainActor
     public static func sweepTombstones(

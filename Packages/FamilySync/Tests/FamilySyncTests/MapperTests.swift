@@ -102,7 +102,7 @@ struct RecordNames {
         let record = kid.addEntry(kind: .deny, id: CatalogID(.artist, "a"), displayName: "A", at: t0)
 
         #expect(record.syncRecordName == record.syncRecordName)
-        #expect(record.syncRecord().name == record.syncRecordName)
+        #expect(record.record.name == record.syncRecordName)
     }
 
     /// The separator earns its keep: without it `("ab", "c")` and `("a", "bc")`
@@ -121,8 +121,8 @@ struct RecordNames {
         let record = kid.addEntry(
             kind: .deny, id: CatalogID(.artist, "some-explicit-band"), displayName: "X", at: t0)
 
-        #expect(record.syncRecordName.contains("some-explicit-band") == false)
-        #expect(record.syncRecordName.count == 32)
+        #expect(try #require(record.syncRecordName).contains("some-explicit-band") == false)
+        #expect(try #require(record.syncRecordName).count == 32)
     }
 
     /// The same song at a different position is the same song *moved*. Keying on
@@ -134,10 +134,10 @@ struct RecordNames {
         playlist.addSong(id: CatalogID(.song, "one"), displayName: "One", at: t0)
         playlist.addSong(id: CatalogID(.song, "two"), displayName: "Two", at: t0)
 
-        let before = playlist.entries.map(\.syncRecordName).sorted()
+        let before = playlist.entries.compactMap(\.syncRecordName).sorted()
         playlist.reorder(to: [CatalogID(.song, "two"), CatalogID(.song, "one")], at: t0)
 
-        #expect(playlist.entries.map(\.syncRecordName).sorted() == before)
+        #expect(playlist.entries.compactMap(\.syncRecordName).sorted() == before)
     }
 }
 
@@ -222,7 +222,7 @@ struct EncodedFields {
     func selfMergeIsIdentity() throws {
         let (_, _, kid) = try newKid()
         let entry = kid.addEntry(kind: .deny, id: CatalogID(.artist, "a"), displayName: "A", at: t0)
-        let encoded = entry.syncRecord()
+        let encoded = entry.record
 
         let outcome = Merge.resolve(
             local: encoded, remote: encoded, rules: Merge.rules(for: encoded.type))

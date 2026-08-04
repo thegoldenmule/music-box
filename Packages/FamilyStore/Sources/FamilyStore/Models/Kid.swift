@@ -610,7 +610,25 @@ public final class Kid {
     /// removed without it leaves an artist's thousand tracks in the library with
     /// nothing left that names them, unreachable from any screen that could
     /// clear them and invisible to a parent looking at what is kept.
-    public func removeFavorite(_ catalogID: CatalogID) {
+    /// Takes a favorite off the shelf, **off the disk, and off the co-parent's
+    /// device**.
+    ///
+    /// The same shape as ``removeEntry(_:at:)``, and the last two of the three
+    /// removals that only detached. `removeAll` nulls the inverse and leaves the
+    /// row where no query can reach it — every query here is `kid?.id == kidID`
+    /// — so the child watched it disappear while it went on existing. Worse than
+    /// wasted space once sync arrived: an orphan cannot derive its natural key,
+    /// and the outbox re-sent it under a new name on every pass forever.
+    ///
+    /// The tombstone is the other half, and it is what makes this reach a second
+    /// device at all. Without it a favourite the child un-hearted stays on a
+    /// co-parent's phone permanently — which is what ``PendingDeletionRecord``
+    /// says it exists to prevent, and did not, because nothing constructed one.
+    public func removeFavorite(_ catalogID: CatalogID, at: Date = .now) {
+        let doomed = favorites.filter {
+            $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
+        }
+        tombstone(doomed, at: at)
         favorites.removeAll {
             $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
         }
@@ -702,7 +720,15 @@ public final class Kid {
         record.kid = self
     }
 
-    public func removePlaylist(_ record: PlaylistRecord) {
+    /// Throws a playlist away, with its songs.
+    ///
+    /// The entries go first and explicitly: cascade fires when the *kid* goes,
+    /// not when a playlist leaves the array, so deleting only the playlist would
+    /// leave every song in it orphaned — the exact rows that used to be re-sent
+    /// forever under a new name each time.
+    public func removePlaylist(_ record: PlaylistRecord, at: Date = .now) {
+        tombstone(record.entries, at: at)
+        tombstone([record], at: at)
         playlists.removeAll { $0.id == record.id }
     }
 
@@ -759,6 +785,18 @@ public final class Kid {
     private func delete(_ records: [some PersistentModel]) {
         guard let modelContext else { return }
         for record in records { modelContext.delete(record) }
+    }
+
+    /// Deletes rows **and records that they went**, so a second device removes
+    /// them too.
+    ///
+    /// Order is the whole of it: `Outbox.delete` reads the record's name while
+    /// the row is still attached to ask, then deletes. Detaching first — which
+    /// is what `removeAll` does — leaves nothing to name, and the deletion
+    /// reaches nobody.
+    private func tombstone(_ records: [some PersistentModel & SyncEncodable], at: Date) {
+        guard let modelContext else { return }
+        for record in records { Outbox.delete(record, in: modelContext, at: at) }
     }
 
     /// Everything this kid did: their history **and** their library.
