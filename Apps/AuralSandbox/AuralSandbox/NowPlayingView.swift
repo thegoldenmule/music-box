@@ -52,6 +52,7 @@ struct NowPlayingView: View {
     var isShowing = true
 
     @Environment(KidRouter.self) private var router: KidRouter?
+    @Environment(\.motion) private var motion
     #if os(iOS)
     @Environment(PlayerExpansion.self) private var expansion: PlayerExpansion?
     #else
@@ -247,7 +248,7 @@ struct NowPlayingView: View {
     /// How this screen goes away: a position on iOS, a dismissal on the Mac.
     private func close() {
         #if os(iOS)
-        expansion?.close()
+        expansion?.close(motion)
         #else
         dismiss()
         #endif
@@ -305,7 +306,7 @@ struct NowPlayingView: View {
     private var closeDrag: some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { expansion?.pull(by: $0.translation.height) }
-            .onEnded { expansion?.release(projected: $0.translation.height + $0.velocity.height / 4) }
+            .onEnded { expansion?.release(projected: $0.translation.height + $0.velocity.height / 4, motion: motion) }
     }
     #endif
 
@@ -320,6 +321,10 @@ struct NowPlayingView: View {
             } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 44))
+                    // See ``NowPlayingBar`` — the `.animation` is what makes the
+                    // `contentTransition` do anything at all.
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(motion.standard, value: player.isPlaying)
                     .frame(width: 88, height: 88)
                     .contentShape(Circle())
             }

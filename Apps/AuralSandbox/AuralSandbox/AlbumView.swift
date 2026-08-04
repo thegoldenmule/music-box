@@ -139,7 +139,7 @@ struct AlbumView: View {
                 HStack(spacing: 12) {
                     ForEach(credits, id: \.id) { artist in
                         NavigationLink(value: KidRoute.container(artist)) { ArtistChip(artist: artist) }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.pressable)
                     }
                 }
                 .padding(.horizontal)
@@ -377,7 +377,7 @@ struct AlbumTrackRow<Accessory: View>: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Text(accessibilityLabel))
             // What the mark says, for somebody who cannot see it.

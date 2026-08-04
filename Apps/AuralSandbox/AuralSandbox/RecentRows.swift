@@ -88,7 +88,7 @@ struct ContainerRow: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(
                 Text([item.title, item.subtitle].compactMap { $0 }.joined(separator: ", "))

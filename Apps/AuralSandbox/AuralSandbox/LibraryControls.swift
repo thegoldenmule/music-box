@@ -36,6 +36,16 @@ struct HeartButton: View {
             Image(systemName: isOn ? "heart.fill" : "heart")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                // **`symbolEffect`, not `contentTransition`, and the difference
+                // matters.** `BounceSymbolEffect` conforms to
+                // `DiscreteSymbolEffect`, so this overload watches `value`
+                // itself and needs no animation in the transaction — unlike the
+                // play/pause replace in ``NowPlayingBar``, which does.
+                //
+                // The one place in the app overshoot is the content rather than
+                // the motion: this is the only tap a kid makes that means
+                // *mine*, and it is worth a reply.
+                .symbolEffect(.bounce, value: isOn)
                 .frame(width: Self.size, height: Self.size)
                 .contentShape(Rectangle())
         }
@@ -72,7 +82,7 @@ struct FavoriteButton: View {
                 .padding(.vertical, 12)
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .foregroundStyle(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
         .background(Capsule().fill(.quaternary))
         // The label already says which state it is in, so a hint would be the
@@ -237,7 +247,7 @@ struct TileCell: View {
                     NavigationLink(value: KidRoute.container(item)) { Tile(item: item, hasHeart: true) }
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
 
             HeartButton(session: session, item: item, origin: origin)
                 .padding(.leading, Tile.padding)

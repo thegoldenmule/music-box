@@ -366,7 +366,7 @@ struct LibraryPlaylistRow: View {
             .padding(.horizontal, SongRowMetrics.margin)
             .padding(.vertical, 10)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .accessibilityElement(children: .combine)
         .accessibilityHint(Text("Opens"))
     }

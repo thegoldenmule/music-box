@@ -55,6 +55,13 @@ struct RootView: View {
                 }
             }
         }
+        // **The one place Reduce Motion is read.** Everything below asks
+        // `\.motion` for an animation and gets the right answer without knowing
+        // the setting exists — see ``Motion``. Outside this modifier the palette
+        // defaults to motion-on, which is the safe way round: a view drawn
+        // somewhere unexpected animates normally rather than silently behaving as
+        // though the accessibility setting were turned on.
+        .resolvingMotion()
         .task { await session.start() }
     }
 

@@ -26,7 +26,11 @@ struct NowPlayingMark: View {
     /// The one accessibility signal that matters here is not this view's — see
     /// the `accessibilityValue` on the rows that draw it. Bars are decoration and
     /// VoiceOver landing on three of them says nothing.
+    ///
+    /// Read directly for the same reason ``SearchingView`` does: whether the bars
+    /// stand still is a question about what is drawn.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motion) private var motion
 
     @State private var bouncing = false
 
@@ -64,12 +68,13 @@ struct NowPlayingMark: View {
     /// keeps running however gentle the curve, which is the rule
     /// ``SearchingView`` records and the reason this returns an optional rather
     /// than a slower animation.
+    ///
+    /// The rate is ``Motion/bars``, shared with ``SearchingView`` so the two
+    /// figures that both mean *sound* move at one speed. The stagger is wider
+    /// here — three small bars need more offset to read as a wave than five big
+    /// ones do.
     private func animation(index: Int) -> Animation? {
-        guard isAnimating, !reduceMotion else { return nil }
-        return .easeInOut(duration: 0.42)
-            .repeatForever(autoreverses: true)
-            // Offset per bar so the three are never in step, which is what makes
-            // it read as sound rather than as a progress indicator.
-            .delay(Double(index) * 0.14)
+        guard isAnimating else { return nil }
+        return motion.bars?.delay(Double(index) * 0.14)
     }
 }

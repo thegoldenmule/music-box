@@ -82,6 +82,7 @@ struct KidHomeView: View {
     @State private var expansion = PlayerExpansion()
     #endif
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.motion) private var motion
 
     init(session: Session) {
         self.session = session
@@ -276,7 +277,7 @@ struct KidHomeView: View {
                 searchTask?.cancel()
                 searchTask = nil
                 filter = .artists
-                withAnimation(.easeInOut(duration: 0.2)) { search = .home }
+                withAnimation(motion.fade) { search = .home }
             }
         }
         // The shelf follows the trail directly now, rather than watching the
@@ -500,7 +501,7 @@ struct KidHomeView: View {
         // still looking at the results it fetched.
         term = ""
         filter = .artists
-        withAnimation(.easeInOut(duration: 0.2)) { search = .home }
+        withAnimation(motion.fade) { search = .home }
 
         // Unconditionally, which covers the case the button is otherwise silent
         // for: already home, already at the root, nothing to clear, and a kid
@@ -554,7 +555,7 @@ struct KidHomeView: View {
             ScrollViewReader { proxy in
                 shelves
                     .onChange(of: scrollHomeToTop) { _, _ in
-                        withAnimation(.easeInOut(duration: 0.3)) {
+                        withAnimation(motion.travel) {
                             proxy.scrollTo(Self.homeTop, anchor: .top)
                         }
                     }
@@ -754,7 +755,7 @@ struct KidHomeView: View {
         // same way rather than the second landing on whichever tab the first
         // was left on.
         filter = .artists
-        withAnimation(.easeInOut(duration: 0.2)) { search = .running(term) }
+        withAnimation(motion.fade) { search = .running(term) }
 
         searchTask?.cancel()
         searchTask = Task {
@@ -772,7 +773,7 @@ struct KidHomeView: View {
                     // spinner, so hold until a kind has actually landed.
                     guard !found.byKind.isEmpty else { continue }
 
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(motion.fade) {
                         search = .results(found)
                         retargetFilter(found)
                     }
@@ -780,7 +781,7 @@ struct KidHomeView: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 trouble = Session.kidMessage(for: error)
-                withAnimation(.easeInOut(duration: 0.2)) { search = .trouble }
+                withAnimation(motion.fade) { search = .trouble }
             }
         }
     }
@@ -989,7 +990,7 @@ struct ShelfHeader: View {
             }
             .padding(.horizontal)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
@@ -1007,7 +1008,7 @@ struct PlaylistShelf: View {
                     NavigationLink(value: KidRoute.home(.playlist(playlist.handle))) {
                         PlaylistCard(playlist: playlist)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                 }
             }
             .padding(.horizontal)
@@ -1067,6 +1068,8 @@ struct HomeSkeleton: View {
     /// slow enough to be calm, since a kid is looking at it.
     @State private var dimmed = false
 
+    @Environment(\.motion) private var motion
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -1076,7 +1079,13 @@ struct HomeSkeleton: View {
             .padding(.vertical)
         }
         .opacity(dimmed ? 0.55 : 1)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dimmed)
+        // **`nil` under Reduce Motion, and that is a fix rather than a
+        // conversion.** ``SearchingView`` has guarded its identical loop since it
+        // was written and says why: a `repeatForever` attached to a value that
+        // never changes again keeps running however gentle the curve. This one
+        // never was, so one file solved it and the other did not — which is the
+        // strongest argument there was for a shared vocabulary.
+        .animation(motion.pulse, value: dimmed)
         .onAppear { dimmed = true }
         // Nothing here is real, so nothing here is tappable, and VoiceOver is
         // told what it is once rather than reading out eight empty shapes.
@@ -1361,7 +1370,7 @@ struct SongRow<Accessory: View>: View {
                 // just the parts with something drawn on them.
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(
                 Text([item.title, item.subtitle].compactMap { $0 }.joined(separator: ", "))

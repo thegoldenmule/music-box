@@ -34,6 +34,8 @@ struct KidSearchBar: View {
     /// results they just asked for.
     @FocusState private var isTyping: Bool
 
+    @Environment(\.motion) private var motion
+
     private let height: CGFloat = 52
 
     var body: some View {
@@ -116,7 +118,7 @@ struct KidSearchBar: View {
         // Cheap enough to animate and worth animating: the ring arriving is the
         // answer to the tap, and a hard cut reads as a redraw rather than as a
         // reply.
-        .animation(.easeOut(duration: 0.18), value: isTyping)
+        .animation(motion.fade, value: isTyping)
         // The capsule is the target, not the words inside it — a kid aiming at
         // a text field aims at the box.
         .contentShape(Capsule())

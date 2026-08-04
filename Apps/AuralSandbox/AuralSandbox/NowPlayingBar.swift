@@ -39,6 +39,8 @@ struct NowPlayingBar: View {
     @State private var isExpanded = false
     #endif
 
+    @Environment(\.motion) private var motion
+
     var body: some View {
         if let entry = player.current {
             VStack(spacing: 0) {
@@ -121,6 +123,19 @@ struct NowPlayingBar: View {
                     } label: {
                         Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title)
+                            // **Both modifiers, and the second is not optional.**
+                            // `contentTransition` only writes an environment
+                            // value describing *how* to interpolate; with no
+                            // animation in the transaction the glyph swap is a
+                            // plain rebuild, and a rebuild is a cut. Remove the
+                            // `.animation` and this silently does nothing.
+                            //
+                            // `.symbolEffect(.replace, value:)` is not an option
+                            // here: `ReplaceSymbolEffect` conforms only to
+                            // `ContentTransitionSymbolEffect`, so the
+                            // self-driving overloads do not compile for it.
+                            .contentTransition(.symbolEffect(.replace))
+                            .animation(motion.standard, value: player.isPlaying)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
@@ -152,7 +167,7 @@ struct NowPlayingBar: View {
     /// The tap, unchanged in what it does and now one of two ways to do it.
     private func openPlayer() {
         #if os(iOS)
-        expansion?.open()
+        expansion?.open(motion)
         #else
         isExpanded = true
         #endif
@@ -178,7 +193,7 @@ struct NowPlayingBar: View {
     private var expandDrag: some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { expansion?.pull(by: $0.translation.height) }
-            .onEnded { expansion?.release(projected: $0.translation.height + $0.velocity.height / 4) }
+            .onEnded { expansion?.release(projected: $0.translation.height + $0.velocity.height / 4, motion: motion) }
     }
     #endif
 }

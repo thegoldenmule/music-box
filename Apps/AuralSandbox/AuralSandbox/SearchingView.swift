@@ -14,7 +14,11 @@ import SwiftUI
 struct SearchingView: View {
     let term: String
 
+    /// Still read directly, and deliberately: whether the bars *stand still* is a
+    /// question about what is drawn, not about which animation to use, and
+    /// ``MotionPalette`` only answers the second. See ``scale(index:resting:)``.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motion) private var motion
     @State private var bouncing = false
 
     /// Where each bar sits when it is not moving — an equalizer paused, not five
@@ -64,11 +68,14 @@ struct SearchingView: View {
     /// `nil` under Reduce Motion, which is what actually stops the loop — a
     /// repeating animation attached to a value that never changes again still
     /// runs forever.
+    ///
+    /// The rate comes from ``Motion/bars`` now, shared with ``NowPlayingMark``:
+    /// the two figures that both mean *sound* were drifting apart at two
+    /// separately-written 0.42s. Only the per-bar delay is this view's own, and
+    /// it is tighter here because five bars across a whole screen need less
+    /// stagger to read as a wave than three in a row does.
     private func animation(index: Int) -> Animation? {
-        guard !reduceMotion else { return nil }
-        return .easeInOut(duration: 0.42)
-            .repeatForever(autoreverses: true)
-            .delay(Double(index) * 0.09)
+        motion.bars?.delay(Double(index) * 0.09)
     }
 }
 

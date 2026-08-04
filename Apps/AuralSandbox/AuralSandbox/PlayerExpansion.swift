@@ -45,23 +45,28 @@ final class PlayerExpansion {
 
     /// Slow enough to be seen leaving, quick enough not to be waited on, and
     /// barely bouncy — this is a screen a kid opens and closes dozens of times
-    /// an hour.
-    private static let settle = Animation.spring(duration: 0.35, bounce: 0.12)
+    /// an hour. Now ``Motion/settle``, which is the same curve named.
+    ///
+    /// **The palette is a parameter rather than an environment read, because this
+    /// is a model and not a view.** That is the one place the motion vocabulary
+    /// cannot reach on its own, and passing it makes the dependency visible
+    /// instead of leaving Reduce Motion quietly unhonoured on the one screen in
+    /// the app a finger drags.
 
     /// Far enough that a finger resting still has not asked for anything, near
     /// enough that a flick lands. Distance *plus* projected velocity is measured
     /// against it, so both a slow haul and a fast flick can reach it.
     private static let threshold: CGFloat = 140
 
-    func open() {
-        withAnimation(Self.settle) {
+    func open(_ motion: MotionPalette = MotionPalette()) {
+        withAnimation(motion.settle) {
             isOpen = true
             drag = 0
         }
     }
 
-    func close() {
-        withAnimation(Self.settle) {
+    func close(_ motion: MotionPalette = MotionPalette()) {
+        withAnimation(motion.settle) {
             isOpen = false
             drag = 0
         }
@@ -84,13 +89,23 @@ final class PlayerExpansion {
     /// The finger has let go. `projected` is where it was heading, not where it
     /// stopped — a kid's flick is fast and travels barely any distance, and
     /// judging on distance alone refuses it.
-    func release(projected: CGFloat) {
+    ///
+    /// **A flick and a slow haul settle with the same animation, deliberately.**
+    /// SwiftUI tracks the gesture's velocity and hands it to the spring, so the
+    /// difference between the two arrives as initial velocity rather than as a
+    /// second constant — and a second constant here would double-count what the
+    /// gesture already said. See ``Motion``.
+    func release(projected: CGFloat, motion: MotionPalette = MotionPalette()) {
         if isOpen {
-            if projected > Self.threshold { close() } else { withAnimation(Self.settle) { drag = 0 } }
+            if projected > Self.threshold {
+                close(motion)
+            } else {
+                withAnimation(motion.settle) { drag = 0 }
+            }
         } else if projected < -Self.threshold {
-            open()
+            open(motion)
         } else {
-            withAnimation(Self.settle) { drag = 0 }
+            withAnimation(motion.settle) { drag = 0 }
         }
     }
 
