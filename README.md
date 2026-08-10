@@ -1,4 +1,4 @@
-# Aural Sandbox
+# Music Box
 
 A native iOS and Mac app that lets kids explore music inside walls the parent
 sets. It plays from Apple Music through MusicKit, so the catalog is complete; we
