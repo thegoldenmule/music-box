@@ -897,7 +897,7 @@ cross-fade in. The album cover is the *only* object shared between the two state
 and the only thing the eye tracks. **The artwork morph is the 80%.**
 
 Cost: ~150 new lines, four small call-site edits, one new `@Observable`. No
-dependency, nothing leaves the device, no policy surface touched, no artwork
+dependency, no network call, no policy surface touched, no artwork
 written or composited.
 
 **First thing to tap on device:** the album link on the hero cover. `cover(for:)`

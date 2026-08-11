@@ -98,6 +98,103 @@ extension Session {
         return changed
     }
 
+    // MARK: - Consent
+
+    /// Whether an invitation for this role may be offered yet.
+    ///
+    /// **The passcode is not the answer.** Guideline 5.1.4 says a Kids-Category
+    /// parental gate is generally not the same as securing consent to collect a
+    /// child's personal information, and a share is what creates the capability to
+    /// hand that information to somebody else. So the gate gets a parent to this
+    /// screen and a separate, recorded act gets them past it — see
+    /// ``FamilyStore/Consent``.
+    func consentIsGiven(for role: ShareRole) -> Bool {
+        Consent.isGiven(
+            scope: Self.scope(for: role),
+            householdKids: kids.map(\.id),
+            subject: Self.subject(of: role),
+            recorded: recordedConsent()
+        )
+    }
+
+    /// The children an invitation for this role would expose that no agreement
+    /// covers, in roster order.
+    ///
+    /// **What the consent screen has to name out loud.** "Everything about Robin
+    /// *and Sam*" is a different sentence from the one a parent agreed to when they
+    /// had one child, and this is the difference.
+    func kidsNeedingConsent(for role: ShareRole) -> [Kid] {
+        let missing = Consent.kidsNotCovered(
+            scope: Self.scope(for: role),
+            householdKids: kids.map(\.id),
+            subject: Self.subject(of: role),
+            recorded: recordedConsent()
+        )
+        return kids.filter { missing.contains($0.id) }
+    }
+
+    /// Files the agreement for this role.
+    ///
+    /// **Records the whole of what is knowable and no more.** The adult is
+    /// identified two ways where both are available — the acting grown-up they
+    /// selected behind the gate, and the opaque record name of the Apple Account
+    /// signed in here — and either may be absent, which the record allows. That is
+    /// the honest maximum: nothing in this app verifies that the person behind the
+    /// passcode is a parent, and a row claiming otherwise would be worse than a row
+    /// admitting it.
+    ///
+    /// The children are stored as the identifiers exposed *at this moment*, not
+    /// derived later, because that is what makes the next child a new question.
+    func recordConsent(for role: ShareRole) -> String? {
+        let scope = Self.scope(for: role)
+        let exposed = Consent.kidsExposed(
+            by: scope, householdKids: kids.map(\.id), subject: Self.subject(of: role))
+
+        let accountName: String? =
+            if case .signedIn(let name) = signedInAccount { name } else { nil }
+
+        return record(
+            ConsentRecord(
+                familyID: householdID,
+                grownUpID: actingGrownUp?.id,
+                accountRecordName: accountName,
+                scope: scope,
+                // Sorted so two devices filing the same agreement produce the same
+                // bytes, which is one fewer thing for a merge to arbitrate.
+                kidIDs: exposed.sorted { $0.uuidString < $1.uuidString },
+                appVersion: Self.appVersion
+            )
+        )
+    }
+
+    private static func scope(for role: ShareRole) -> ConsentScope {
+        switch role {
+        case .coParent: .shareHousehold
+        case .child: .childAccountParticipates
+        }
+    }
+
+    private static func subject(of role: ShareRole) -> UUID? {
+        switch role {
+        case .coParent: nil
+        case .child(let id): id
+        }
+    }
+
+    /// Which build put the words in front of them.
+    ///
+    /// The wording will change, and a record of agreement to unknown wording is not
+    /// much of a record. **Recorded, not compared:** re-asking on every update would
+    /// train a parent to tap through it, which is the opposite of what a consent
+    /// screen is for. If the wording changes materially, that is the moment to
+    /// decide about re-asking, and it wants its own version rather than this one.
+    static var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
+    }
+
     // MARK: - Which adult this Apple Account is
 
     /// Records that the account signed in here belongs to the grown-up acting on

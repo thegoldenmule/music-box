@@ -243,9 +243,30 @@ survives while the tile does not.
 is acceptable; a stalled player is not. No safety decision reads from the log.
 Policy-entry writes are the opposite: awaited, with failures surfaced.
 
-**Nothing leaves the device.** No server of ours, no third-party analytics SDK,
-no PII to third parties. This is a legal position (COPPA and friends), not just
-an architecture preference — the app records a child's search history.
+**No server of ours, no third-party analytics SDK, no PII to third parties, and
+the family's records stay in the family's own iCloud, where we cannot read
+them.** This is a legal position (COPPA and friends), not just an architecture
+preference — the app records a child's search history.
+
+**This paragraph used to say "nothing leaves the device", and that is now
+false.** It was true while sync had to be asked for by hand. `Session.syncPass()`
+runs on launch and on every foreground, so a child's records reach Apple's
+servers without anybody pressing anything. The replacement wording is the one the
+*Accounts, Devices and Sync* spec specifies for exactly this moment; do not
+restore the old sentence, and do not write "CloudKit sync does not change our
+COPPA posture" as though it were a fact. It is a position, with reasoning (no
+server of ours, no read access for the developer, the family's own storage, an
+adult Apple has already verified) and a named residual risk: 5.1.4's trigger is
+the *capability* to share a minor's personal information, and the share creates
+that whoever holds the bytes. **The wording needs a lawyer, and so does the
+still-unanswered ADP 3.3.6(D) question. Neither is settled by this file.**
+
+**Consent is a row, not a screen.** A parental gate is not parental consent —
+5.1.4 says so — so the admin passcode does not answer it. `ConsentSheet` is a
+separate act before the first invitation of each kind, and `Consent` decides
+whether an existing agreement covers it. The rule that matters: **coverage is per
+child.** An agreement given when a family had one child does not cover the child
+added next month, and the next invitation asks again.
 
 **Three MusicKit affordances are deliberately never used**: personalized
 recommendations, autoplay past the end of a queue, and radio and stations. Each

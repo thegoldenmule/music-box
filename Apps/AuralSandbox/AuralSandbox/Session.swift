@@ -717,6 +717,34 @@ final class Session {
         grownUps = family.orderedGrownUps
     }
 
+    /// Every agreement this household has on record, as the rule reads them.
+    ///
+    /// A fetch rather than a held copy: a co-parent's device can record one, so
+    /// this changes without anything on this device doing so.
+    func recordedConsent() -> [RecordedConsent] {
+        let rows = (try? context.fetch(FetchDescriptor<ConsentRecord>())) ?? []
+        return rows
+            .filter { $0.familyID == nil || $0.familyID == householdID }
+            .compactMap(\.recorded)
+    }
+
+    /// Files an agreement.
+    ///
+    /// **Awaited and surfaced, on the policy-write side of the rule rather than
+    /// the log's.** A consent row that failed to save is the answer to "what
+    /// consent did you record" being *nothing*, so it is the last thing that may
+    /// be dropped quietly — see ``FamilyStore/ConsentRecord``.
+    func record(_ consent: ConsentRecord) -> String? {
+        context.insert(consent)
+        do {
+            try context.save()
+        } catch {
+            return error.localizedDescription
+        }
+        Task { await pushLocalChanges() }
+        return nil
+    }
+
     /// Records which Apple Account is which adult, and reloads the roster.
     ///
     /// A pass-through because `family` is private to this file, and it should stay

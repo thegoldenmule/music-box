@@ -24,6 +24,9 @@ struct SharingView: View {
     @State private var trouble: String?
     @State private var accepted = false
 
+    /// Whether the agreement is on screen. See ``ConsentSheet``.
+    @State private var consenting = false
+
     /// Who the next invitation is for. A co-parent and a child get different
     /// zones at different permissions, so this is not cosmetic — see
     /// ``SharePlan``.
@@ -66,6 +69,25 @@ struct SharingView: View {
         // the roster keeps showing the state from before they joined.
         .onChange(of: shares.acceptances) { _, _ in
             Task { await refresh() }
+        }
+        .sheet(isPresented: $consenting) {
+            ConsentSheet(
+                role: role,
+                kids: session.kidsNeedingConsent(for: role),
+                actingGrownUp: session.actingGrownUp?.name
+            ) {
+                session.touchAdmin()
+                // **The row before the link, and the link only if the row saved.**
+                // An invitation whose consent failed to write is the answer to
+                // "what did you record" being nothing, with a live share already
+                // out — so this one failure stops the flow rather than being
+                // logged past.
+                if let failure = session.recordConsent(for: role) {
+                    trouble = failure
+                } else {
+                    Task { await makeInvitation() }
+                }
+            }
         }
         .alert(
             "Couldn't do that",
@@ -134,8 +156,15 @@ struct SharingView: View {
                 }
             }
 
+            // **Consent is checked here rather than inside `makeInvitation`**, so
+            // the agreement is a step a parent takes before the link exists — not
+            // a dialog in front of one that has already been minted.
             Button(busy ? "Working…" : "Create an invitation") {
-                Task { await makeInvitation() }
+                if session.consentIsGiven(for: role) {
+                    Task { await makeInvitation() }
+                } else {
+                    consenting = true
+                }
             }
             .disabled(busy)
 
