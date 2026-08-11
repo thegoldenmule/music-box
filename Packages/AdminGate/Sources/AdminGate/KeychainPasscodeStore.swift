@@ -92,19 +92,63 @@ public struct KeychainPasscodeStore: PasscodeStore {
 
     // MARK: - Bytes
     //
-    // salt ‖ hash, fixed widths, no container format. There is exactly one
+    // salt ‖ hash ‖ epoch, fixed widths, no container format. There is exactly one
     // producer and one consumer, and a plist or JSON here would be a schema to
     // migrate for no benefit.
+    //
+    // **The epoch is appended, and its absence is the migration.** Items written
+    // before epochs existed are salt ‖ hash and nothing else, and there are real
+    // installs holding one. A shorter blob reads back at epoch 0, which sorts below
+    // `PasscodeEpoch.first` and therefore reads as stale rather than as current —
+    // the fail-closed direction. Length is the discriminator rather than a version
+    // byte because adding a version byte to a format with no version byte has the
+    // same problem one level up.
+
+    // Reachable from tests because the length discrimination below is the part with
+    // a real failure behind it, and it cannot be exercised through the Keychain —
+    // that needs a device and an entitlement, which is the whole reason
+    // `PasscodeStore` is a protocol.
+    func encodeForTests(_ record: PasscodeRecord) -> Data { encode(record) }
+    func decodeForTests(_ data: Data) throws -> PasscodeRecord { try decode(data) }
+
+    private let hashByteCount = 32
+    private let epochByteCount = 4
+
+    private var legacyLength: Int { saltByteCount + hashByteCount }
+    private var currentLength: Int { legacyLength + epochByteCount }
 
     private func encode(_ record: PasscodeRecord) -> Data {
-        record.salt + record.hash
+        var data = Data(record.salt) + Data(record.hash)
+        var epoch = UInt32(clamping: record.epoch).bigEndian
+        withUnsafeBytes(of: &epoch) { data.append(contentsOf: $0) }
+        return data
     }
 
+    /// **Discriminated on exact length, not on "is there more".** The first attempt
+    /// at this asked whether anything followed the salt by more than four bytes,
+    /// which is true of a 48-byte pre-epoch item — so it read the last four bytes of
+    /// the *hash* as an epoch and every existing install would have stopped
+    /// recognising its own passcode. Both widths are fixed, which is exactly what
+    /// makes the length a safe discriminator, and it is the reason this format has
+    /// no version byte to begin with.
     private func decode(_ data: Data) throws -> PasscodeRecord {
-        guard data.count > saltByteCount else { throw Failure.corrupt }
-        return PasscodeRecord(
-            salt: data.prefix(saltByteCount),
-            hash: data.dropFirst(saltByteCount)
-        )
+        switch data.count {
+        case legacyLength:
+            return PasscodeRecord(
+                salt: Data(data.prefix(saltByteCount)),
+                hash: Data(data.dropFirst(saltByteCount)),
+                epoch: 0
+            )
+        case currentLength:
+            let body = data.dropLast(epochByteCount)
+            let epoch = data.suffix(epochByteCount).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            return PasscodeRecord(
+                salt: Data(body.prefix(saltByteCount)),
+                hash: Data(body.dropFirst(saltByteCount)),
+                epoch: Int(epoch)
+            )
+        default:
+            throw Failure.corrupt
+        }
     }
 }

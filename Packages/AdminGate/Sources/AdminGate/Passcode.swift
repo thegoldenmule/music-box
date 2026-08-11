@@ -11,21 +11,38 @@ public struct PasscodeRecord: Sendable, Equatable {
     public let salt: Data
     public let hash: Data
 
-    public init(salt: Data, hash: Data) {
+    /// Which household epoch this local item was written for.
+    ///
+    /// **Zero means "written before epochs existed"**, which is a real state with
+    /// existing installs behind it, not a theoretical one — see
+    /// ``KeychainPasscodeStore``. It sorts below ``PasscodeEpoch/first``, so such a
+    /// device is treated as stale the moment a household epoch appears and is made
+    /// to accept the current code. That is the fail-closed direction: the cost is
+    /// one parent typing the code they already know, and the alternative is a
+    /// device opening to a code that has since been rotated.
+    public let epoch: Int
+
+    public init(salt: Data, hash: Data, epoch: Int = 0) {
         self.salt = salt
         self.hash = hash
+        self.epoch = epoch
+    }
+
+    /// The same record, stamped for a household epoch.
+    public func at(epoch: Int) -> PasscodeRecord {
+        PasscodeRecord(salt: salt, hash: hash, epoch: epoch)
     }
 
     /// Derives a record from a passcode and a caller-supplied salt.
     ///
     /// The salt is a parameter rather than generated here so tests are
     /// deterministic. ``make(_:)`` is the one that reaches for randomness.
-    public static func make(_ passcode: String, salt: Data) -> PasscodeRecord {
-        PasscodeRecord(salt: salt, hash: digest(passcode, salt: salt))
+    public static func make(_ passcode: String, salt: Data, epoch: Int = 0) -> PasscodeRecord {
+        PasscodeRecord(salt: salt, hash: digest(passcode, salt: salt), epoch: epoch)
     }
 
-    public static func make(_ passcode: String) -> PasscodeRecord {
-        make(passcode, salt: randomSalt())
+    public static func make(_ passcode: String, epoch: Int = 0) -> PasscodeRecord {
+        make(passcode, salt: randomSalt(), epoch: epoch)
     }
 
     /// Constant-time comparison, so a timing difference cannot leak how much of
