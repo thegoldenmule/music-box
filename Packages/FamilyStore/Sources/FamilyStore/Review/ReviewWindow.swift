@@ -123,7 +123,12 @@ public struct PolicyEntrySnapshot: Sendable, Hashable {
 ///
 /// By artist, because that is the question they are asking — *is my kid into
 /// this band?* — and because the artist is what approve-from-report widens to.
-public struct BlockGroup: Sendable, Identifiable {
+///
+/// **`Codable` because it is part of ``WeeklySummary``**, which is persisted once
+/// the retention sweep takes the rows. Frozen keys, and ``reasons`` is written as a
+/// *sorted array* rather than as a set — a `Set`'s encoding order is not stable, and
+/// the payload holding it is compared byte for byte between devices.
+public struct BlockGroup: Sendable, Identifiable, Codable, Equatable {
     /// `nil` when no row in the group ever resolved an artist. Such a group is
     /// keyed by name instead and cannot be widened to an artist.
     public let artistID: CatalogID?
@@ -148,6 +153,68 @@ public struct BlockGroup: Sendable, Identifiable {
     public var id: String { artistID.map(\.rawValue) ?? "name:\(displayName)" }
 
     public var total: Int { reached + unseen }
+
+    /// Spelled out because the custom `init(from:)` below suppresses the memberwise
+    /// one, and `group(_:)` builds these.
+    public init(
+        artistID: CatalogID?,
+        displayName: String,
+        reached: Int,
+        unseen: Int,
+        reasons: Set<BlockReason>,
+        firstAt: Date,
+        latestAt: Date,
+        sample: BlockEvent
+    ) {
+        self.artistID = artistID
+        self.displayName = displayName
+        self.reached = reached
+        self.unseen = unseen
+        self.reasons = reasons
+        self.firstAt = firstAt
+        self.latestAt = latestAt
+        self.sample = sample
+    }
+
+    // MARK: - Coding
+
+    enum CodingKeys: String, CodingKey {
+        case artistID = "art"
+        case displayName = "n"
+        case reached = "r"
+        case unseen = "u"
+        case reasons = "rsn"
+        case firstAt = "f"
+        case latestAt = "l"
+        case sample = "smp"
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(artistID, forKey: .artistID)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(reached, forKey: .reached)
+        try container.encode(unseen, forKey: .unseen)
+        // Sorted on the frozen reason names, so the same set always writes the same
+        // bytes. A `Set` would not.
+        try container.encode(
+            reasons.sorted { $0.stored.name < $1.stored.name }, forKey: .reasons)
+        try container.encode(firstAt, forKey: .firstAt)
+        try container.encode(latestAt, forKey: .latestAt)
+        try container.encode(sample, forKey: .sample)
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        artistID = try container.decodeIfPresent(CatalogID.self, forKey: .artistID)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        reached = try container.decode(Int.self, forKey: .reached)
+        unseen = try container.decode(Int.self, forKey: .unseen)
+        reasons = Set(try container.decode([BlockReason].self, forKey: .reasons))
+        firstAt = try container.decode(Date.self, forKey: .firstAt)
+        latestAt = try container.decode(Date.self, forKey: .latestAt)
+        sample = try container.decode(BlockEvent.self, forKey: .sample)
+    }
 }
 
 extension BlockGroup {

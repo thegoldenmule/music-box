@@ -53,4 +53,17 @@ public final class WeeklySummaryRecord {
         self.payload = payload
         self.modifiedAt = at
     }
+
+    /// Replaces the roll-up, **and does nothing when it has not changed.**
+    ///
+    /// The sweep re-summarises every eligible week on every pass, because a week's
+    /// rows can still arrive from another device. Stamping `modifiedAt` for an
+    /// identical payload would put this whole table in the outbox once per pass per
+    /// device — and ``WeeklySummary`` is deterministic precisely so that "identical"
+    /// is a byte comparison rather than a guess.
+    public func replace(payload newPayload: Data, at: Date = .now) {
+        guard newPayload != payload else { return }
+        payload = newPayload
+        modifiedAt = at
+    }
 }

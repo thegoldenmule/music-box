@@ -7,12 +7,41 @@ import PolicyEngine
 /// sync and no way for a summary to disagree with the rows under it. It is
 /// persisted only once the retention sweep has taken those rows away — see
 /// ``WeeklySummaryRecord``.
-public struct WeeklySummary: Sendable {
-    public struct Tally: Sendable, Hashable, Identifiable {
+/// **Also the persisted form**, once ``RetentionSweep`` has taken the rows. Two
+/// properties follow from that and neither is cosmetic:
+///
+/// - **`Codable` with frozen `CodingKeys`.** These bytes outlive the events and are
+///   read by builds that did not write them, so a property rename must not change
+///   the wire.
+/// - **Deterministic.** Every list has a total order with a tie-break on identity,
+///   and the encoder writes sorted keys — so two devices holding the same events
+///   produce byte-identical payloads. That is what lets the sweep run with no owner
+///   and no lease: the record name is `(kid, weekStart)`, so two devices
+///   summarising one week write the same bytes under one key.
+public struct WeeklySummary: Sendable, Codable, Equatable {
+    public struct Tally: Sendable, Hashable, Identifiable, Codable {
         public let id: String
         public let name: String
         public let seconds: Int
         public let plays: Int
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case name = "n"
+            case seconds = "sec"
+            case plays = "p"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case interval = "iv"
+        case topArtists = "ta"
+        case topSongs = "ts"
+        case firstTimeHeard = "fth"
+        case blocksByArtist = "bba"
+        case totalListeningSeconds = "tls"
+        case searches = "s"
+        case reachedBlockCount = "rbc"
     }
 
     public let interval: DateInterval
@@ -31,7 +60,22 @@ public struct WeeklySummary: Sendable {
 
     public let blocksByArtist: [BlockGroup]
     public let totalListeningSeconds: Int
-    public let searchCount: Int
+
+    /// **The searches, verbatim — not a count.**
+    ///
+    /// This was `searchCount: Int` and the maintainer's call was that raw terms
+    /// survive compaction: what a child searched for is the most useful thing a
+    /// parent reads, and summarising it into a number summarises away the point.
+    ///
+    /// The consequence, recorded where it will be found: **a summary inherits the
+    /// sensitivity of the events it replaces.** Sweeping is a storage saving and not
+    /// a privacy one, so nothing may claim that aging events out reduces what this
+    /// app holds about a child.
+    public let searches: [SearchEvent]
+
+    /// Kept as a property so every existing reader still compiles and reads the
+    /// same number.
+    public var searchCount: Int { searches.count }
 
     /// Blocks the kid actually reached for. The number worth putting next to
     /// the others; the unseen count is a fact about our filter and lives inside
@@ -92,7 +136,10 @@ extension WeeklySummary {
                     plays: artistPlays[$0.key] ?? 0
                 )
             }
-            .sorted { ($0.seconds, $0.plays) > ($1.seconds, $1.plays) }
+            // The tie-break on `id` is what makes the order total. Without it two
+            // artists with equal seconds and plays come out in dictionary order,
+            // which differs per device — and this payload is compared byte for byte.
+            .sorted { ($0.seconds, $0.plays, $1.id) > ($1.seconds, $1.plays, $0.id) }
             .prefix(topCount)
 
         let songTallies = songPlays.map {
@@ -106,7 +153,7 @@ extension WeeklySummary {
 
         let topSongs =
             songTallies
-            .sorted { ($0.plays, $0.seconds) > ($1.plays, $1.seconds) }
+            .sorted { ($0.plays, $0.seconds, $1.id) > ($1.plays, $1.seconds, $0.id) }
             .prefix(topCount)
 
         let firstTime: [Tally]
@@ -114,7 +161,10 @@ extension WeeklySummary {
             firstTime =
                 songPlays.keys
                 .filter { !previouslyHeard.contains($0) }
-                .sorted { (firstPlayAt[$0] ?? .distantPast) < (firstPlayAt[$1] ?? .distantPast) }
+                .sorted {
+                    (firstPlayAt[$0] ?? .distantPast, $0.rawValue)
+                        < (firstPlayAt[$1] ?? .distantPast, $1.rawValue)
+                }
                 .prefix(topCount)
                 .map { id in
                     Tally(
@@ -133,10 +183,20 @@ extension WeeklySummary {
             topArtists: Array(topArtists),
             topSongs: Array(topSongs),
             firstTimeHeard: firstTime,
-            blocksByArtist: BlockGroup.group(window.blocks),
+            blocksByArtist: BlockGroup.group(window.blocks).sorted { $0.id < $1.id },
             totalListeningSeconds: window.totalListeningSeconds,
-            searchCount: window.searches.count,
+            // Sorted for the same reason the tallies are: this payload is compared
+            // byte for byte across devices.
+            searches: window.searches.sorted { ($0.at, $0.term) < ($1.at, $1.term) },
             reachedBlockCount: window.blocks.filter { $0.event.reach == .reached }.count
         )
+    }
+
+    /// Sorted keys, so the same events give the same bytes. See the note on this
+    /// type about why that replaces a lease.
+    public static func encoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return encoder
     }
 }

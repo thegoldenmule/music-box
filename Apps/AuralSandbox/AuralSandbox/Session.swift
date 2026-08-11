@@ -351,6 +351,32 @@ final class Session {
         syncEngine?.pushPendingChanges()
 
         absorbActivity()
+        await sweepOldActivity()
+    }
+
+    /// Rolls activity past the retention window into weekly summaries and deletes it.
+    ///
+    /// **Last in the pass, and after absorbing.** A week summarised before another
+    /// device's segments arrive is a summary of part of the week, and the rows it
+    /// covers are then deleted — so it has to come after the arrivals it can still
+    /// learn from. It is also the heaviest thing here, and last is where a heavy thing
+    /// belongs.
+    ///
+    /// The floor comes from the projector rather than being assumed: sweeping through
+    /// the oldest visit the live shelf references leaves a trail that cannot be
+    /// rebuilt, and every kid's shelf empties the next time `RecentTrail.version`
+    /// moves — months later, on an upgrade, with nothing on screen to explain it.
+    private func sweepOldActivity() async {
+        var swept = false
+        for kid in kids {
+            let floor = try? await recents.retentionFloor(for: kid.id)
+            let deleted = RetentionSweep.run(for: kid.id, in: context, trailFloor: floor)
+            swept = swept || deleted > 0
+        }
+        // The report reads on demand and `Coverage` already tells it which weeks are
+        // summarised, so nothing on screen needs correcting — but the outbox now holds
+        // summaries and tombstones.
+        if swept { await pushLocalChanges() }
     }
 
     /// Packs this device's events into segments, and materialises anybody else's.
