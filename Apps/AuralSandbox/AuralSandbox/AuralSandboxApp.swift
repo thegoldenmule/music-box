@@ -5,8 +5,6 @@ struct AuralSandboxApp: App {
     private enum Startup {
         case ready(Session)
         case failed(String)
-        /// Throwaway — goes with ``SharingProbe``.
-        case probing
     }
 
     /// Only there to catch a tapped invitation link — see
@@ -23,10 +21,6 @@ struct AuralSandboxApp: App {
     /// one startup failure worth showing rather than retrying — see
     /// ``StartupFailureView``.
     @State private var startup: Startup = {
-        // Throwaway — goes with ``SharingProbe``. Ahead of the store on purpose:
-        // the probe asks CloudKit questions and has no business opening a family's
-        // data to do it.
-        if SharingProbe.isRequested { return .probing }
         do {
             return .ready(try Session())
         } catch {
@@ -41,9 +35,6 @@ struct AuralSandboxApp: App {
                 RootView(session: session)
             case .failed(let message):
                 StartupFailureView(message: message)
-            case .probing:
-                // Throwaway — goes with ``SharingProbe``.
-                Text("probing…").task { await SharingProbe.runAndExit() }
             }
         }
         #if os(macOS)
