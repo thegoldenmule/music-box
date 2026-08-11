@@ -629,24 +629,77 @@ final class Session {
 
     // MARK: - The admin gate
 
-    var isPasscodeSet: Bool { passcodes.isConfigured }
+    /// Whether **anything** gates this device.
+    ///
+    /// **Rule 8: "this family has a gate or this device has one", and it fails
+    /// closed.** A device with no local item in a household that has an epoch is
+    /// still gated — it will demand the household's code, which the child does not
+    /// know. Reading only the local item here would let that device open a kid's
+    /// player with `Enrollment` believing there was no gate over it.
+    ///
+    /// It fails closed in the other direction too: a kid's device whose epoch record
+    /// has not arrived yet reads `false` and is refused, which is one parent typing
+    /// a code rather than an ungated player.
+    var isPasscodeSet: Bool { passcodes.isConfigured || householdGate() != nil }
 
     var isAdminOpen: Bool { gate.isOpen(at: .now) }
 
     /// Seconds the parent must wait before another attempt, or `nil` if none.
     var retryDelay: TimeInterval? { gate.retryDelay(at: .now) }
 
-    /// Sets the first passcode. Only legal while none is set — otherwise this
-    /// would be the reset path that a gate must not have.
+    /// The household's current gate, or `nil` if nobody has set one that has
+    /// reached this device.
+    ///
+    /// Highest epoch wins. Two records can coexist briefly — two parents rotating at
+    /// once produce the same number, and the merge settles it — and until it does,
+    /// the newer one is the one to honour.
+    func householdGate() -> HouseholdGate? {
+        let rows = ((try? context.fetch(FetchDescriptor<PasscodeEpochRecord>())) ?? [])
+            .filter { $0.familyID == nil || $0.familyID == householdID }
+        let newest = rows.max { ($0.epoch, $0.setAt) < ($1.epoch, $1.setAt) }
+        guard let latest = newest else { return nil }
+        return HouseholdGate(
+            epoch: latest.epoch,
+            verifier: PasscodeVerifier(salt: latest.salt, verifier: latest.verifier)
+        )
+    }
+
+    /// What the gate must ask for. See ``AdminGate/PasscodeEpoch``.
+    var passcodeChallenge: PasscodeChallenge {
+        PasscodeEpoch.challenge(
+            local: passcodes.availability,
+            localEpoch: (try? passcodes.record())?.epoch ?? 0,
+            household: householdGate()
+        )
+    }
+
+    /// Sets the household's first passcode.
+    ///
+    /// **Only legal when no gate exists anywhere** — otherwise this is the reset path
+    /// a gate must not have, and the device that would reach for it is the child's.
+    /// Rotation is ``rotatePasscode(current:to:)`` and it requires the current code.
     func setPasscode(_ passcode: String) -> String? {
-        guard !isPasscodeSet else { return "A passcode is already set." }
-        do {
-            try passcodes.save(PasscodeRecord.make(passcode))
-            gate.succeeded(at: .now)
-            return nil
-        } catch {
-            return "Couldn't save the passcode: \(error)"
+        guard passcodeChallenge == .choose else { return "A passcode is already set." }
+        return write(passcode, epoch: PasscodeEpoch.first, openGate: true)
+    }
+
+    /// Changes the passcode for the whole family.
+    ///
+    /// **The first revocation path this app has ever had.** A code that has been
+    /// seen — over a shoulder, by a child watching — could not be replaced before
+    /// this: `setPasscode` refused once one existed and `PasscodeStore.clear()` had
+    /// no caller. Writing epoch n+1 makes every other device demand the new code,
+    /// because `PasscodeEpoch.challenge` reads their local item as stale.
+    func rotatePasscode(current: String, to new: String) -> String? {
+        guard gate.isAcceptingAttempts(at: .now) else {
+            return "Too many attempts. Try again in \(Int(retryDelay ?? 0))s."
         }
+        guard verify(current) else {
+            let delay = gate.failed(at: .now)
+            return delay.map { "Wrong passcode. Try again in \(Int($0))s." } ?? "Wrong passcode."
+        }
+        gate.succeeded(at: .now)
+        return write(new, epoch: PasscodeEpoch.next(after: householdGate()), openGate: false)
     }
 
     /// Tries a passcode. Returns nil on success, a message otherwise.
@@ -654,14 +707,96 @@ final class Session {
         guard gate.isAcceptingAttempts(at: .now) else {
             return "Too many attempts. Try again in \(Int(retryDelay ?? 0))s."
         }
-        guard let record = try? passcodes.record(), record.matches(passcode) else {
+        guard verify(passcode) else {
             let delay = gate.failed(at: .now)
             // No hint about length, no note of how close it was.
             return delay.map { "Wrong passcode. Try again in \(Int($0))s." }
                 ?? "Wrong passcode."
         }
+
+        switch passcodeChallenge {
+        // **Adopting on success is what closes the loop for a second device.** The
+        // code was checked against the household's verifier, so this device may now
+        // hold it locally — which is what gets it back onto the offline fast path
+        // until somebody rotates again. Written at the epoch it was checked against,
+        // never at a later one.
+        case .enterHousehold(let epoch):
+            _ = save(PasscodeRecord.make(passcode, epoch: epoch))
+
+        // **Backfilling the household gate for a family that predates it.** A
+        // passcode set by an older build left no epoch record, and without one a
+        // second device joining that family reaches `.choose` — it would be invited
+        // to set its own admin code, which is the bypass this whole mechanism
+        // exists to close.
+        //
+        // It can only be done here, because a verifier needs the passcode itself and
+        // this is the one moment the app has it. Nobody is asked anything: the
+        // parent has just proved they know the code.
+        case .enterLocal where householdGate() == nil:
+            _ = write(passcode, epoch: PasscodeEpoch.first, openGate: false)
+
+        case .enterLocal, .choose, .unavailable:
+            break
+        }
+
         gate.succeeded(at: .now)
         return nil
+    }
+
+    /// Checks a passcode against whichever authority the challenge names.
+    ///
+    /// **The household verifier is the authority whenever the local item is stale or
+    /// missing**, and the local one otherwise — which is what keeps the ordinary case
+    /// working with no network at all.
+    private func verify(_ passcode: String) -> Bool {
+        switch passcodeChallenge {
+        case .enterLocal:
+            return (try? passcodes.record())?.matches(passcode) ?? false
+        case .enterHousehold:
+            return householdGate()?.verifier.matches(passcode) ?? false
+        case .choose, .unavailable:
+            // Nothing to check against. Never true — an unreadable Keychain must not
+            // become an open gate.
+            return false
+        }
+    }
+
+    /// Writes a passcode locally **and** as the household's epoch.
+    ///
+    /// Order matters and it is the local item first: a device that saved the epoch
+    /// and then failed to save locally would demand a code from itself and be unable
+    /// to check it. The reverse leaves a device holding a code the family has not
+    /// heard about, which the next rotation corrects.
+    private func write(_ passcode: String, epoch: Int, openGate: Bool) -> String? {
+        if let failure = save(PasscodeRecord.make(passcode, epoch: epoch)) { return failure }
+
+        let verifier = PasscodeVerifier.make(passcode)
+        context.insert(
+            PasscodeEpochRecord(
+                familyID: householdID,
+                epoch: epoch,
+                salt: verifier.salt,
+                verifier: verifier.verifier,
+                setByGrownUpID: actingGrownUp?.id
+            )
+        )
+        do {
+            try context.save()
+        } catch {
+            return "Couldn't record the passcode for the family: \(error.localizedDescription)"
+        }
+        Task { await pushLocalChanges() }
+        if openGate { gate.succeeded(at: .now) }
+        return nil
+    }
+
+    private func save(_ record: PasscodeRecord) -> String? {
+        do {
+            try passcodes.save(record)
+            return nil
+        } catch {
+            return "Couldn't save the passcode: \(error)"
+        }
     }
 
     func touchAdmin() { gate.touch(at: .now) }

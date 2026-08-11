@@ -15,17 +15,28 @@ import Foundation
 /// material, it does not stretch a weak secret. `CCKeyDerivationPBKDF` is a system
 /// module, needs no dependency, and has a tunable count.
 ///
-/// **Say the honest thing about what this buys.** No key derivation protects a
-/// four-digit PIN: there are ten thousand of them, and at the iteration count
-/// below exhausting the space is minutes of GPU time, not years. The real
-/// protections are that the field is carried in `CKRecord.encryptedValues`, so
-/// Apple's servers cannot read it, and that the only accounts holding the
-/// household zone are co-parents who already have admin. This is a speed bump
-/// against a co-parent's device being dumped, and against the code being reused
-/// somewhere that matters more — which is the same argument the local record
-/// makes. **If the passcode ever needs to resist an attacker who has the
-/// verifier, the answer is more digits, not more iterations.** That is a product
-/// decision and it is not made here.
+/// **The work factor is not what makes this safe, and it does not need to be.**
+/// No derivation protects a four-digit PIN — ten thousand candidates is minutes of
+/// GPU time at any iteration count. That is fine here, because of who the attacker
+/// would have to be.
+///
+/// Reaching this verifier means extracting a private CloudKit zone from a family's
+/// iCloud account and then brute-forcing offline. **A child who can do that has
+/// already beaten Screen Time**, which is the containment this app openly says it
+/// cannot enforce and does not try to — see the containment-fails-open rule. The
+/// gate stands between a child and a settings screen; it was never a barrier
+/// against someone with the family's iCloud data in hand, and building it as one
+/// would be spending effort where the threat model has already collapsed.
+///
+/// So the iteration count is here to make the cheap attack not free, and the real
+/// properties are elsewhere: the field is carried in `CKRecord.encryptedValues` so
+/// Apple's servers cannot read it, and the household zone is held only by
+/// co-parents who already have admin anyway. The one residual worth a sentence is
+/// a parent reusing this PIN somewhere that matters more, which is exactly the
+/// concern ``PasscodeRecord`` already names for the local hash.
+///
+/// If it ever *does* need to resist someone holding the verifier, the answer is
+/// more digits rather than more iterations. That is a product decision.
 public struct PasscodeVerifier: Sendable, Equatable {
     /// OWASP's 2023 floor for PBKDF2-HMAC-SHA256. High enough to be felt by an
     /// attacker and unnoticeable once, on the one screen that uses it.

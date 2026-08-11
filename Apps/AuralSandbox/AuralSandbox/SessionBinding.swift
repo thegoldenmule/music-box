@@ -55,7 +55,7 @@ extension Session {
             kids: kids.map {
                 KidBinding(id: $0.id, boundAccountRecordName: $0.boundAccountRecordName)
             },
-            hasLocalPasscode: passcodes.isConfigured
+            hasLocalPasscode: isPasscodeSet
         )
         applyBinding(outcome, device: row, account: account)
 
@@ -93,7 +93,7 @@ extension Session {
             role: role,
             boundKidID: boundKidID,
             kids: kids.map(\.id),
-            hasLocalPasscode: passcodes.isConfigured,
+            hasLocalPasscode: isPasscodeSet,
             isRevoked: existing?.isRevoked ?? false
         ) {
             return refusal

@@ -46,6 +46,17 @@ struct AdminView: View {
             // family. The roster sits between them because that is what it is
             // about: which hardware this family has, and which child each piece
             // of it opens into.
+            // Above Devices and Sharing, because it is the thing that protects
+            // both: changing the code is what makes every other device in the
+            // family demand the new one.
+            Section {
+                NavigationLink("Change the passcode") { RotatePasscodeView(session: session) }
+            } footer: {
+                Text(
+                    "Changes it for the whole family. Every other device will ask for the new one the next time a grown-up opens this section — which is how you take back a passcode somebody has seen."
+                )
+            }
+
             Section {
                 NavigationLink("Devices") { DeviceRosterView(session: session) }
             } footer: {

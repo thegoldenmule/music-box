@@ -1,3 +1,4 @@
+import AdminGate
 import SwiftUI
 
 /// The passcode gate. Every route into the admin comes through here.
@@ -19,44 +20,83 @@ struct AdminGateView: View {
     @State private var message: String?
     @FocusState private var focused: Bool
 
-    private var isFirstRun: Bool { !session.isPasscodeSet }
+    /// **Which of the four states this device is in**, rather than the boolean it
+    /// used to ask. `!isPasscodeSet` conflated three of them — see
+    /// ``AdminGate/PasscodeEpoch``: a device that has never had a code, a device
+    /// whose code was rotated elsewhere, and a Keychain that simply would not read.
+    /// Only the first may be offered a chance to choose one.
+    private var challenge: PasscodeChallenge { session.passcodeChallenge }
+
+    private var isFirstRun: Bool { challenge == .choose }
 
     var body: some View {
         Form {
-            Section {
-                SecureField("Passcode", text: $entry)
-                    .focused($focused)
-                    .textContentType(.password)
-                    #if os(iOS)
-                        .keyboardType(.numberPad)
-                    #endif
-
-                if isFirstRun {
-                    SecureField("Confirm", text: $confirmation)
-                        .textContentType(.password)
-                        #if os(iOS)
-                            .keyboardType(.numberPad)
-                        #endif
-                }
-            } header: {
-                Text(isFirstRun ? "Choose an admin passcode" : "Enter the admin passcode")
-            } footer: {
-                Text(
-                    isFirstRun
-                        ? "Make it different from the one that unlocks this device — your kid probably knows that one. There is no way to recover it."
-                        : "There is no reset. That is the point."
-                )
+            if challenge == .unavailable {
+                unavailableSection
+            } else {
+                entrySection
             }
 
             if let message {
                 Text(message).foregroundStyle(.red)
             }
 
-            Button(isFirstRun ? "Set passcode" : "Unlock") { submit() }
-                .disabled(!canSubmit)
+            if challenge != .unavailable {
+                Button(isFirstRun ? "Set passcode" : "Unlock") { submit() }
+                    .disabled(!canSubmit)
+            }
         }
         .navigationTitle("Admin")
-        .onAppear { focused = true }
+        .onAppear { focused = challenge != .unavailable }
+    }
+
+    /// **Offers nothing.** The Keychain could not be read, which says nothing about
+    /// whether a passcode exists — and the one thing this screen must never do in
+    /// that state is offer to replace it.
+    private var unavailableSection: some View {
+        Section {
+            Label("Can't check the passcode", systemImage: "lock.trianglebadge.exclamationmark")
+        } footer: {
+            Text(
+                "This device can't read its own keychain right now, so it can't tell whether a passcode is set. Locking the device and unlocking it again usually fixes it. Nothing has been changed."
+            )
+        }
+    }
+
+    private var entrySection: some View {
+        Section {
+            SecureField("Passcode", text: $entry)
+                .focused($focused)
+                .textContentType(.password)
+                #if os(iOS)
+                    .keyboardType(.numberPad)
+                #endif
+
+            if isFirstRun {
+                SecureField("Confirm", text: $confirmation)
+                    .textContentType(.password)
+                    #if os(iOS)
+                        .keyboardType(.numberPad)
+                    #endif
+            }
+        } header: {
+            Text(isFirstRun ? "Choose an admin passcode" : "Enter the admin passcode")
+        } footer: {
+            Text(footnote)
+        }
+    }
+
+    private var footnote: String {
+        switch challenge {
+        case .choose:
+            "Make it different from the one that unlocks this device — your kid probably knows that one. There is no way to recover it."
+        case .enterHousehold:
+            // Said out loud, because otherwise this reads as the app having
+            // forgotten the code that worked yesterday.
+            "A grown-up set or changed this family's passcode on another device. Enter the current one and this device will remember it."
+        case .enterLocal, .unavailable:
+            "There is no reset. That is the point."
+        }
     }
 
     private var canSubmit: Bool {
