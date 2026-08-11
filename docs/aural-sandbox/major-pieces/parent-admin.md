@@ -1,6 +1,6 @@
 # Spec: Parent Admin
 
-**Status:** restated
+**Status:** restating
 
 ## Sections
 ### Motivation
@@ -177,6 +177,32 @@ One migration is already visible: this version assumes one device and one admin,
 - Ships: Face ID or Touch ID over the passcode, idle timeout, re-gate on background.
 - Does not: remove the passcode route.
 - Exit test: a failed biometric still admits the parent by passcode.
+
+### Their Library: the admin edits the kid's shelf
+A parent can now manage a kid's favorites and playlists directly, not only read them: add, remove, rename, reorder, delete. Four decisions shaped it, and the first three are the ones worth carrying.
+
+**A separate screen from the report.** "Review Activity" reports on the shelf; "Their Library" changes it. One editable screen would have been fewer files, but a report a parent reads to understand what happened should not also be where a stray swipe deletes a child's work, and the wording each screen needs is different because the question is.
+
+**A refused add offers the policy change, and the two offers are not interchangeable.** A parent's write goes through the same `PolicyEngine` the kid's does and throws the same `LibraryRefused` — there is no admin bypass, and the invariant _nothing in the kid's library is a permission_ stays exactly true. What differs is only what the caller does with the refusal: the dialog offers the change that would let it through, and retries once. Which change depends on the reason, and getting this wrong is the difference between the feature working and feeling broken:
+
+| Reason | Fixable by allowing the item? | Offer |
+| --- | --- | --- |
+| `notOnAllowList` | Yes | _Allow “…” and add it_ |
+| `explicitContent` | Yes — an allow on the item itself overrides the rating check | same |
+| `unrated` | Yes, same rule | same |
+| `deniedByParent(id)` | **No** — deny wins in every mode | _Remove that block and add it_ |
+
+Offering a bare "Allow this" for a deny would be a button that visibly does nothing: the retry refuses again with the identical reason. The allow itself is a separate, explicit `PolicyEntry` write — the same call approve-from-a-block makes — and the favorite that follows is judged again by a rebuilt engine. A parent who cancels has granted nothing and placed nothing.
+
+**The add sheet searches unfiltered.** Three reasons, and the first is structural: a policy-filtered search never returns a blocked item, so the refuse-and-offer path above would be unreachable dead code. At level 1 a filtered search returns _nothing_ unless the item is already allowed — empty exactly where a parent most wants to stock a shelf by hand. And it matches what the allow/deny list editor already does. Blocked results appear, badged with today's verdict; seeing a thing and being able to place it stay separate.
+
+**Nothing a parent does reaches the kid's log.** The editor calls `MergedLibrary` directly and never routes through the `Session` methods the kid's controls use — two of those log a `reach: .reached` block when the engine refuses, which is right for a child who tapped something and a lie about a parent who did. A parent's refused add is a third category the codebase's "log transient blocks" rule does not cover: _a write that did not happen_. Surfaced in the UI, recorded nowhere.
+
+**The bulk-seed seam went in ahead of the feature.** `MergedLibrary.addFavorites(_:origin:)` and `addSongs(_:to:origin:)` return a `LibraryPlacement` of what was placed and what was refused, resolving ancestry **once** per batch. Nothing calls them yet. They exist so that "pre-populate a kid's library from a subset of the parent's own Apple Music library" is later a screen rather than a rewrite of how writes are judged. This does not weaken the rule that library seeding must not run through `KidLibrary`: that rule governs the reading and the ISRC/UPC matching, which stay in `CatalogKit`'s `LibrarySource`. By the time anything reaches `KidLibrary` it is a `[CatalogItem]`, indistinguishable from a search result.
+
+A seeded row's origin is `parent`, not `appleLibrary` — "the parent picked these out of their own library" is a different fact from "adopted from the account this device is signed into" — so the seed needs no further enum case. See the storage spec for the `kid > parent > appleLibrary` precedence and why the ordering is that way round.
+
+Unverified: all three screens and their dialogs are untested — they live in `Apps/` and the simulator proves nothing here. The package layer beneath them is covered, which is where the judging lives.
 
 ## Review
 _Not reviewed._

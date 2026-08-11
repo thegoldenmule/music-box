@@ -20,3 +20,6 @@ If you only read two: the **Policy Engine** is the heart of the app, and **Keepi
   - [Keeping Kids In The App](spec-restatement:ms3e9688-00jr-my1obq)
   - [Storage and Data Model](spec-restatement:ms3e97r7-00jt-dva0n2)
   - [Build and Release Setup](spec-restatement:ms3e99as-00jv-ox5kbe)
+- **Ungrouped**
+  - [The Kid's Library](spec-restatement:ms4lu92o-01op-x3xmw)
+  - [Parent Review](spec-restatement:ms4rf5kn-0247-o5nosn)

@@ -1,6 +1,6 @@
 # Spec: Catalog and Search Layer
 
-**Status:** restated
+**Status:** restating
 
 ## Sections
 ### Motivation
@@ -267,6 +267,26 @@ If a future change reintroduces library-only identifiers, it reintroduces both t
 - Ships: an on-disk cache behind the existing `ItemCache` protocol, if session-only proves too slow.
 - Does not: ship without a written answer on what metadata may be stored and for how long.
 - Exit test: the admin's allow list renders with no network round trip per row.
+
+### Found while building it
+Two things changed once `CatalogKit` met the real API, and one seam had to be added that the spec does not mention.
+
+**The over-fetch strategy does not survive contact.** Apple Music caps search `limit` at 25; asking for more is a `400 / 40005`, not a clamped page. The loop as designed asked for the caller's limit times a multiplier of 3 under a page ceiling of 100, so an ordinary search for 25 songs asked for 75 and every search failed outright. See _What We Know About MusicKit_.
+
+The consequence is structural, not a constant to retune. **Over-fetching happens by paging, not by asking for a bigger page.** Once the caller's limit reaches 25 the multiplier has no room at all, and compensating for filtering holes means more requests at increasing offsets — which is what the retry cap was always for. The multiplier still earns its keep below 25, where one request can cover the need.
+
+Two smaller rules fall out:
+
+- The adapter clamps rather than passing the limit through, so a caller asking for too much gets a short page instead of a failed search.
+- `hasMore` is judged against the **clamped** limit. Judged against the asked-for one, a full page of 25 reads as "fewer than the 75 I wanted, so the catalog is exhausted" and paging stops after one request — trading a loud failure for a silent truncation that looks like a search legitimately finding little. That is the worse of the two failures, because nothing about it looks wrong.
+
+**Ancestors with empty identifiers are dropped.** MusicKit returns relationship items whose identifier set is empty. Stored as `CatalogID(.album, "")` that is worse than storing nothing: it matches no real album so a parent's deny never fires, every affected song shares the one identifier, and — the dangerous part — the item then _looks_ like it has lineage. The provisional-verdict rule keys off ancestry being empty, so a bogus entry turns a guess into what reads as a resolved fact. Whether ancestry resolves at all on real results is still unmeasured; see question 13 in _Open Questions and Research Tasks_.
+
+**Playback needed a seam here, because it cannot live above this layer.** Nothing above `CatalogKit` may import MusicKit, so the app cannot drive `ApplicationMusicPlayer` itself. `CatalogPlayer` is that seam — `play`, `pause`, `stop`, and no `next`. `MusicKitPlayer` implements it on the _application_ queue rather than the system one, so a kid's listening never reorders a parent's Up Next in the Music app and nothing queued there arrives here unvetted. It is also the reason the macOS floor is 14.0.
+
+It judges nothing. The caller asks `FilteredCatalog.verdict(for:)` immediately beforehand; the player is the mechanism, not the authority.
+
+One case in it is knowingly wrong. A refusal by Screen Time or Apple Music's parental controls must be logged as `restrictedOutsideApp` and never attributed to a parent's own rule. Which error MusicKit throws is unmeasured, so those refusals currently fall through to a generic underlying error — wrong, but not a confident lie about which rule fired. See question 14.
 
 ## Review
 _Not reviewed._

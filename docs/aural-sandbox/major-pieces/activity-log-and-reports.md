@@ -1,6 +1,6 @@
 # Spec: Activity Log and Reports
 
-**Status:** restated
+**Status:** restating
 
 ## Sections
 ### Motivation
@@ -40,7 +40,14 @@ struct PlayEvent: Identifiable {
     let artistID: CatalogID?    // nil likewise; such rows cannot group by artist
     let displayName: String     // captured at play time; survives delisting
     let at: Date
+
+    /// Seconds actually HEARD — not the playhead position it used to be.
+    /// The scrubber separated the two: a kid who listens for a minute and
+    /// drags back to the start is at position 0:10 having heard 1:10. This is
+    /// accumulated across seeks, so it may EXCEED the track's duration, and a
+    /// report that treats it as a position will be wrong in both directions.
     let secondsPlayed: Int
+
     let origin: Origin
 }
 
@@ -84,6 +91,17 @@ onSearchTextChanged(text)
 2. otherwise write the PlayEvent with its origin
 ```
 
+**Accumulating **`secondsPlayed`**.** The player owns this, not the log — the log is handed a number. It stopped being the playhead position when the scrubber arrived, and is maintained without any polling because a seek is the only event that breaks the correspondence between position and listening:
+
+```text
+on play(newTrack)      heard := 0 ; stretchStart := 0
+on seek(to: target)    heard += max(0, position - stretchStart)
+                       stretchStart := target
+on read                heard + max(0, position - stretchStart)
+```
+
+A kid who listens a minute, drags back to the start and listens ten more seconds reports 70, not 10. One who drags forward past two minutes reports only what they sat through. Replaying a chorus four times counts four times, which is why the value may exceed the track's duration.
+
 **Block logging.**
 
 ```text
@@ -102,6 +120,8 @@ onSearchTextChanged(text)
 5. blocksByArtist := blocks grouped by artist, keeping one sample each
 6. total := sum of secondsPlayed
 ```
+
+Summing stays correct under the change: each row is real listening time, so the total is real listening time even where one row exceeds its own track's length.
 
 **Retention sweep.** On launch.
 

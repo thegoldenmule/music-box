@@ -1,6 +1,6 @@
 # Spec: Build and Release Setup
 
-**Status:** restated
+**Status:** restating
 
 ## Sections
 ### Motivation
@@ -164,6 +164,27 @@ What matters is the decisions that are effectively one-way.
 - Ships: age rating, the Kids Category call, privacy labels naming the child history, a privacy policy.
 - Does not: proceed before the 3.3.6(D) monetisation question is answered in writing.
 - Exit test: the listing matches what the app does, particularly that the containment claim matches what the build enforces.
+
+### Found while building it
+Stages 0 through 2 are done. What they taught is that the failure mode this spec already names — _the floor being wrong is silent_ — is not one bug, it is a **class** of bug, and the whole class shares a defence.
+
+**A build setting can be accepted and then ignored.** Two bit during Stage 2. Neither failed to compile, neither produced a warning, and both were caught only by reading values back out of the built app.
+
+- `IPHONEOS_DEPLOYMENT_TARGET[sdk=iphone*] = 17.0` silently resolved to **26.5**, the SDK's own default. Shipped, that strands every device below iOS 26.5. This is precisely the failure this spec records for the packages declaring iOS 15, inverted — the same silence, the opposite direction. Set unconditionally, it takes.
+- `INFOPLIST_KEY_UIBackgroundModes = audio` appears in `xcodebuild -showBuildSettings` and never reaches the generated plist. Background audio normally arrives via Xcode's capability editor writing a real file, so it needs one: a partial `Info.plist` holding that key, with `GENERATE_INFOPLIST_FILE` still on so the other keys merge. Background audio is an invariant of this spec, and it was absent from the built app while every setting said it was present.
+
+**The defence is to verify the artifact, never the settings.** `plutil -p` on the built app's `Info.plist`. Not `plutil -extract KEY raw FILE` — without `-o -` that rewrites the file in place, so checking a key destroys the thing being checked. That one cost a confusing detour mid-verification.
+
+**A partial **`Info.plist`** must live outside a synchronized file group.** Inside it, Xcode copies it as a resource as well as processing it, and the build fails with _multiple commands produce Info.plist_.
+
+**A signed build says nothing about MusicKit.** MusicKit is an App Service on the App ID, not an entitlement, so it never appears in the provisioning profile. A clean signed build proves the bundle identifier matches and signing works, and proves nothing about the capability. The only proof is a catalog request that comes back — and a well-formed API error counts, while an authorization failure does not. Worth adding to Stage 0's exit test, which as written could be read as satisfied by a build that succeeds.
+
+**Stage status.**
+
+- **Stage 0** — MusicKit enabled and _confirmed_ by a real API response. The Family Controls request is still not submitted; it blocks nothing in development and every day of not submitting it is a day added to the queue later.
+- **Stage 1** — iOS 17 / macOS 14 declared everywhere and verified in the built app, not just in the settings.
+- **Stage 2** — project builds and signs for macOS, iOS simulator and device. The exit test is **not** met: nothing has played a song end to end yet.
+- **Stage 3** — not started. Nothing has run on the real under-13 account.
 
 ## Review
 _Not reviewed._

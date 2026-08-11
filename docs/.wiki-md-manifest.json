@@ -1,11 +1,11 @@
 {
   "ws:ms3de17i-0024-ik1oty": {
-    "version": 693,
+    "version": 890,
     "files": {
       "aural-sandbox/the-idea.md": "aa6bc040957e9f8e57ea000bc9dbb70d766d585bf1863487c1584996b49b67ed",
-      "aural-sandbox/what-we-know-about-musickit.md": "d3a72dec31836d7d20bd645d1ffd4a3f161b0276875abbf74d04ae3d664d7f81",
-      "aural-sandbox/open-questions-and-research-tasks.md": "be743fc81660cb08a5293718c3aea24a1fd9d40d683ff8f13e61b75d935741c3",
-      "aural-sandbox/major-pieces/index.md": "28d572b41351669d10ddfebadbe2d874320020517d2d7a2c001ffac12f94660c",
+      "aural-sandbox/what-we-know-about-musickit.md": "3d25f2e876954d78f95cdfcfcbe4832387060e3d95ce768be3278c378804b86e",
+      "aural-sandbox/open-questions-and-research-tasks.md": "e02edc089c9ca7b02c6d9ad60067dc093483f0628de6dd1511c9af54eb803087",
+      "aural-sandbox/major-pieces/index.md": "d91a0228c078c0c120170009820bddebe56671da4a859bbd8b22d980c7914977",
       "aural-sandbox/.archived/document--ms3defdq-002e-ss0dhi.md": "d1630bb226eae38320304a8a59e4d54160d131fc2c6f2303ef04a1b4612b1cba",
       "aural-sandbox/.archived/document--ms3degmw-002g-nibdun.md": "c7fd5cd7dc0dc0ce11d5e0f793c71aafe30ba052012098ff6fa8d4e3ff713f8a",
       "aural-sandbox/.archived/document--ms3dei3k-002i-sigft8.md": "329f61af48cbd4aee7369aefa5c200552f8208e9814914cf909a2e5a55e8c51f",
@@ -16,14 +16,16 @@
       "aural-sandbox/.archived/document--ms3det48-002s-2zw314.md": "538d5930515f0e0161508819476c681de79b99744633138b130b39590733eb49",
       "aural-sandbox/.archived/document--ms3df46e-002u-kixr5p.md": "e769104bd54635d7a92549227b69223001398986e283f4e9b46c90e54c4f25a7",
       "aural-sandbox/major-pieces/policy-engine.md": "7b527d1c1efc902fc877ff0a7e4e0c91862aa221b5ebc50fc921c88a131f395b",
-      "aural-sandbox/major-pieces/catalog-and-search-layer.md": "9e9f6c70ed2b42ea8391c3d483cef5c7746b555c877bf9998163fdd3bfbbb2fb",
-      "aural-sandbox/major-pieces/kid-player.md": "d4e6df3411076ef47f804cd83d782f0ade8b21d885c523e7185822dcac05bf84",
-      "aural-sandbox/major-pieces/parent-admin.md": "647658049cd37c5926e08e85f45dbd2ee629fcc0a0093bbdba7e1cc53d4e2e0e",
-      "aural-sandbox/major-pieces/activity-log-and-reports.md": "60e4801a5a43a7df0ab4d72654f8c3dbf6c2d652c521761f04a73e2e830621ff",
-      "aural-sandbox/major-pieces/accounts-devices-and-sync.md": "ac0c25bc74cb7cb8392997915d308dc69b710573f54e5aec209130760005f6e0",
+      "aural-sandbox/major-pieces/catalog-and-search-layer.md": "ab3baf3b40a3a0140ffd01de2215a673c00e7dda02a90f5aa2cfe668028d5481",
+      "aural-sandbox/major-pieces/kid-player.md": "bc773e9f263f8d89cc81fdd4dab75f9f0e6bd40d938301bca5ec80a1d5960854",
+      "aural-sandbox/major-pieces/parent-admin.md": "a3245eca06bc99c1401dcd7e20891b4e133e68cb09d6e9ef580ebcad55888ca1",
+      "aural-sandbox/major-pieces/activity-log-and-reports.md": "f0d9e5ded0f1d351c6b1887fef18b1dd8d8adbec3d8069c12d81881e57f6f4a5",
+      "aural-sandbox/major-pieces/accounts-devices-and-sync.md": "c69b3ef614e82da0db89d1f2530c5264b7027ea6216e0ce9914b6a4b61bef90f",
       "aural-sandbox/major-pieces/keeping-kids-in-the-app.md": "b0e1ee5434d888b3121720456d180b3ff1f67304b637e189702fd719cf888641",
-      "aural-sandbox/major-pieces/storage-and-data-model.md": "0898fbbd4547caefdb61773014674b3d21238bb39485d18152077c08d719e246",
-      "aural-sandbox/major-pieces/build-and-release-setup.md": "96cb052bdc10d6bbfc47daa9e7f916b1378263cf5c218d4a7485a8a375c95f69"
+      "aural-sandbox/major-pieces/storage-and-data-model.md": "f117fda836d09821f0d5cbcebb3f4144048b9bb55d1c1b337b3d1d6f287237d3",
+      "aural-sandbox/major-pieces/build-and-release-setup.md": "d7bfaf6d72c6f3077ebc4c6bfa961cf40179b5e8ec992bdfe60304578cde1476",
+      "aural-sandbox/major-pieces/the-kid-s-library.md": "c199d8e0c5aef51da2cf4f3216d017d13e597aa5f0bd471a39837ccd2e3fd09a",
+      "aural-sandbox/major-pieces/parent-review.md": "7df1658d974b8102fd6678ca848a03499d970946229e7a437759e8c68aebcd3f"
     },
     "pages": {
       "document:ms3de5bh-0026-48sp4x": "aural-sandbox/the-idea.md",
@@ -47,7 +49,9 @@
       "spec-restatement:ms3e92z9-00jp-6sqht0": "aural-sandbox/major-pieces/accounts-devices-and-sync.md",
       "spec-restatement:ms3e9688-00jr-my1obq": "aural-sandbox/major-pieces/keeping-kids-in-the-app.md",
       "spec-restatement:ms3e97r7-00jt-dva0n2": "aural-sandbox/major-pieces/storage-and-data-model.md",
-      "spec-restatement:ms3e99as-00jv-ox5kbe": "aural-sandbox/major-pieces/build-and-release-setup.md"
+      "spec-restatement:ms3e99as-00jv-ox5kbe": "aural-sandbox/major-pieces/build-and-release-setup.md",
+      "spec-restatement:ms4lu92o-01op-x3xmw": "aural-sandbox/major-pieces/the-kid-s-library.md",
+      "spec-restatement:ms4rf5kn-0247-o5nosn": "aural-sandbox/major-pieces/parent-review.md"
     }
   }
 }
