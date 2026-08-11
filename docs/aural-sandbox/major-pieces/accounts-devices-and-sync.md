@@ -394,6 +394,216 @@ One `HouseholdSideProvider` is shared by the sharing layer and the sync engine. 
 
 Everything here is reasoned from the API and tested against stubs; **no participant has ever accepted any of this**. The resolution rule, the two-owner refusal and the per-side zone IDs are covered by tests that need no account. What a real acceptance does — including whether `shareParticipants(forUserRecordIDs:)` resolves an account known only from a share — is unchanged and still open.
 
+### The invite flow is wired end to end, and two decisions changed to allow it
+Built, and the reason it is one entry rather than four: the four gaps were not independent. A tapped link that is dropped, a joiner nobody can name, a second grant step that only ran from one screen, and a device roster that did not exist were each blocking the same thing — a second adult actually arriving.
+
+## The tapped link was reaching the app and being discarded
+
+`CKSharingSupported` is in `Info.plist` and has been. **That gets the app launched and nothing more.** No `application(_:userDidAcceptCloudKitShareWith:)` existed anywhere, and `FamilySharing.accept(metadata:)` — which has been on the protocol the whole time — had no caller in `Apps/`. So the system handed the share to a delegate that did not implement the method, and the tap did nothing: no error, no screen, no record. Meanwhile the sharing screen told the parent "if the invitation was sent to this device you can just tap the link", so the one wholly broken path was the one the copy recommended.
+
+Now: a `ShareAcceptanceDelegate` via `UIApplicationDelegateAdaptor`, and a `ShareAcceptance` inbox between it and `Session`. The inbox is not indirection for its own sake — on a cold launch the delegate runs _before_ there is a session, so the metadata has to outlive the callback. It is a queue rather than a slot because a dropped second link would be silent.
+
+**Acceptance does not ask.** By the time the metadata arrives the system has shown its own confirmation and the person has tapped through it. It also _cannot_ ask: a link tapped on a shared iPad lands while the kid's player is on screen, and nothing about the household's grown-ups belongs there. The outcome is recorded and reported on the sharing screen instead.
+
+## A `CKShare.Participant` cannot be named, so the name comes the long way round
+
+`GrownUp.accountRecordName` was specified as captured _at acceptance_ and nothing captured it — `claim(account:)` had exactly one caller, `SyncApply`, which is the path that reads the field from _another_ device. So a co-parent who joined was a participant record and never became a row, and the roster could only render "Grown-up".
+
+The field cannot be filled from the share: a participant carries `nameComponents` and a `lookupInfo` holding an email address, and both stay untouched by decision — 5.1.4's trigger is a persistent identifier beside a minor's data, and an email address next to a child's search history is that combination.
+
+So the claim is made by the person: `ActingGrownUp`** — already a statement of "I am Dad", already behind the gate — is promoted to a household fact when the account signed in on that device is known.** That pairing is the upgrade `accountRecordName`'s own doc describes; either half alone is not checkable.
+
+`Family.claimAccount(_:for:)` holds the one invariant worth having: **one holder per account.** The roster's lookup is `first { $0.accountRecordName == id }`, so two holders makes the answer depend on roster order — it would read as a settled fact and be a coin toss. The way that happens is ordinary, not exotic: a shared iPad where both parents tap their own name. A claim therefore _moves_, un-claiming whoever held it. Safe only because the field is a hint that opens no gate and widens no reach; the cost of moving it wrongly is a name to correct, and the cost of not having it is a roster that can never name anybody.
+
+It writes nothing when the answer is unchanged, because it runs on every launch and a stamp per launch would put the whole roster in the outbox once per launch per device.
+
+## Sync runs by itself, and the precondition was met rather than waived
+
+The engine was deliberately manual, and the recorded reason was specific: a co-parent could arrive holding the household zone and none of the kid zones, which looks exactly like sync being slow. That happened because `reconcileGrants` — the second step every invitation needs, since a link carries one share and a household is one zone plus two per child — ran only from `SharingView.refresh()`.
+
+It now runs in `Session.syncPass()`, on launch and on every foreground. **That was the condition, so the decision is discharged, not overridden.** Pushes also fire fire-and-forget from `saveLists` and `commitDeviceChanges`: a parent's deny should not wait on iCloud, and a revocation's whole point is reaching a device that will not be asking.
+
+**Launch order is load-bearing.** Acceptance runs _before_ `resolveBinding`, because `resolveBinding` writes — it stamps this device's row — and therefore spawns a push, and a push before the acceptance addresses the private zones nobody else can see. Acceptance needs nothing the binding provides, which is what makes the ordering free.
+
+`Session.isJoining`** closes what ordering cannot.** A link can be tapped mid-session with a detached push already in flight; accepting changes which database this device writes to, and `SyncEngineHost` resolves the side once at `start`. Outbound paths stand down for the length of an acceptance and re-check after the await, because building the engine talks to CloudKit and an acceptance can begin and finish inside that suspension. Then `restartSyncEngine()` — an engine built before acceptance keeps answering `.owner` forever.
+
+## Reading a roster is not consent to publish one
+
+Found while making reconciliation automatic, and it would have been a live defect the moment it was: `ensureShare`** created.** `participants()` called it, so merely opening the sharing screen minted a zone-wide `CKShare` on a household that had never invited anybody — and moving reconciliation to launch would have minted one on every zone of every household on every launch, turning "this family is shared" into a consequence of opening the app.
+
+`existingShare(for:)` is now the read path for `participants`, `reconcileGrants` and `removeParticipant`, and `invitation(for:)`** is the only creator.** The absence of an anchor share is a real answer: nothing has been offered, so nothing is outstanding. Reconciliation for an outstanding grant still creates, because by then an invitation exists and creating the rest is what the second step _is_.
+
+## The device roster, which two strings already promised
+
+`DeviceRecord.revoke()` and `restore()` had no caller anywhere in the app, and enrolment was a one-time screen with no way back. Two pieces of shipped copy assumed otherwise: `EnrollmentRefusal.revoked` says "a grown-up can let it back in from the device list", and `DeviceSetupView` says which child a device opens into can be changed "behind the passcode". `DeviceRosterView` makes both true, and adds the role, which had no path at all once a device was enrolled.
+
+Three rules it enforces that are not obvious from the screen:
+
+- **Revoking the device in your hand is refused.** Revocation is a tombstone that `BindingResolver` puts above every other clause, so the device reads it about itself and shows a dead end — whose only exit is this screen, behind the gate, behind the player just withheld. On a one-device family that is unrecoverable. The locked-device copy already said "on another device"; this is the half that makes the sentence true.
+- **Revoked rows stay on screen.** The row _is_ what the revoked device reads; a parent who cannot see it cannot undo a mistake.
+- **Rebinding a remote device is allowed and the passcode rule is not skipped.** It cannot be checked from here — a Keychain on other hardware is not a fact this device holds — so it is enforced where the answer exists: the target device re-runs it through `BindingResolver` on its next launch and locks itself on `.noGate`. The screen says so rather than implying the change is complete. Role changes stop at _this_ device: `parentOnly` means "no player on this hardware", and deciding that about a device you are not holding is how an iPad ends up with no player and nobody near it to notice.
+
+## Still unverified, and the list is unchanged
+
+Everything above compiles, the packages pass, and the iOS build is clean. **No participant has accepted any of it.** Probe A's participant-write half is untouched and is still this design's kill condition; Probe B is untouched. Specifically unproven: whether `application(_:userDidAcceptCloudKitShareWith:)` is delivered to a SwiftUI app's `UIApplicationDelegateAdaptor` rather than swallowed by SwiftUI's own scene delegate (reasoned from the documented fallback and from Apple's samples, which is not evidence); whether `shareParticipants(forUserRecordIDs:)` resolves an account known only from a share; and whether the account record name a joiner claims survives a reinstall, which binding rule 10 already assumes it may not.
+
+### Measured: the owner side of the invite holds, and one claim above is now too pessimistic
+Probed against the real container from a simulator with an account signed in. Method and the full result table are in **Open Questions and Research Tasks**, under _Measured: the owner-side sharing read path_; this is what changes for the design.
+
+**The section above says the read path is "reasoned from the API and tested against stubs". That is no longer the whole story for the owner half.** Three of its claims are now measured:
+
+- `existingShare(for:)` **finds a share that exists.** Observable as a second `invitation(for: .child)` returning a URL identical to the first — a miss would have minted a second share with a new token. Every read in `CloudKitSharing` depends on this and none of them could be tested off-device.
+- **It returns nothing for a zone with no share**, so `reconcileGrants` running on every launch does not publish a household nobody invited into. That was the precondition for automatic sync, and it is now checked rather than argued.
+- `SharePlan`**'s matrix lands where it says.** A child invitation put zone-wide shares on exactly that child's two zones and left `household` unshared — the row that, wrong, is a child holding the roster, the devices and the passcode epoch.
+
+**Nothing about the kill condition changed.** Probe A's participant-write half is untouched and still gates everything downstream of Stage 5; a simulator has one Apple Account, so this could only ever have been the owner side. The delegate-delivery question is _also_ still open for the same reason — it needs a real share URL, which needs a second account — so the tapped link remains the one path in this flow that has never been exercised end to end.
+
+**One thing the probe design is worth copying.** It ran entirely in zones named after a kid UUID that does not exist, using the `.child` role because its anchor is `kid-<uuid>-work` rather than `household`. A diagnostic that shares the real household zone has changed the thing it was measuring, and "the roster now lists somebody" is not a state to discover later without knowing why.
+
+### Consent is a row now, and coverage is per child
+Stage 8's first item, built. The rest of Stage 8 is untouched and two parts of it are not engineering.
+
+**Why this stopped being deferrable.** It was listed behind the sync work, and the sync work landed — `Session.syncPass()` runs on launch and on every foreground, so a child's records now reach Apple's servers without anybody pressing anything. `ConsentRecord` had been fully wired for sync since the schema was paid for (outbox, mapper, `SyncApply`) and had **no local writer**, so the answer to "what consent did you record" was an empty table.
+
+## The rule, and it is per child
+
+`FamilyStore.Consent` is a pure function beside the record, for the reason `BindingResolver` is one: the interesting case is not the first invitation but the second.
+
+**An agreement given when a family had one child does not cover the child added next month.** A screen that remembered "they already agreed" would hand out a second child's search history on the strength of an agreement about their sibling — so coverage is a set of kid identifiers, stored as what was exposed _at that moment_ rather than derived later, and the next invitation asks again. Thirteen tests, the load-bearing one being exactly that.
+
+Two further asymmetries, both deliberate:
+
+- `shareHousehold` exposes **every** child, because there is no per-adult scoping anywhere in this design — a participant holds the household zone and both zones of every kid. `childAccountParticipates` exposes exactly one.
+- **Consent for one scope is never consent for the other.** The child-account ask is the larger one: it makes a minor's own Apple Account a share participant. Letting either stand in for the other is the one shortcut that would make the row meaningless.
+
+A household with no children needs no agreement, which falls out of the set arithmetic rather than being a case.
+
+## The screen, and what it can honestly claim
+
+`ConsentSheet` sits before the first invitation of each kind, behind the gate and **not the gate reused as consent** — 5.1.4 is explicit that a parental gate is generally not the same as securing consent. It names the children by name, because "your children" would hide the difference the rule exists to surface. Dismissing declines; the only path that records an agreement is the button that says what it agrees to. The row is written **before** the link is minted, and a save failure stops the flow — an invitation whose consent failed to write is a live share with nothing recorded.
+
+**What the row can and cannot say.** The adult is identified two ways where both exist: the acting grown-up they selected behind the gate, and the opaque record name of the Apple Account signed in here. Either may be absent, which the record allows, and the screen says so out loud when nobody is selected. That is the honest maximum — **nothing in this app verifies that the person behind the passcode is a parent**, and a row implying otherwise would be worse than one admitting it.
+
+## The claim in CLAUDE.md is reworded, because it had become false
+
+_"Nothing leaves the device"_ was true while sync had to be asked for by hand and is not now. Replaced with the wording this page specifies: no server of ours, no third-party analytics SDK, no PII to third parties, and the family's records stay in the family's own iCloud where we cannot read them. The note there says not to restore the old sentence and not to write "CloudKit sync does not change our COPPA posture" as a fact.
+
+A second occurrence of the phrase in `STYLE.md` was about a UI change's blast radius rather than the privacy position, and now reads "no network call" — the old phrasing meant a grep for the retired claim still found something that looked like an assertion of it.
+
+## What is left of Stage 8, and none of it is code
+
+- **The wording needs counsel.** It is written to be plain and factual and it is not a legal opinion. The residual risk this page already names is unchanged: 5.1.4's trigger is the _capability_ to share a minor's personal information, which the share creates whoever holds the bytes.
+- **A privacy policy still has to ship**, and it is not an agent's to draft.
+- **ADP 3.3.6(D)** is still unanswered and still blocks the business model.
+- **The production CloudKit schema promotion** remains the one-way door at the end, gated on the checklist — unchanged by any of this.
+
+### Clearing history reaches the other devices now
+`HistoryClearRecord` was in the same state `ConsentRecord` was in earlier: fully wired for sync — outbox, mapper, `SyncApply`, in `syncedModels` — and **constructed only when it arrived from somewhere else.** Nothing wrote one locally, and `Kid.deleteHistory` used the plain `delete(_:)` rather than `tombstone(_:)`.
+
+**So "Clear logs" was local-only.** The four event tables and `RecentTrailRecord` are in `neverSyncs`, so no tombstone would have helped either — those rows never travelled and each device's copies were only ever its own. A parent clearing history on their phone cleared their phone's report and left the child's iPad holding its own history and its own home screen, listing what they had been doing. Which is the failure `HistoryClearRecord`'s own doc comment describes, written before there was anything to write it against.
+
+**Worth being accurate about the cause:** this predates automatic sync and was not caused by it. What changed is that the invite flow works, so a second device stopped being hypothetical.
+
+## The instruction is what travels
+
+A clear is now a statement about a **range** rather than about rows: everything at or before `clearedThrough` goes, whenever it turns up. Three properties fall out of that, and all three are properties of taking a maximum, which is why the maximum is what `HistoryClears` tests exhaustively — it is idempotent, independent of arrival order, and effective against rows that had not been written yet when it was issued.
+
+The pieces:
+
+- `Kid.deleteHistory(at:issuedBy:)` writes the record itself. Inside the method rather than at the call site, because a clear that does not record itself is the bug and there is no caller for which that is right. `deleteEverything` inherits it.
+- `clearedThrough` is **the moment of the clear, never **`distantFuture`**.** A clear is a statement about the past; one reaching forward would keep deleting a child's listening until somebody noticed.
+- `HistoryClears.boundary` takes the **furthest** instruction, not the newest-issued. Two parents clearing at once produce two rows, and picking by `issuedAt` would let a clock skew of a second undo a deliberate deletion.
+- A **device-local watermark** records what this device has acted on — `UserDefaults`, beside `DeviceLibraryState` and `ActingGrownUp`, because it is a different fact on every device. Losing it fails safely: everything looks unapplied, and applying twice deletes nothing the first pass left behind.
+- `HistoryClearApplier` is separate from `deleteHistory` because that one is _unbounded_. Conflating them would have a clear issued last Tuesday, arriving today, delete a week of listening nobody asked about.
+- The watermark advances **only after the deletions are saved**, so a crash between them leaves the clear looking unapplied.
+
+## Two decisions inside the applier worth recording
+
+**A summary containing any cleared events goes**, judged on the start of its period rather than its end. One outliving the events it was derived from is a record the parent asked us to destroy, and a summary straddling the boundary is partly made of them — so this errs toward destruction, which is what the instruction asked for.
+
+**The Recent shelf goes wholesale rather than by date.** It is a projection over the visits being deleted, and `RecentsProjector` recomputes it unconditionally; deleting trail entries by their own timestamps would leave a trail disagreeing with the visits it is supposed to be derived from. On screen the session blanks the shelf and _then_ reloads it, so the wrong answer for a frame is "less than there is" rather than something a parent was told had been deleted — which matters because a bounded clear does not necessarily empty it.
+
+## The cost, stated
+
+**Latency.** Application happens on launch and on each sync pass, not the instant a record lands. Absorbing happens inside `SyncEngineHost`, which knows nothing about kids or projections, and threading a multi-table delete onto the path that receives every record is the wrong shape. So a clear issued on a parent's phone reaches a child's iPad on its next foreground. That is the right trade for this one and not for a deny: a deny decides what may play, a clear does not decide anything, it destroys.
+
+**Not done, and belonging to Stage 7:** refusing _export_ of rows beneath the watermark. There is nothing to refuse yet — events do not sync as rows and segment export does not exist — but when `ActivitySegmentRecord` gains a writer, the watermark has to gate it, or a device that had not yet applied a clear will export the rows it was told to destroy.
+
+Eighteen tests, including both arrival orders converging, the bounded late arrival, sibling isolation, and the shelf.
+
+### Stage 7: segment export, and the interlock with clearing
+Events travel now. Two halves were missing, not one: **nothing packed a segment and nothing unpacked one.** `ActivitySegmentRecord` was constructed only in `SyncApply`, so an arriving segment was stored and never read — a co-parent accumulated opaque blobs and their report was empty.
+
+## Why the payload format needed almost no new code
+
+`PlaybackOrigin` was already `Codable` through its frozen `StoredOrigin`. `BlockReason` had the identical `StoredReason` shape and no conformance, so it got one the same way — and for the same stated reason: an origin or a reason is now written in two places, and a synthesised shape for the second would drift from the columns the first uses.
+
+The four event values are `Codable` **with explicit frozen **`CodingKeys`, declared in `Events.swift` beside the properties they freeze because Swift only synthesises in the type's own file. Short keys, since these are the highest-volume bytes in the system. A test asserts the wire keys rather than the round trip alone — a property rename that silently changed the format would otherwise pass everything.
+
+No parallel DTOs. A DTO per event is a second definition of the same fields, and the two drift.
+
+## What makes it safe
+
+- **Idempotent by row identity, not by bookkeeping.** Each payload row carries the identifier of the record it came from, so absorbing inserts only ids it does not have. No `absorbedAt` column, no device-local set of segment ids growing without bound — and a re-export under a churned `deviceID` becomes harmless rather than a duplicate.
+- `exportedAt` **is stamped only after the segment holding the row is saved.** The other order loses a child's history with everything reporting success.
+- **Resumes rather than restarts.** `index` continues from the highest already written for that `(kid, device, day, table)`, so an existing segment is never overwritten by one holding different rows under the same key.
+- **UTC day, not the device's calendar.** The day is part of the record key, so two devices in two time zones must agree which day a row belongs to.
+- **A version we do not know is kept and skipped, never dropped.** The writing device still has the rows and a later build here will read it; deleting would lose a child's history to a version check.
+- `originatingDeviceID`** comes from the segment**, not from the importing device. It is the cheapest forensic column available and worthless if absorbing rewrites it.
+- A row whose own columns do not read back is skipped **and not stamped exported**, so it waits for a build that can read it.
+
+## The interlock, which is the part worth remembering
+
+The previous section predicted this and it came due immediately: **a clear reaches rows that had not arrived when it was issued, and a segment written by a device that had not heard about the clear is exactly that case.** Absorbing without checking resurrects the history a parent was told had been deleted — and it comes back on the _other_ parent's phone, where nobody is looking.
+
+So `unpack` computes each kid's clear boundary from the `HistoryClearRecord`s it holds and skips rows at or before it, with the same inclusive comparison the applier uses on the rows it deletes. A row that cannot say when it happened is **not** treated as cleared: the safe direction there is keeping a row the parent may not have meant to keep, rather than discarding a child's history because a payload field did not read back.
+
+**And the order in **`Session.syncPass()`** is load-bearing.** Clears, then pack, then push, then absorb. Pack before clearing and this device exports the rows it was just told to destroy — which is the failure the previous section named as the thing to watch for when export arrived.
+
+## What is left of Stage 7
+
+**The retention sweep**, and it is still gated on a decision rather than on engineering. The maintainer has settled half of research question 6: **a weekly summary keeps raw search terms.** The consequence to carry forward is that the summary inherits the sensitivity of the events it replaces, so aging events out is a storage improvement and no longer a privacy one — the COPPA argument for a short window is weaker than it looked when the question was written.
+
+The window itself is undecided and **nothing sweeps.** Also still absent: a local writer for `WeeklySummaryRecord`, which is the summariser. Segments now make that worth building, because a summary computed before export existed would have covered only the events of the device computing it and been silently partial for any kid with two devices.
+
+### The passcode epoch is wired, and rotation is the revocation path
+Stage 6's last clause. `PasscodeEpochRecord` was the third record in the same shape as `ConsentRecord` and `HistoryClearRecord`: built only in `SyncApply`, with `PasscodeStore.clear()` having no caller anywhere and `AdminGate` not knowing epochs existed. Two devices held unrelated local codes, changing one left the other opening to the old code forever, and there was no way to take a seen code back.
+
+## The KDF, and why the work factor is not the point
+
+PBKDF2-HMAC-SHA256. CryptoKit at this floor has HKDF and no PBKDF2, and HKDF is the wrong tool — it expands strong material, it does not stretch a weak secret. The local `PasscodeRecord` keeps its single-round SHA-256, with its own stated justification: that hash never leaves the Keychain and this one goes to iCloud.
+
+**No derivation protects a four-digit PIN, and that is fine here.** Reaching this verifier means extracting a private CloudKit zone from a family's iCloud and brute-forcing offline — and a child who can do that **has already beaten Screen Time**, which is the containment this design openly says it cannot enforce. The gate stands between a child and a settings screen; it was never a barrier against someone holding the family's iCloud data, and building it as one spends effort where the threat model has already collapsed. Maintainer's call, recorded as such. The iteration count makes the cheap attack not free; `CKRecord.encryptedValues` keeps Apple out; the household zone is held only by co-parents who already have admin. The one residual worth naming is a parent reusing the PIN somewhere that matters more, which is the concern the local record already names.
+
+If it ever needs to resist someone holding the verifier, the answer is more digits, not more iterations.
+
+## Four states where there used to be a boolean
+
+`AdminGateView` asked `!isPasscodeSet`, which conflated three things. `PasscodeEpoch.challenge` is pure and beside the gate, for the reason `BindingResolver` is, and two of its clauses exist because collapsing them was a hole:
+
+- **Unreadable is never absent.** A Keychain that errored used to read like a device nobody had set a code on — and the screen that asks is the one offering to _choose_ one. The gate now draws a dead end that offers nothing in that state.
+- **Choose only when there is no gate anywhere.** A device with no local item, in a household that has an epoch, must _enter_. Otherwise joining a family and then setting your own admin code is a bypass, and the child's own iPad is what would do it.
+- A local epoch **below** the household's is stale: the code was rotated elsewhere and only the new one works.
+- **Equal epochs check locally**, which is what keeps the gate working with no network — the ordinary case, and the one that must never depend on iCloud.
+
+A device _ahead_ of the household still checks locally: its own item is current by construction and the record simply has not caught up.
+
+## What changed around it
+
+- `isPasscodeSet`** now means rule 8's sentence** — "this family has a gate or this device has one" — and both `BindingResolver` and `Enrollment` read it. A device with no local item in a household that has an epoch _is_ gated: it will demand a code the child does not know. Reading only the local item let that device open a kid's player with `Enrollment` believing nothing gated it. It fails closed the other way too: a kid's device whose epoch record has not arrived is refused, which costs one parent typing a code.
+- **Adopting on success.** A device that verified against the household verifier writes a local item at that epoch, returning to the offline fast path.
+- **Backfilling for families that predate this.** A passcode set by an older build left no epoch record, so a second device joining that family would reach `.choose`. It is written on the first successful local unlock instead — the one moment the app holds the passcode itself, and one where the parent has just proved they know it. Nobody is asked anything.
+- **Rotation requires the current code** even though the parent is already through the gate. The gate stays open after one entry, and "already inside" is not "knows the code" on a device somebody left unlocked.
+- A rotation to the **same** code is refused rather than written: every other device would demand a "new" code identical to the old one, which reads as the family's gate having broken.
+
+## One bug worth recording
+
+The local Keychain item grows an epoch, appended, with absence as the migration — a pre-epoch blob reads back at 0, which sorts below the first epoch and therefore reads as stale rather than current. The first version of that decoder asked whether _more than four bytes_ followed the salt, which is true of a 48-byte pre-epoch item: it read the tail of the hash as an epoch, and **every existing install would have stopped recognising its own passcode.** Both widths are fixed, so exact length is the discriminator, and there is a test named after it.
+
+## Still not done
+
+`PasscodeStore.clear()` still has no caller, and that is now correct rather than a gap: rotation supersedes a code by writing a new epoch, which is what revocation means here — there is no state in which deleting the local item is the right move. And none of this has run between two real accounts; a second device demanding a rotated code is reasoned and unit-tested, never observed.
+
 ## Review
 _Not reviewed._
 

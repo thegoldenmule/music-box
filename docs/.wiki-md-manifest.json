@@ -1,10 +1,10 @@
 {
   "ws:ms3de17i-0024-ik1oty": {
-    "version": 890,
+    "version": 906,
     "files": {
       "aural-sandbox/the-idea.md": "aa6bc040957e9f8e57ea000bc9dbb70d766d585bf1863487c1584996b49b67ed",
       "aural-sandbox/what-we-know-about-musickit.md": "3d25f2e876954d78f95cdfcfcbe4832387060e3d95ce768be3278c378804b86e",
-      "aural-sandbox/open-questions-and-research-tasks.md": "e02edc089c9ca7b02c6d9ad60067dc093483f0628de6dd1511c9af54eb803087",
+      "aural-sandbox/open-questions-and-research-tasks.md": "87689aa2c3d9421f1b276418ab1934442d14f6bd86d6617fd2fbffc911fba92d",
       "aural-sandbox/major-pieces/index.md": "d91a0228c078c0c120170009820bddebe56671da4a859bbd8b22d980c7914977",
       "aural-sandbox/.archived/document--ms3defdq-002e-ss0dhi.md": "d1630bb226eae38320304a8a59e4d54160d131fc2c6f2303ef04a1b4612b1cba",
       "aural-sandbox/.archived/document--ms3degmw-002g-nibdun.md": "c7fd5cd7dc0dc0ce11d5e0f793c71aafe30ba052012098ff6fa8d4e3ff713f8a",
@@ -20,7 +20,7 @@
       "aural-sandbox/major-pieces/kid-player.md": "bc773e9f263f8d89cc81fdd4dab75f9f0e6bd40d938301bca5ec80a1d5960854",
       "aural-sandbox/major-pieces/parent-admin.md": "a3245eca06bc99c1401dcd7e20891b4e133e68cb09d6e9ef580ebcad55888ca1",
       "aural-sandbox/major-pieces/activity-log-and-reports.md": "f0d9e5ded0f1d351c6b1887fef18b1dd8d8adbec3d8069c12d81881e57f6f4a5",
-      "aural-sandbox/major-pieces/accounts-devices-and-sync.md": "c69b3ef614e82da0db89d1f2530c5264b7027ea6216e0ce9914b6a4b61bef90f",
+      "aural-sandbox/major-pieces/accounts-devices-and-sync.md": "5ef64a6fe3618ad25114c3ab2b70385c98f5d32ba4f18b5a2d1e50ffe3c0c062",
       "aural-sandbox/major-pieces/keeping-kids-in-the-app.md": "b0e1ee5434d888b3121720456d180b3ff1f67304b637e189702fd719cf888641",
       "aural-sandbox/major-pieces/storage-and-data-model.md": "f117fda836d09821f0d5cbcebb3f4144048b9bb55d1c1b337b3d1d6f287237d3",
       "aural-sandbox/major-pieces/build-and-release-setup.md": "d7bfaf6d72c6f3077ebc4c6bfa961cf40179b5e8ec992bdfe60304578cde1476",

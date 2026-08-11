@@ -131,6 +131,36 @@ Two fixes: the entry records now carry the owning kid on the wire, and the place
 
 **Two smaller notes for whoever runs this next. **Querying a zone by recordName fails with CKError 12, Field recordName is not marked queryable — that is a schema-index thing and a limitation of verifying by query, not a sync failure; the zones and the drained outbox are the evidence. And each probe run leaves its zones behind under a fresh kid UUID, so the container accumulates litter that wants clearing out of the development environment.
 
+## Measured: the owner-side sharing read path, 11 Aug 2026
+
+**Method.** A throwaway probe in the app target behind a `-probeSharing` launch argument, run on a booted iPhone 17 Pro simulator (iOS 26.2) with a real Apple Account signed in, against the real container `iCloud.com.thegoldenmule.auralsanbox`. A debug build uses the _development_ CloudKit database, so none of this touches production. Invoked with `simctl launch --console-pty` — plain `--console` swallows `print()`. The probe calls `exit(0)` when done, without which the run never returns and the output never flushes, because a SwiftUI app does not terminate.
+
+**What it was for.** `CloudKitSharing.existingShare(for:)` was introduced so that reading a roster stops creating one, and every read in the type now goes through it — `participants`, `reconcileGrants`, `removeParticipant`. A miss there is invisible: an empty roster and a reconciliation that does nothing are indistinguishable from "nobody has joined yet", which is also the expected state. No test can reach it, because no test carries an entitlement.
+
+**Pointed at the **`child`** role on a fake kid UUID**, deliberately. That role's anchor is `kid-<uuid>-work`, so the whole run happens in zones named after a child who does not exist and no `CKShare` goes onto the real `household` zone as a side effect of a diagnostic. The two zones were deleted at the end; the empty `household` zone was left, since `SyncEngineHost.start` creates it on every launch anyway.
+
+| Asked | Expected | Got |
+| :--- | :--- | :--- |
+| `side()` on a device that has accepted nothing | owner | owner |
+| `participants()` before any invitation exists | 0, and no household share created | 0, household share absent |
+| `invitation(for: .child)` | a URL | `www.icloud.com`, 3 path components |
+| share on `kid-<uuid>-work` | present | present |
+| share on `kid-<uuid>-policy` | present | present |
+| share on `household` after a child invitation | absent — a child is never given the household | absent |
+| a second identical `invitation(for: .child)` | same URL — found, not re-created | same URL |
+| `reconcileGrants(.coParent)` with no co-parent invitation | 0 changes, and no household share created | 0, household share still absent |
+| `reconcileGrants(.child)` with no participants | 0 changes | 0 |
+
+**What this settles.** Three things, and each was previously reasoning rather than evidence. The read path finds a share that exists — the identical URL from a second invitation is the observable form of it, since a miss would have minted a second share with a new token. The read path also returns nothing for a zone that has no share, so `reconcileGrants` can now run on every launch and every foreground without publishing a household nobody invited into, which is the precondition automatic sync was waiting on. And `SharePlan`'s grant matrix lands where it says: a child invitation put shares on exactly their two zones and not on the household.
+
+**What it does not settle, and the list is unchanged.** This is the owner half. **Probe A's participant-write question is untouched** — whether a second Apple Account can write to a zone-wide shared zone is still this design's kill condition, and a simulator has one account, so nothing short of two devices answers it. Also still open: whether `application(_:userDidAcceptCloudKitShareWith:)` is delivered to a SwiftUI app's `UIApplicationDelegateAdaptor` rather than swallowed by SwiftUI's own scene delegate, which needs a real share URL and therefore a second account; and whether `shareParticipants(forUserRecordIDs:)` resolves an account known only from a share. Probe B is untouched.
+
+**Two mechanical notes worth keeping, both of which cost time.** The app's bundle identifier is `com.thegoldenmule.auralsanbox` — it carries the same missing `d` as the CloudKit container, and `simctl launch` fails with `FBSOpenApplicationServiceErrorDomain code=4` for the spelling anyone would guess. And a simulator with no iCloud account reports `CKAccountStatus.temporarilyUnavailable` (raw value 4), not `noAccount` — so the status alone does not distinguish "nobody signed in" from "ask again later". `MobileMeAccounts.plist` under the device's `data/Library/Preferences` is the reliable tell, and it is written lazily, so its absence on a booted simulator proves nothing either.
+
+**Decided, 11 Aug 2026 — a weekly summary keeps raw search terms.** Maintainer's call, and it settles the half of research question 6 that gates the summariser: counts and top-N are not enough, the terms themselves survive compaction. The consequence to hold onto is that the summary inherits the sensitivity of the events it replaces, so aging events out stops being a privacy improvement and is only a storage one — the COPPA argument for a short window is weaker than it looked. The window itself is still undecided and nothing sweeps.
+
+**Decided, 11 Aug 2026 — the retention window is 90 days, and parents can delete whenever.** Maintainer's call, closing the rest of research question 6. Events older than 90 whole days roll into a `WeeklySummaryRecord` and are deleted; `Kid.deleteHistory` is unbounded, immediate and unrelated to the window. Built in `RetentionSweep`, with three clamps that each prevent a different silent loss: only rows carrying `exportedAt` are swept, the boundary is pulled back to `RecentsProjector.retentionFloor`, and only whole weeks are eligible. The owner-and-lease the plan called for was replaced with an idempotence story — a deterministic payload under a `(kid, weekStart)` natural key — which the spec's own wording allows as the alternative.
+
 ## References
 _None._
 
