@@ -40,7 +40,7 @@ public enum BlockReason: Hashable, Sendable {
 
 // MARK: - Storage form
 
-struct StoredReason {
+struct StoredReason: Codable {
     var name: String
     var deniedByKind: String?
     var deniedByID: String?
@@ -102,5 +102,38 @@ extension BlockReason {
         default:
             return nil
         }
+    }
+}
+
+// MARK: - Coding
+
+/// **One wire format, and it is the one the columns already use** — the same
+/// argument ``PlaybackOrigin``'s conformance makes, for the same reason. A reason
+/// is now written in two places, the block columns and an activity segment, and
+/// synthesising `Codable` for an enum with associated values would give the second
+/// its own shape. Then a case added here needs remembering twice and the two drift
+/// apart silently. Routing through ``StoredReason`` means the frozen names in
+/// ``BlockReason/Name`` govern both.
+///
+/// Decoding something that does not make a reason **throws** rather than degrading
+/// to a bare "denied", which is the call ``init(stored:)`` already makes: a
+/// `deniedByParent` whose identifier is unreadable cannot say which rule fired, and
+/// that is not the same reason.
+extension BlockReason: Codable {
+    public func encode(to encoder: any Encoder) throws {
+        try stored.encode(to: encoder)
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let stored = try StoredReason(from: decoder)
+        guard let reason = BlockReason(stored: stored) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Not a reason: \(stored.name)"
+                )
+            )
+        }
+        self = reason
     }
 }

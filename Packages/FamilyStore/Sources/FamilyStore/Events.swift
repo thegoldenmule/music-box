@@ -33,7 +33,23 @@ import PolicyEngine
 /// *previous entry* is where the kid came from, which is strictly more than
 /// `browse(id)` carries. If something ever genuinely needs the coarse origin,
 /// thread a route value through `TileCell` rather than inventing a column here.
-public struct VisitEvent: Hashable, Sendable {
+public struct VisitEvent: Hashable, Sendable, Codable {
+    /// **Frozen, and short.** These names are the wire format of an activity
+    /// segment — bytes read back out of a parent's history months later, possibly
+    /// by a build that did not write them — so renaming a property must not change
+    /// them. Short because the four event tables are the great majority of this
+    /// store's write volume. Same rule on all four types below.
+    enum CodingKeys: String, CodingKey {
+        case itemID = "id"
+        case displayName = "n"
+        case artworkURL = "aw"
+        case albumID = "alb"
+        case artistID = "art"
+        case rating = "rat"
+        case manner = "man"
+        case at
+    }
+
     public let itemID: CatalogID
 
     /// Captured now, so a delisted album still reads as a name.
@@ -83,7 +99,15 @@ public struct VisitEvent: Hashable, Sendable {
 
 /// One search, debounced to the term the kid settled on rather than every
 /// keystroke.
-public struct SearchEvent: Hashable, Sendable {
+public struct SearchEvent: Hashable, Sendable, Codable {
+    enum CodingKeys: String, CodingKey {
+        case term = "t"
+        case at
+        case resultCount = "rc"
+        case blockedCount = "bc"
+        case gaveUpEarly = "gu"
+    }
+
     public let term: String
     public let at: Date
     public let resultCount: Int
@@ -109,7 +133,18 @@ public struct SearchEvent: Hashable, Sendable {
 }
 
 /// One play, written on stop — duration is the signal.
-public struct PlayEvent: Hashable, Sendable {
+public struct PlayEvent: Hashable, Sendable, Codable {
+    enum CodingKeys: String, CodingKey {
+        case songID = "id"
+        case albumID = "alb"
+        case artistID = "art"
+        case displayName = "n"
+        case rating = "rat"
+        case at
+        case secondsPlayed = "sec"
+        case origin = "org"
+    }
+
     public let songID: CatalogID
 
     /// `nil` when lineage never resolved. Such rows count toward totals but
@@ -161,7 +196,18 @@ public struct PlayEvent: Hashable, Sendable {
 ///
 /// Blocks are the valuable half of the log: they are how a parent learns what
 /// their kid is curious about. Kept with their reason, never dropped.
-public struct BlockEvent: Hashable, Sendable {
+public struct BlockEvent: Hashable, Sendable, Codable {
+    enum CodingKeys: String, CodingKey {
+        case itemID = "id"
+        case displayName = "n"
+        case artistID = "art"
+        case rating = "rat"
+        case at
+        case reach = "rch"
+        case reason = "rsn"
+        case origin = "org"
+    }
+
     public let itemID: CatalogID
     public let displayName: String
 

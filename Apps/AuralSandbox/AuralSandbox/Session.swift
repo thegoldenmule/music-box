@@ -330,14 +330,52 @@ final class Session {
     /// Run on launch, on returning to the foreground, and from the button. Each
     /// step is idempotent and doing nothing is the normal outcome, which is what
     /// makes it safe to run this often.
+    /// **The order here is the whole of Stage 7's interlock.**
+    ///
+    /// Clears go first: they are a statement about a range, so they reach rows that
+    /// have not arrived yet, and both of the steps after them move rows around.
+    /// Packing next, so this device's own events are in the outbox before the push
+    /// rather than waiting for the following pass. Absorbing last, because that is
+    /// when a segment another device sent is on disk to find.
+    ///
+    /// Get it wrong in one specific way and a parent is lied to: pack before
+    /// clearing and this device exports the rows it was just told to destroy.
     func syncPass() async {
         guard !isJoining else { return }
         await startSyncEngineIfNeeded()
         await reconcileOutstandingGrants()
-        syncEngine?.pushPendingChanges()
-        // After the engine has had a chance to absorb, because that is when an
-        // instruction from another device is on disk to find.
+
         applyHistoryClears()
+        exportActivity()
+
+        syncEngine?.pushPendingChanges()
+
+        absorbActivity()
+    }
+
+    /// Packs this device's events into segments, and materialises anybody else's.
+    ///
+    /// **Never on the playback path** — both walk four tables, and this is the sync
+    /// pass rather than the logger. A dropped log line is acceptable and a stalled
+    /// player is not, and these are far heavier than a log line.
+    ///
+    /// Skipped entirely on a device with no row in the roster. Segments are keyed by
+    /// the writing device, so a device without an identity has no key to write under
+    /// — and one that invented a key each launch would re-export a child's history
+    /// under a new one every time.
+    private func exportActivity() {
+        guard let deviceID = deviceRow?.id else { return }
+        SegmentExport.pack(for: kids.map(\.id), deviceID: deviceID, in: context)
+    }
+
+    private func absorbActivity() {
+        guard let deviceID = deviceRow?.id else { return }
+        let inserted = SegmentExport.unpack(
+            for: kids.map(\.id), deviceID: deviceID, in: context)
+        // The report reads from the store on demand, so nothing needs telling — but
+        // the shelf is a projection and a co-parent's device has just learned about
+        // visits it had never seen.
+        if inserted > 0 { Task { await loadRecentTrail() } }
     }
 
     /// Carries out any clear another device asked for.
