@@ -139,7 +139,16 @@ public struct CloudKitSharing: FamilySharing {
         // nothing to reconcile: the grants are the owner's to give.
         guard try await side().ownsTheHousehold else { return 0 }
 
-        let anchor = try await ensureShare(for: SharePlan.anchor(for: role))
+        // **Looked up, never created.** This runs on every launch now, not only
+        // when somebody opens the sharing screen, so creating here would mint a
+        // `CKShare` on every zone of every household that has never invited
+        // anybody — turning "this family has been shared" into a fact about
+        // having launched the app. `invitation(for:)` is the only creator, and
+        // the absence of an anchor is the answer: nothing has been offered, so
+        // there is nothing outstanding.
+        guard let anchor = try await existingShare(for: SharePlan.anchor(for: role)) else {
+            return 0
+        }
         let joiners = anchor.participants.filter {
             $0.role != .owner && $0.acceptanceStatus == .accepted
         }
@@ -193,11 +202,11 @@ public struct CloudKitSharing: FamilySharing {
     /// same question must not, because "missing" there means *not shared with
     /// me* and creating one would answer it by inventing a household.
     public func participants() async throws -> [ShareParticipantSummary] {
-        let share: CKShare?
-        switch try await side() {
-        case .owner: share = try await ensureShare(for: .household)
-        case .joined(let owner): share = try await joinedShare(for: .household, owner: owner)
-        }
+        // Neither side creates. The joiner never could — "missing" there means
+        // *not shared with me* — and the owner no longer does either: reading a
+        // roster is not consent to publish one, and this is the screen a parent
+        // opens to find out what sharing would even mean.
+        let share = try await existingShare(for: .household)
         return (share?.participants ?? []).compactMap(Self.summary)
     }
 
@@ -205,7 +214,7 @@ public struct CloudKitSharing: FamilySharing {
         try await requireOwner()
 
         for zone in try await sharedZones() {
-            let share = try await ensureShare(for: zone)
+            guard let share = try await existingShare(for: zone) else { continue }
             guard
                 let participant = share.participants.first(where: {
                     $0.userIdentity.userRecordID?.recordName == participantID
@@ -241,12 +250,24 @@ public struct CloudKitSharing: FamilySharing {
         return saved
     }
 
-    /// The share as a participant sees it: in the shared database, owned by
-    /// somebody else, and `nil` rather than created when it is not there.
-    private func joinedShare(for zone: FamilyZone, owner: String) async throws -> CKShare? {
-        let zoneID = HouseholdSide.joined(ownerName: owner).zoneID(for: zone)
-        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID)
-        return try? await container.sharedCloudDatabase.record(for: shareID) as? CKShare
+    /// A zone's share if there is one, from whichever side this device is on.
+    ///
+    /// **The read half, and it must never create.** Every caller but
+    /// `invitation(for:)` goes through here, so "has this household been shared"
+    /// stays a question the app can ask without answering it in the affirmative
+    /// as a side effect.
+    ///
+    /// The database follows the side for the reason ``HouseholdSide`` exists: on
+    /// a joined device the same zone lives in the shared database under somebody
+    /// else's owner name, so looking in the private one finds nothing and would
+    /// read as "not shared".
+    private func existingShare(for zone: FamilyZone) async throws -> CKShare? {
+        let side = try await side()
+        let shareID = CKRecord.ID(
+            recordName: CKRecordNameZoneWideShare, zoneID: side.zoneID(for: zone))
+        let database =
+            side.ownsTheHousehold ? db : container.sharedCloudDatabase
+        return try? await database.record(for: shareID) as? CKShare
     }
 
     private func sharedZones() async throws -> [FamilyZone] {
@@ -298,6 +319,15 @@ public final class StubSharing: FamilySharing, @unchecked Sendable {
     public private(set) var granted: [String: [ZoneGrant]] = [:]
     public private(set) var anchored: FamilyZone?
 
+    /// Every anchor an invitation has been issued for.
+    ///
+    /// Mirrors the real implementation's rule that only `invitation(for:)`
+    /// creates a share, so reconciliation on a household nobody has invited into
+    /// finds no anchor and does nothing. A set rather than reusing ``anchored``
+    /// because roles have different anchors and inviting a co-parent must not
+    /// make a child's zones look offered.
+    public private(set) var offered: Set<FamilyZone> = []
+
     public init(
         participants: [ShareParticipantSummary] = [],
         side: HouseholdSide = .owner
@@ -313,7 +343,9 @@ public final class StubSharing: FamilySharing, @unchecked Sendable {
     public func invitation(for role: ShareRole, kids: [UUID]) async throws -> URL {
         try lock.withLock {
             guard currentSide.ownsTheHousehold else { throw SharingFailure.notTheOwner }
-            anchored = SharePlan.anchor(for: role)
+            let anchor = SharePlan.anchor(for: role)
+            anchored = anchor
+            offered.insert(anchor)
         }
         return URL(string: "https://www.icloud.com/share/stub")!
     }
@@ -323,6 +355,9 @@ public final class StubSharing: FamilySharing, @unchecked Sendable {
         let outstanding = SharePlan.grantsAfterAnchor(for: role, kids: kids)
         return lock.withLock {
             guard currentSide.ownsTheHousehold else { return 0 }
+            // No invitation issued for this role, so there is no anchor share and
+            // nothing to add anybody to. See the real implementation.
+            guard offered.contains(SharePlan.anchor(for: role)) else { return 0 }
             let joiners = joined.filter { !$0.isOwner }
             for joiner in joiners { granted[joiner.id] = outstanding }
             return joiners.isEmpty ? 0 : outstanding.count * joiners.count

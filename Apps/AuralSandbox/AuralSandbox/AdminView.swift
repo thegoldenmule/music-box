@@ -41,6 +41,19 @@ struct AdminView: View {
             listSection(.deny)
             deviceSection
 
+            // Below `deviceSection`, which is about *this* device's Apple Music
+            // library, and above Sharing, which is about who else is in the
+            // family. The roster sits between them because that is what it is
+            // about: which hardware this family has, and which child each piece
+            // of it opens into.
+            Section {
+                NavigationLink("Devices") { DeviceRosterView(session: session) }
+            } footer: {
+                Text(
+                    "Which child each device opens into, when it was last heard from, and how to take one out of the family."
+                )
+            }
+
             Section {
                 NavigationLink("Sharing") { SharingView(session: session) }
             } footer: {

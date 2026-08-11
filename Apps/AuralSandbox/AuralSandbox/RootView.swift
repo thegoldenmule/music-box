@@ -16,6 +16,15 @@ import SwiftUI
 struct RootView: View {
     @Bindable var session: Session
 
+    /// Where a tapped invitation link is waiting, if there is one.
+    ///
+    /// Watched here rather than on the sharing screen because a link can be
+    /// tapped when that screen has never been opened — which is the ordinary case
+    /// for the second parent, whose first contact with this app *is* the link.
+    private let shares = ShareAcceptance.shared
+
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         Group {
             switch session.access {
@@ -64,10 +73,38 @@ struct RootView: View {
         .resolvingMotion()
         .task {
             await session.start()
+
+            // **Before the binding, and the order is load-bearing.** A link
+            // tapped on a cold launch is already in the inbox by the time this
+            // runs, and accepting changes which database this device writes to.
+            // `resolveBinding` writes — it stamps this device's row — so it
+            // spawns a push, and a push before the acceptance addresses the
+            // private zones nobody else can see. Joining first means there is no
+            // such window to reason about. Acceptance needs nothing the binding
+            // provides, which is what makes this free.
+            await session.acceptPendingShares()
+
             // After `start`, because it needs the roster loaded to tell a bound
             // child from a missing one — and before anything draws a player,
             // because which child that is, is what this decides.
             await session.resolveBinding()
+
+            await session.syncPass()
+        }
+        // **A link can arrive while the app is already running**, straight from
+        // Messages, with no phase change of its own on a Mac and only a brief one
+        // on iOS. Watching the inbox rather than the phase is what catches both.
+        .onChange(of: shares.waiting.count) { _, count in
+            guard count > 0 else { return }
+            Task { await session.acceptPendingShares() }
+        }
+        // Coming back is when a co-parent's edits are most likely to be waiting,
+        // and when this device's own are most likely to be owed. Nothing fires on
+        // the way in — `onChange` skips the initial value — so this does not
+        // double up with the `task` above.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await session.syncPass() }
         }
     }
 

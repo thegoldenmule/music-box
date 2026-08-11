@@ -271,8 +271,8 @@ struct AnchorAndGrants {
         }
     }
 
-    /// The second step runs whenever the admin screen opens, because a share
-    /// does not call back — so doing it twice has to be free.
+    /// The second step runs on every launch and whenever the admin screen opens,
+    /// because a share does not call back — so doing it twice has to be free.
     @Test("Reconciling twice is not different from reconciling once")
     func reconcileIsIdempotent() async throws {
         let stub = StubSharing(participants: [
@@ -280,6 +280,7 @@ struct AnchorAndGrants {
             ShareParticipantSummary(id: "_them", hasAccepted: true, permission: .readWrite, isOwner: false),
         ])
 
+        _ = try await stub.invitation(for: .coParent, kids: kids)
         _ = try await stub.reconcileGrants(for: .coParent, kids: kids)
         let after = stub.granted
         _ = try await stub.reconcileGrants(for: .coParent, kids: kids)
@@ -288,5 +289,37 @@ struct AnchorAndGrants {
         #expect(stub.granted["_them"]?.count == 4)
         // The owner is never granted anything — they already own it.
         #expect(stub.granted["_me"] == nil)
+    }
+
+    /// **Because this now runs on every launch, not only from the sharing
+    /// screen.** Reconciliation used to create the anchor share it then read, so
+    /// moving it to launch would have minted a `CKShare` on every zone of every
+    /// household that has never invited anybody — making "this family is shared"
+    /// a consequence of opening the app.
+    @Test("A household nobody has invited into reconciles to nothing")
+    func nothingOfferedGrantsNothing() async throws {
+        let stub = StubSharing(participants: [
+            ShareParticipantSummary(id: "_me", hasAccepted: true, permission: .readWrite, isOwner: true),
+            ShareParticipantSummary(id: "_them", hasAccepted: true, permission: .readWrite, isOwner: false),
+        ])
+
+        #expect(try await stub.reconcileGrants(for: .coParent, kids: kids) == 0)
+        #expect(stub.granted.isEmpty)
+        #expect(stub.offered.isEmpty)
+    }
+
+    /// Inviting a co-parent must not make a child's zones look offered: the two
+    /// roles have different anchors and are separate decisions a parent makes.
+    @Test("An invitation for one role does not reconcile another")
+    func rolesAreOfferedSeparately() async throws {
+        let stub = StubSharing(participants: [
+            ShareParticipantSummary(id: "_me", hasAccepted: true, permission: .readWrite, isOwner: true),
+            ShareParticipantSummary(id: "_them", hasAccepted: true, permission: .readWrite, isOwner: false),
+        ])
+
+        _ = try await stub.invitation(for: .coParent, kids: kids)
+
+        #expect(try await stub.reconcileGrants(for: .child(ada), kids: kids) == 0)
+        #expect(try await stub.reconcileGrants(for: .coParent, kids: kids) > 0)
     }
 }

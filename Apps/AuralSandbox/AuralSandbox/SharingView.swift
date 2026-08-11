@@ -29,6 +29,10 @@ struct SharingView: View {
     /// ``SharePlan``.
     @State private var inviting: InviteTarget = .grownUp
 
+    /// Outcomes of invitations that arrived as a tapped link rather than through
+    /// this screen. Read here because this is the only screen they belong on.
+    private let shares = ShareAcceptance.shared
+
     /// Which side of the share this device is on. **Nothing owner-side is drawn
     /// until this is known**, because the buttons are not merely inapplicable on
     /// a joined device — they write to the wrong database and mint a second,
@@ -57,6 +61,12 @@ struct SharingView: View {
         }
         .navigationTitle("Sharing")
         .task { await refresh() }
+        // A link can be tapped while this screen is open — the second parent
+        // reading the instructions on one device and tapping on it. Without this
+        // the roster keeps showing the state from before they joined.
+        .onChange(of: shares.acceptances) { _, _ in
+            Task { await refresh() }
+        }
         .alert(
             "Couldn't do that",
             isPresented: Binding(get: { trouble != nil }, set: { if !$0 { trouble = nil } }),
@@ -102,8 +112,14 @@ struct SharingView: View {
         } header: {
             Text("This device")
         } footer: {
-            // Manual on purpose. See `Session.syncEngine`.
-            Text("Sync does not run on its own yet.")
+            // It used to say "sync does not run on its own yet", which was true
+            // and is not any more — see `Session.syncPass()`. The button stays
+            // because "when did this last leave the device" is a question a parent
+            // asks about a deny they just made, and waiting for a foreground is
+            // not an answer.
+            Text(
+                "Changes go out when the app opens and when you come back to it. This sends anything waiting right now."
+            )
         }
     }
 
@@ -185,31 +201,53 @@ struct SharingView: View {
                 Label("Joined. The family's data will arrive shortly.", systemImage: "checkmark.circle")
                     .foregroundStyle(.secondary)
             }
+
+            // **A tapped link is accepted wherever the app happens to be**,
+            // including on the kid's screen, so this is where the outcome gets
+            // reported rather than at the moment it happened. See
+            // ``Session/acceptPendingShares()``.
+            switch shares.outcome {
+            case .joined where !accepted:
+                Label(
+                    "Joined from a link. The family's data will arrive shortly.",
+                    systemImage: "checkmark.circle"
+                )
+                .foregroundStyle(.secondary)
+            case .failed(let reason):
+                Label(reason, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+            default:
+                EmptyView()
+            }
         } header: {
             Text("Join a family")
         } footer: {
-            // Tapping a link launches the app and the system accepts it. This
-            // exists for the device that did not receive the link — a shared
-            // iPad, or a Mac where the message went to a phone — which is the
-            // ordinary case rather than the odd one.
+            // Both halves are now true. The tap used to do nothing at all:
+            // `CKSharingSupported` gets the app launched and nothing was
+            // implementing `userDidAcceptCloudKitShareWith`, so the invitation
+            // reached the app and was dropped — see ``ShareAcceptanceDelegate``.
             Text(
                 "If the invitation was sent to this device you can just tap the link. Paste it here for a device that did not receive it."
             )
         }
     }
 
+    /// **Through the session rather than straight at `sharing`.** Accepting moves
+    /// this device to the joined side, and an engine built before that keeps
+    /// writing to the private database — see ``Session/restartSyncEngine()``. That
+    /// is the same reason a tapped link goes through the session too: one way to
+    /// join, whichever way the link arrived.
     private func acceptPasted() async {
         guard let url = URL(string: pastedLink.trimmingCharacters(in: .whitespaces)) else { return }
         busy = true
         defer { busy = false }
-        do {
-            try await sharing.accept(url: url)
+        if let failure = await session.acceptInvitation(at: url) {
+            trouble = failure
+        } else {
             accepted = true
             pastedLink = ""
-            await refresh()
-        } catch {
-            trouble = error.localizedDescription
         }
+        await refresh()
     }
 
     // MARK: - Who is on it
@@ -219,11 +257,11 @@ struct SharingView: View {
             ForEach(participants) { person in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(person.isOwner ? "This family's owner" : "Grown-up")
+                        Text(name(for: person))
                         // An invitation that has been sent and not taken up is
                         // its own state. Without it a parent cannot tell "they
                         // have not tapped it yet" from "it did not work".
-                        Text(person.hasAccepted ? "Joined" : "Invited, not joined yet")
+                        Text(status(of: person))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -247,6 +285,34 @@ struct SharingView: View {
                 "Removing someone stops them receiving anything new. What is already on their device stays there — there is no way to reach back for it."
             )
         }
+    }
+
+    /// What to call somebody the share knows only as a record identifier.
+    ///
+    /// **A `CKShare.Participant` has no name we are willing to read.** It carries
+    /// `nameComponents` and a `lookupInfo` with an email address, and both are
+    /// deliberately never touched: App Review 5.1.4 names a persistent identifier
+    /// *beside a minor's data* as the trigger, and an email address next to a
+    /// child's search history is precisely that combination.
+    ///
+    /// So the name comes the long way round. The adult on the joining device says
+    /// which grown-up they are, that claim is stored against their account record
+    /// name, and it syncs back — see ``Session/claimAccountForActingGrownUp()``.
+    /// Until it does, this row is honestly anonymous rather than falsely named.
+    private func name(for person: ShareParticipantSummary) -> String {
+        if let claimed = session.grownUps.first(where: { $0.accountRecordName == person.id }) {
+            return claimed.name
+        }
+        return person.isOwner ? "This family's owner" : "A grown-up"
+    }
+
+    private func status(of person: ShareParticipantSummary) -> String {
+        guard person.hasAccepted else { return "Invited, not joined yet" }
+        let named = session.grownUps.contains { $0.accountRecordName == person.id }
+        if named { return person.isOwner ? "Set this family up" : "Joined" }
+        // Not a failure and not a wait on the network: it waits on a person. Said
+        // plainly, because "Joined" beside a blank name reads as something broken.
+        return "Joined — they haven't said which grown-up they are yet"
     }
 
     private func remove(_ person: ShareParticipantSummary) async {
@@ -273,11 +339,12 @@ struct SharingView: View {
         side = try? await sharing.side()
 
         participants = (try? await sharing.participants()) ?? []
-        guard owns else { return }
 
-        _ = try? await sharing.reconcileGrants(for: .coParent, kids: session.kids.map(\.id))
-        for kid in session.kids {
-            _ = try? await sharing.reconcileGrants(for: .child(kid.id), kids: session.kids.map(\.id))
-        }
+        // **The same call the launch pass makes**, rather than this screen
+        // repeating the loop over roles. It was the only caller when sync was
+        // manual; now it is the impatient one — opening this screen is what a
+        // parent does when they want to know whether the other one has joined
+        // yet, and waiting for the next foreground is not an answer.
+        await session.reconcileOutstandingGrants()
     }
 }

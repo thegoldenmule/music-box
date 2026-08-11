@@ -336,3 +336,98 @@ struct RenamingAGrownUp {
         }
     }
 }
+
+// MARK: - Which Apple Account is which adult
+
+@Suite("Claiming an Apple Account")
+@MainActor
+struct ClaimingAnAccount {
+    @Test("An adult starts with no account against them")
+    func startsUnclaimed() throws {
+        let (context, family, _) = try newFamily()
+        let dad = add("Dad", to: family, in: context)
+        #expect(dad.accountRecordName == nil)
+    }
+
+    @Test("Claiming records the account and stamps the row")
+    func claims() throws {
+        let (context, family, _) = try newFamily()
+        let dad = add("Dad", to: family, in: context)
+
+        family.claimAccount("_acct-dad", for: dad, at: Fix.t1)
+
+        #expect(dad.accountRecordName == "_acct-dad")
+        #expect(dad.modifiedAt == Fix.t1)
+    }
+
+    /// The shared-iPad case, and the reason this is not `GrownUp.claim` at the
+    /// call site: the roster's participant lookup is `first { $0.accountRecordName
+    /// == id }`, so two holders makes it depend on roster order.
+    @Test("One account is held by exactly one adult, and a claim moves")
+    func onlyOneHolder() throws {
+        let (context, family, _) = try newFamily()
+        let mum = add("Mum", to: family, in: context)
+        let dad = add("Dad", to: family, in: context)
+
+        family.claimAccount("_shared-ipad", for: mum, at: Fix.t1)
+        family.claimAccount("_shared-ipad", for: dad, at: Fix.t2)
+
+        #expect(mum.accountRecordName == nil)
+        #expect(dad.accountRecordName == "_shared-ipad")
+        #expect(family.grownUps.filter { $0.accountRecordName == "_shared-ipad" }.count == 1)
+    }
+
+    @Test("Claiming leaves an adult holding a different account alone")
+    func leavesOthersAlone() throws {
+        let (context, family, _) = try newFamily()
+        let mum = add("Mum", to: family, in: context)
+        let dad = add("Dad", to: family, in: context)
+
+        family.claimAccount("_acct-mum", for: mum, at: Fix.t1)
+        family.claimAccount("_acct-dad", for: dad, at: Fix.t2)
+
+        #expect(mum.accountRecordName == "_acct-mum")
+        #expect(dad.accountRecordName == "_acct-dad")
+    }
+
+    /// This runs on every launch that resolves an acting grown-up. A stamp per
+    /// launch would put the whole roster in the outbox once per launch per device.
+    @Test("Re-claiming the same account writes nothing")
+    func idempotent() throws {
+        let (context, family, _) = try newFamily()
+        let dad = add("Dad", to: family, in: context)
+
+        family.claimAccount("_acct-dad", for: dad, at: Fix.t1)
+        family.claimAccount("_acct-dad", for: dad, at: Fix.t2)
+
+        #expect(dad.modifiedAt == Fix.t1)
+    }
+
+    @Test("Un-claiming clears this adult and touches nobody else")
+    func unclaims() throws {
+        let (context, family, _) = try newFamily()
+        let mum = add("Mum", to: family, in: context)
+        let dad = add("Dad", to: family, in: context)
+        family.claimAccount("_acct-mum", for: mum, at: Fix.t1)
+        family.claimAccount("_acct-dad", for: dad, at: Fix.t1)
+
+        family.claimAccount(nil, for: dad, at: Fix.t2)
+
+        #expect(dad.accountRecordName == nil)
+        #expect(mum.accountRecordName == "_acct-mum")
+    }
+
+    /// The roster's whole purpose for this column: turning an opaque participant
+    /// identifier into a name a parent recognises.
+    @Test("A participant identifier resolves to exactly one name")
+    func namesAParticipant() throws {
+        let (context, family, _) = try newFamily()
+        let mum = add("Mum", to: family, in: context)
+        _ = add("Dad", to: family, in: context)
+        family.claimAccount("_acct-mum", for: mum, at: Fix.t1)
+
+        let matches = family.orderedGrownUps.filter { $0.accountRecordName == "_acct-mum" }
+        #expect(matches.count == 1)
+        #expect(matches.first?.name == "Mum")
+    }
+}

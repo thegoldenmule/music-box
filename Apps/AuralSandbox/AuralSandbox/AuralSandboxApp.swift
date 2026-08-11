@@ -7,6 +7,16 @@ struct AuralSandboxApp: App {
         case failed(String)
     }
 
+    /// Only there to catch a tapped invitation link — see
+    /// ``ShareAcceptanceDelegate``. The system constructs the delegate, so it
+    /// cannot be handed the session; it puts the share in ``ShareAcceptance``
+    /// and ``RootView`` collects it.
+    #if canImport(UIKit)
+        @UIApplicationDelegateAdaptor(ShareAcceptanceDelegate.self) private var delegate
+    #else
+        @NSApplicationDelegateAdaptor(ShareAcceptanceDelegate.self) private var delegate
+    #endif
+
     /// Built once. A failure here means the store would not open, which is the
     /// one startup failure worth showing rather than retrying — see
     /// ``StartupFailureView``.

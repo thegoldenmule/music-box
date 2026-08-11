@@ -91,6 +91,48 @@ public final class Family {
         grownUps.first { $0.id == id }
     }
 
+    /// Records that this Apple Account is this adult, and that it is **only**
+    /// this adult.
+    ///
+    /// **One holder per account, enforced here rather than hoped for.** The
+    /// account name is what lets the sharing roster put a name against a
+    /// `CKShare.Participant`, and that lookup is `first { $0.accountRecordName ==
+    /// id }` — so two rows holding one account name makes the answer depend on
+    /// roster order. It would read as a settled fact and be a coin toss.
+    ///
+    /// The way that happens is ordinary rather than exotic: a shared iPad where
+    /// both parents tap their own name behind the gate. So a claim moves,
+    /// un-claiming whoever held it. Last adult to say "this one is me on this
+    /// device" wins, which is the only answer that can be right — nobody else
+    /// knows.
+    ///
+    /// **Moving a claim is safe precisely because it is a hint.** See
+    /// ``GrownUp/accountRecordName``: it opens no gate, widens no reach, and
+    /// nothing points at it. The cost of getting it wrong is a roster row reading
+    /// the wrong name until somebody corrects it, and the cost of *not* having it
+    /// is a roster that cannot name anybody at all.
+    ///
+    /// Passing `nil` un-claims this adult and leaves everyone else alone.
+    public func claimAccount(_ recordName: String?, for grownUp: GrownUp, at: Date = .now) {
+        guard let recordName else {
+            grownUp.claim(account: nil, at: at)
+            modifiedAt = at
+            return
+        }
+
+        // Nothing to do rather than a no-op write: this runs on every launch
+        // that resolves an acting grown-up, and stamping `modifiedAt` each time
+        // would put the whole roster in the outbox once per launch, per device.
+        guard grownUp.accountRecordName != recordName else { return }
+
+        for other in grownUps where other.id != grownUp.id && other.accountRecordName == recordName
+        {
+            other.claim(account: nil, at: at)
+        }
+        grownUp.claim(account: recordName, at: at)
+        modifiedAt = at
+    }
+
     // MARK: - Order
     //
     // `kids` and `grownUps` are to-many relationships, and CloudKit does not

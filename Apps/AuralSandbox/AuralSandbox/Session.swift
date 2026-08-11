@@ -194,6 +194,23 @@ final class Session {
         return try? context.fetch(descriptor).first
     }
 
+    /// Every device enrolled in this household, for the roster a parent reads.
+    ///
+    /// **Fetched on demand and never cached.** What changes it is another device
+    /// syncing, not anything happening here — so a held copy would be stale in
+    /// exactly the situation a parent opened the roster to investigate.
+    ///
+    /// Rows belonging to no household are kept rather than hidden. `familyID` is
+    /// optional and a row written before it existed has none; dropping those would
+    /// silently remove a real device from the only screen that can revoke it.
+    /// Ordered by label so the list does not reshuffle as devices check in.
+    func enrolledDevices() -> [DeviceRecord] {
+        let all = (try? context.fetch(FetchDescriptor<DeviceRecord>())) ?? []
+        return all
+            .filter { $0.familyID == nil || $0.familyID == householdID }
+            .sorted { ($0.label, $0.id.uuidString) < ($1.label, $1.id.uuidString) }
+    }
+
     /// Adds a device row and commits it.
     func addDevice(_ record: DeviceRecord) {
         context.insert(record)
@@ -207,6 +224,10 @@ final class Session {
     /// next launch fixes.
     func commitDeviceChanges() {
         try? context.save()
+        // A revocation is the one write here that another device has to *act* on,
+        // and the device it concerns is the one that will not be asking. Same
+        // fire-and-forget rule as a list edit — see ``pushLocalChanges()``.
+        Task { await pushLocalChanges() }
     }
 
     /// The one way the binding state changes.
@@ -238,18 +259,50 @@ final class Session {
     /// the only part that genuinely needs a device is the implementation.
     @ObservationIgnored lazy var sharing: any FamilySharing = CloudKitSharing(sides: sides)
 
-    /// The sync engine, built lazily and **not started on launch**.
+    /// The sync engine, built lazily and started once the first screen is up.
     ///
     /// Proven to work against the real container — zones created, records
-    /// accepted, outbox drained — and deliberately still manual, because a
-    /// co-parent arriving holding the household and none of the kid zones is a
-    /// half-shared household, and that gap closes before this runs by itself.
+    /// accepted, outbox drained.
+    ///
+    /// **It used to be manual, and the reason has been dealt with rather than
+    /// waived.** The reason was that a co-parent could arrive holding the
+    /// household zone and none of the kid zones — a half-shared household, which
+    /// looks exactly like sync being slow — because the second grant step only
+    /// ran when the owner happened to open the sharing screen. It now runs in
+    /// ``syncPass()``, on every launch and every foreground, so the gap closes
+    /// without anybody visiting a screen. That was the precondition; this is it
+    /// being met.
+    ///
+    /// What is *not* claimed: that any of it has worked between two real
+    /// accounts. See ``FamilySync/CloudKitSharing``.
     private(set) var syncEngine: SyncEngineHost?
 
     /// Guards the gap between deciding to build the engine and finishing, which
     /// is now `await`-wide: resolving the side talks to CloudKit, and two taps
     /// during it would otherwise build two engines over one store.
     private var startingSync = false
+
+    /// True while an invitation is being accepted, and **nothing outbound may run
+    /// while it is.**
+    ///
+    /// Accepting is the one operation that changes which database this device
+    /// writes to. ``SyncEngineHost`` resolves that once, at `start`, so a push
+    /// that began before the acceptance and lands after it hands records to an
+    /// engine still addressing this device's *private* zones — where no one in the
+    /// family can see them, with the outbox draining exactly as it would on
+    /// success.
+    ///
+    /// Reachable because the pushes are deliberately detached: a parent's list
+    /// edit must not wait for iCloud, so `commitDeviceChanges` and `saveLists`
+    /// both spawn a push, and either can be in flight when a tapped link arrives.
+    private(set) var isJoining = false
+
+    /// Stands the outbound paths down for the length of an acceptance.
+    ///
+    /// A pair rather than a closure taking the work, because the work lives in
+    /// `SessionSharing.swift` and needs `defer` around several awaits.
+    func beginJoining() { isJoining = true }
+    func endJoining() { isJoining = false }
 
     /// Sends whatever the store owes, once.
     ///
@@ -266,8 +319,59 @@ final class Session {
         syncEngine = engine
     }
 
-    func syncNow() async {
+    /// Everything sync needs, in the order it needs it.
+    ///
+    /// **One entry point rather than three call sites remembering three steps.**
+    /// The engine has to be up before anything can be handed to it, and the
+    /// grants have to be reconciled before a co-parent's device has zones to
+    /// receive into — a push that runs first is a push into a household that is
+    /// only half shared.
+    ///
+    /// Run on launch, on returning to the foreground, and from the button. Each
+    /// step is idempotent and doing nothing is the normal outcome, which is what
+    /// makes it safe to run this often.
+    func syncPass() async {
+        guard !isJoining else { return }
         await startSyncEngineIfNeeded()
+        await reconcileOutstandingGrants()
+        syncEngine?.pushPendingChanges()
+    }
+
+    /// Throws the engine away so the next pass builds a new one.
+    ///
+    /// **The one caller is accepting an invitation, and it is not optional.**
+    /// Accepting moves this device from the owner side to the joined side, and
+    /// ``SyncEngineHost`` resolves the side once, in `start`. An engine built
+    /// before acceptance keeps answering `.owner` and routes every write to this
+    /// device's *private* database — into zones nobody else can see, with the
+    /// outbox draining exactly as it would on success.
+    func restartSyncEngine() async {
+        syncEngine = nil
+        await syncPass()
+    }
+
+    func syncNow() async {
+        await syncPass()
+    }
+
+    /// Hands over what the store owes, without the rest of a pass.
+    ///
+    /// **What a local edit triggers.** A parent adding a deny should not wait for
+    /// it to reach a child's iPad — the write is already committed and surfaced,
+    /// and the transport is the part that is allowed to be slow. So this is
+    /// fire-and-forget from the write path, which is the same asymmetry the log
+    /// has: a delayed send is acceptable, a settings screen that blocks on iCloud
+    /// is not.
+    ///
+    /// Deliberately *not* the whole of ``syncPass()``: the grant reconciliation in
+    /// there answers "has somebody joined", which no local edit can have changed.
+    func pushLocalChanges() async {
+        guard !isJoining else { return }
+        await startSyncEngineIfNeeded()
+        // Re-checked after the await. Building the engine talks to CloudKit, so an
+        // acceptance can begin and finish inside that suspension — and a push on
+        // the far side of one is the wrong-database write this flag exists for.
+        guard !isJoining else { return }
         syncEngine?.pushPendingChanges()
     }
 
@@ -592,9 +696,42 @@ final class Session {
     }
 
     /// Says who is behind the gate on this device. Device-local, never synced.
+    ///
+    /// The *selection* stays local. What it implies about the Apple Account
+    /// signed in here does not — see ``claimAccountForActingGrownUp()``, which is
+    /// how the sharing roster comes to know a name rather than a record
+    /// identifier.
     func setActingGrownUp(_ grownUp: GrownUp?) {
         actingGrownUpStore.save(grownUp?.id)
         actingGrownUp = grownUp
+        claimAccountForActingGrownUp()
+    }
+
+    /// Re-reads the adult roster after something changed it.
+    ///
+    /// Here rather than in `SessionSharing.swift` because `grownUps` is
+    /// `private(set)` and that restriction is doing useful work — a view or an
+    /// extension writing the roster directly is how a display list and the store
+    /// come to disagree.
+    func reloadGrownUps() {
+        grownUps = family.orderedGrownUps
+    }
+
+    /// Records which Apple Account is which adult, and reloads the roster.
+    ///
+    /// A pass-through because `family` is private to this file, and it should stay
+    /// that way — every write to the household goes through a named method here
+    /// rather than a view reaching the model. The decision about *when* to call
+    /// this is in ``claimAccountForActingGrownUp()``, which is where the reasoning
+    /// belongs.
+    func claimAccount(_ recordName: String?, for grownUp: GrownUp) {
+        family.claimAccount(recordName, for: grownUp)
+        // Through the device path rather than `saveLists`, and not by accident:
+        // that one surfaces failures because a list edit is a promise to a parent.
+        // This is a hint nobody asked for, so the right contract is the other one
+        // — worst case it is written down on the next launch.
+        commitDeviceChanges()
+        reloadGrownUps()
     }
 
     /// What a write stamps: the identifier, and the name as it reads right now.
@@ -2083,6 +2220,10 @@ final class Session {
             return error.localizedDescription
         }
         rebuildCatalog()
+        // Detached on purpose — see ``pushLocalChanges()``. The edit is already
+        // saved and this screen is already correct; what happens next is
+        // transport, and a parent must never watch a spinner for it.
+        Task { await pushLocalChanges() }
         return nil
     }
 
