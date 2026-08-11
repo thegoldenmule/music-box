@@ -335,6 +335,42 @@ final class Session {
         await startSyncEngineIfNeeded()
         await reconcileOutstandingGrants()
         syncEngine?.pushPendingChanges()
+        // After the engine has had a chance to absorb, because that is when an
+        // instruction from another device is on disk to find.
+        applyHistoryClears()
+    }
+
+    /// Carries out any clear another device asked for.
+    ///
+    /// **Called on launch and on every sync pass rather than the moment a record
+    /// lands.** Absorbing happens inside `SyncEngineHost`, which knows nothing
+    /// about kids or projections, and threading this down there would put a
+    /// multi-table delete on the path that receives every record. The cost is
+    /// latency: a clear issued on a parent's phone reaches a child's iPad on its
+    /// next foreground, not instantly. That is the right trade for this one — a
+    /// deny has to be immediate because it decides what may play, and a clear does
+    /// not decide anything, it destroys.
+    func applyHistoryClears() {
+        let touched = HistoryClearApplier.apply(
+            for: kids.map(\.id), in: context, watermarks: clearWatermarks)
+        guard !touched.isEmpty else { return }
+
+        // The same screen-level tidying a local clear does, for the same reason:
+        // the shelf and the queue are derived from what was just deleted, and a
+        // parent told the data is gone must not find it still on the home screen.
+        for kidID in touched { playQueues.clear(for: kidID) }
+        if touched.contains(kid.id) {
+            recentTrail = []
+            discardCurrentPlay()
+            historyCleared += 1
+            // **Emptied first, then rebuilt from whatever survived.** Unlike a local
+            // clear, an arriving instruction can be *bounded* — a clear issued last
+            // Tuesday leaves this week's visits alone — so the shelf is not
+            // necessarily empty afterwards. Blanking and reloading in that order
+            // means the wrong answer on screen is briefly "less than there is",
+            // never "something a parent was told was deleted".
+            Task { await loadRecentTrail() }
+        }
     }
 
     /// Throws the engine away so the next pass builds a new one.
@@ -452,6 +488,13 @@ final class Session {
     /// Which grown-up is acting on *this* device. Device-local for the reason
     /// ``deviceLibraryStore`` is — see ``ActingGrownUpStore``.
     private let actingGrownUpStore: any ActingGrownUpStore = UserDefaultsActingGrownUp()
+
+    /// How far each kid's history has been cleared on *this* device.
+    ///
+    /// Device-local for the same reason: it describes what this device has already
+    /// acted on, not anything about the family. See
+    /// ``FamilyStore/HistoryClearWatermarkStore``.
+    let clearWatermarks: any HistoryClearWatermarkStore = UserDefaultsHistoryClearWatermark()
 
     init(passcodes: any PasscodeStore = KeychainPasscodeStore()) throws {
         container = try FamilyStore.container()
@@ -833,8 +876,17 @@ final class Session {
     /// On the admin's own context, not the reader's, so the copy the admin holds
     /// does not keep rows the store no longer has.
     func deleteHistory(for kid: Kid) -> String? {
-        kid.deleteHistory()
+        // `issuedBy` so the instruction that reaches the other devices says who
+        // asked. The row it writes is what carries this off the device at all —
+        // the event tables never sync, so before it existed a parent clearing the
+        // logs here left the child's own iPad untouched.
+        kid.deleteHistory(issuedBy: actingGrownUp?.id)
         let failure = saveLists()
+        // **This device is now up to date by construction**, so the watermark moves
+        // with it. Without this the applier would find its own instruction
+        // outstanding on the next pass and do the whole sweep again — harmless, and
+        // a full scan of four event tables for nothing.
+        clearWatermarks.setWatermark(.now, for: kid.id)
         // The queue is the same kind of derived state as the shelf, and on a
         // device rather than in the store — so it has to be named here or it
         // survives a wipe. Cleared for whichever kid was asked about, active or
@@ -856,8 +908,11 @@ final class Session {
     /// The only thing in the app that removes a child's own work, and it happens
     /// only when a parent asks for it by name.
     func deleteEverything(for kid: Kid) async -> String? {
-        kid.deleteEverything()
+        kid.deleteEverything(issuedBy: actingGrownUp?.id)
         let failure = saveLists()
+        // Same reason as ``deleteHistory(for:)``: this device has already done the
+        // work, so it should not find its own instruction outstanding next launch.
+        clearWatermarks.setWatermark(.now, for: kid.id)
         playQueues.clear(for: kid.id)
         if kid.id == self.kid.id {
             recentTrail = []

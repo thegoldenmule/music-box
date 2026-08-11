@@ -755,7 +755,20 @@ public final class Kid {
     /// who clears the logs and then finds their child's home screen still
     /// listing what they were doing would rightly conclude the delete did not
     /// work. Derived state is not a loophole.
-    public func deleteHistory(at: Date = .now) {
+    /// **It also writes down that it happened**, which is the half that reaches
+    /// the other devices.
+    ///
+    /// Deleting rows here removes them from *this* device. The four event tables
+    /// and the shelf are in `neverSyncs`, so they never travelled as rows and no
+    /// tombstone would reach anybody — meaning a parent clearing the logs on their
+    /// phone left the child's iPad holding its own copy and its own home screen
+    /// still listing what they had been doing. The instruction is what syncs. See
+    /// ``HistoryClearRecord``.
+    ///
+    /// Written inside this method rather than by the caller because a clear that
+    /// does not record itself is the bug, and there is no call site for which that
+    /// is the right behaviour.
+    public func deleteHistory(at: Date = .now, issuedBy grownUpID: UUID? = nil) {
         delete(searches)
         delete(plays)
         delete(blocks)
@@ -768,6 +781,15 @@ public final class Kid {
         visits.removeAll()
         recentTrail.removeAll()
         summaries.removeAll()
+
+        // `clearedThrough: at` and not `.distantFuture`. This says "everything up
+        // to now", so a play the child starts a minute later survives — a clear is
+        // a statement about the past, and one that reached into the future would
+        // keep deleting a child's listening until somebody noticed.
+        modelContext?.insert(
+            HistoryClearRecord(
+                kidID: id, clearedThrough: at, issuedByGrownUpID: grownUpID, at: at))
+
         modifiedAt = at
     }
 
@@ -819,8 +841,8 @@ public final class Kid {
     /// widen what the kid can reach. A delete must never do that. If a parent
     /// wants a passed-on suggestion back, the admin screen offers it in one tap
     /// and says so out loud.
-    public func deleteEverything(at: Date = .now) {
-        deleteHistory(at: at)
+    public func deleteEverything(at: Date = .now, issuedBy grownUpID: UUID? = nil) {
+        deleteHistory(at: at, issuedBy: grownUpID)
         delete(favorites)
         delete(playlists)
         delete(libraryIndex)

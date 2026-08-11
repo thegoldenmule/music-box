@@ -89,6 +89,13 @@ struct RootView: View {
             // because which child that is, is what this decides.
             await session.resolveBinding()
 
+            // **Before the sync pass, and that ordering is the point.** A clear
+            // that arrived on a previous launch and was never applied is on disk
+            // now; doing it here means the child's shelf is already right the first
+            // time it is drawn, rather than emptying a moment later in front of
+            // them. The pass below catches anything that lands after this.
+            session.applyHistoryClears()
+
             await session.syncPass()
         }
         // **A link can arrive while the app is already running**, straight from
