@@ -61,6 +61,40 @@ def build_parser() -> argparse.ArgumentParser:
     fix = add("fix", "apply a repair the checklist offered")
     fix.add_argument("id", nargs="?", help="the row id; omit to list what is repairable")
 
+    add("next", "the single next action — the loop a script or an agent should drive")
+
+    for name, text in (
+        ("release", "the whole pipeline, ending in an upload to TestFlight"),
+        ("build", "the whole pipeline, ending in a signed .ipa on disk"),
+    ):
+        stage = add(name, text)
+        stage.add_argument("--skip-tests", action="store_true",
+                           help="do not run the package tests first")
+        stage.add_argument("--skip-preflight", action="store_true",
+                           help="build even with failing checks")
+        stage.add_argument("--no-bump", action="store_true",
+                           help="use the project's current build number unchanged")
+        stage.add_argument("--build-number", metavar="N", help="use exactly this build number")
+        stage.add_argument("--unsigned-archive", action="store_true",
+                           help="archive with signing off and sign only at export; needs no "
+                                "development profile, but drops entitlements unless the export "
+                                "restores them (the verify stage gates on it)")
+        stage.add_argument("--allow-dirty", action="store_true",
+                           help="release from a working tree with uncommitted changes")
+        stage.add_argument("--upload-with", choices=("altool", "xcodebuild"), default="altool",
+                           help="altool (default) exports to disk, verifies it, then uploads "
+                                "that exact file; xcodebuild uploads from the export step and "
+                                "leaves nothing to check")
+
+    upload = add("upload", "send an already-built .ipa without rebuilding it")
+    upload.add_argument("ipa", nargs="?", help="path to the .ipa (default: the last one built)")
+    upload.add_argument("--upload-with", choices=("altool",), default="altool",
+                        help=argparse.SUPPRESS)
+
+    verify_cmd = add("verify", "read the keys back out of a built artifact, not out of the settings")
+    verify_cmd.add_argument("path", nargs="?",
+                            help=".xcarchive, .ipa or .app (default: the last one built)")
+
     add("status", "what App Store Connect currently says about this app's builds")
 
     bump = add("bump", "set or advance CURRENT_PROJECT_VERSION in the project file")
@@ -174,10 +208,40 @@ def cmd_fix(cfg: config.Config, args: argparse.Namespace) -> Result:
     return preflight.apply_fix(cfg, args.id)
 
 
+def cmd_next(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import nextstep
+    return nextstep.run(cfg)
+
+
+def cmd_release(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import pipeline
+    return pipeline.run(cfg, args, upload=True)
+
+
+def cmd_build(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import pipeline
+    return pipeline.run(cfg, args, upload=False)
+
+
+def cmd_upload(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import pipeline
+    return pipeline.upload_only(cfg, args)
+
+
+def cmd_verify(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import verify
+    return verify.run(cfg, args.path)
+
+
 COMMANDS: Dict[str, Callable[[config.Config, argparse.Namespace], Result]] = {
     "info": cmd_info,
     "doctor": cmd_doctor,
     "fix": cmd_fix,
+    "next": cmd_next,
+    "release": cmd_release,
+    "build": cmd_build,
+    "upload": cmd_upload,
+    "verify": cmd_verify,
     "status": cmd_status,
     "bump": cmd_bump,
     "auth": cmd_auth,
@@ -201,8 +265,16 @@ def main(argv: List[str]) -> int:
                  % cfg.root),
             args.json, args.command)
 
+    handler = COMMANDS.get(args.command)
+    if handler is None:
+        # Reachable only if a subparser is declared and never wired up — a bug
+        # in this file, not in the invocation, so say which.
+        return report.emit(
+            fail("'%s' is declared but not implemented" % args.command,
+                 "This is a gap in Tools/shipkit/cli.py, not in what you typed."),
+            args.json, args.command)
     try:
-        result = COMMANDS[args.command](cfg, args)
+        result = handler(cfg, args)
     except KeyboardInterrupt:
         return report.emit(fail("Interrupted"), args.json, args.command)
     return report.emit(result, args.json, args.command)
