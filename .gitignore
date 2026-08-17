@@ -13,3 +13,13 @@ build/
 # SQLite sidecars beside checked-in store fixtures
 *.sqlite-wal
 *.sqlite-shm
+
+# App Store Connect API credentials, written by `Tools/ship auth`. The rule is
+# here rather than added on first use because the window that matters is the one
+# before anybody runs anything.
+.env
+
+# A downloaded App Store Connect key, in case one is ever saved here by mistake.
+# `Tools/ship auth import` copies it to ~/private_keys and says to delete the
+# original, but Apple issues a .p8 exactly once and a committed one is disclosed.
+*.p8

@@ -118,6 +118,15 @@ class Run:
                 "-authenticationKeyID", creds["key_id"],
                 "-authenticationKeyIssuerID", creds["issuer_id"]]
 
+    def secrets(self) -> List[str]:
+        """Credential values to keep out of the logs.
+
+        The .p8's contents never reach a command line, but its path, the key id
+        and the issuer id all do — and a build log is a file people paste into
+        issues. The child process still receives the real values."""
+        creds = self.cfg.asc_credentials()
+        return [creds["issuer_id"], creds["key_id"], creds["key_path"]]
+
     def record(self, name: str, result: Result, log: str = "") -> Result:
         self.stages.append(Stage(name, result, log))
         return result
@@ -229,7 +238,8 @@ class Run:
             argv += ["CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY="]
         say("")
         say("── archive ──")
-        result = proc.stream(argv, self.log_path("archive"), quiet=self.args.quiet)
+        result = proc.stream(argv, self.log_path("archive"), quiet=self.args.quiet,
+                             secrets=self.secrets())
         if not result.ok:
             diagnosis = classify.classify(result.out, self.context)
             return self.failed("archive", fail(
@@ -270,7 +280,8 @@ class Run:
                 "-allowProvisioningUpdates"] + self.auth_flags()
         say("")
         say("── export%s ──" % (" and upload" if single_step else ""))
-        result = proc.stream(argv, self.log_path("export"), quiet=self.args.quiet)
+        result = proc.stream(argv, self.log_path("export"), quiet=self.args.quiet,
+                             secrets=self.secrets())
         if not result.ok:
             diagnosis = classify.classify(result.out, self.context)
             guidance = "%s\n\nFull log: %s" % (diagnosis.guidance, result.log)
@@ -341,7 +352,8 @@ class Run:
                 "--api-key", creds["key_id"], "--api-issuer", creds["issuer_id"]]
         say("")
         say("── upload ──")
-        result = proc.stream(argv, self.log_path("upload"), quiet=self.args.quiet, env=environment)
+        result = proc.stream(argv, self.log_path("upload"), quiet=self.args.quiet, env=environment,
+                             secrets=self.secrets())
         if not result.ok:
             diagnosis = classify.classify(result.out, self.context)
             return self.failed("upload", fail(

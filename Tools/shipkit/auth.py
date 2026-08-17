@@ -52,31 +52,50 @@ def import_key(cfg: config.Config, p8_path: str) -> Result:
         return fail("Expected Apple's filename AuthKey_<KEYID>.p8, got %s" % os.path.basename(p8_path),
                     "The key id is only recoverable from the filename. Rename it back to exactly "
                     "what Apple downloaded, or create a new key.", links=[KEY_LINK])
-    with open(p8_path, encoding="utf-8", errors="replace") as handle:
+    # Bytes, not text. A .p8 is PEM and so ASCII in practice, but a text read
+    # with errors="replace" turns any byte that is not into U+FFFD and reports
+    # success — storing a corrupt copy of a key Apple will not issue twice.
+    with open(p8_path, "rb") as handle:
         body = handle.read()
-    if "BEGIN PRIVATE KEY" not in body:
-        return fail("%s does not look like a .p8 private key" % os.path.basename(p8_path))
+    if b"BEGIN PRIVATE KEY" not in body:
+        return fail("%s does not look like a .p8 private key" % os.path.basename(p8_path),
+                    "Expected PEM text containing BEGIN PRIVATE KEY.")
 
-    os.makedirs(KEY_DIR, exist_ok=True)
+    os.makedirs(KEY_DIR, mode=0o700, exist_ok=True)
     destination = os.path.join(KEY_DIR, os.path.basename(p8_path))
     if destination != p8_path:
-        with open(destination, "w", encoding="utf-8") as handle:
+        # Created 0600 by the open itself. Writing first and chmod-ing after
+        # leaves the key world-readable for the length of the write.
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(body)
     os.chmod(destination, 0o600)
 
-    env_path = cfg.write_env({
-        "ASC_KEY_ID": key_id,
-        "ASC_KEY_PATH": config.tildify(destination),
-    })
+    try:
+        env_path = cfg.write_env({
+            "ASC_KEY_ID": key_id,
+            "ASC_KEY_PATH": config.tildify(destination),
+        })
+    except config.SecretWriteRefused as refusal:
+        return fail("The key is installed, but its id could not be saved", str(refusal),
+                    data={"key_id": key_id, "key_path": destination})
+
+    notes = []
+    if os.path.commonpath([os.path.abspath(p8_path), cfg.root]) == cfg.root:
+        # Copying it to safety does nothing about the original sitting in a repo.
+        notes.append("The original is inside this repository (%s). Delete it — the copy in %s "
+                     "is the one this tool uses." % (p8_path, KEY_DIR))
     needs_issuer = not cfg.asc_credentials()["issuer_id"]
     guidance = "Key %s is at %s (chmod 600, outside the repo).\nId and path saved to %s." % (
         key_id, destination, env_path)
+    if notes:
+        guidance += "\n\n" + "\n".join(notes)
     if needs_issuer:
         guidance += ("\n\nOne field left. Copy the Issuer ID from the top of the API keys page "
                      "and run:\n  Tools/ship auth set-issuer <uuid>")
     return ok("API key %s imported" % key_id, guidance,
               data={"key_id": key_id, "key_path": destination, "env": env_path,
-                    "needs_issuer": needs_issuer},
+                    "needs_issuer": needs_issuer, "notes": notes},
               links=[KEY_LINK] if needs_issuer else [])
 
 
@@ -86,7 +105,10 @@ def set_issuer(cfg: config.Config, issuer: str) -> Result:
         return fail("That does not look like an Issuer ID",
                     "It is a UUID, like 69a6de78-1234-47e3-e053-5b8c7c11a4d1, and it sits at the "
                     "top of the API keys page with a Copy button next to it.", links=[KEY_LINK])
-    env_path = cfg.write_env({"ASC_ISSUER_ID": issuer})
+    try:
+        env_path = cfg.write_env({"ASC_ISSUER_ID": issuer})
+    except config.SecretWriteRefused as refusal:
+        return fail("Could not save the Issuer ID", str(refusal))
     return ok("Issuer ID saved", "Written to %s." % env_path,
               data={"issuer_id": issuer, "env": env_path})
 

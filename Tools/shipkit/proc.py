@@ -85,18 +85,35 @@ def run_bytes(argv: Sequence[str], timeout: Optional[int] = 120) -> "tuple[int, 
     return proc.returncode, proc.stdout
 
 
+def redact(text: str, secrets: Optional[Sequence[str]] = None) -> str:
+    """Blank out credential values before anything writes them down.
+
+    The command line of an `xcodebuild` or `altool` invocation carries the API
+    key id, the issuer id and the path to the .p8. None of them is the private
+    key itself, but a build log is a file that gets pasted into issues and
+    scrolled past in CI, and there is no reason for it to carry any of them.
+    Longest first, so a value that contains another is not half-replaced."""
+    for secret in sorted((s for s in (secrets or []) if s and len(s) > 3), key=len, reverse=True):
+        text = text.replace(secret, "<redacted>")
+    return text
+
+
 def stream(argv: Sequence[str], log_path: str, cwd: Optional[str] = None,
            quiet: bool = False, timeout: Optional[int] = None,
-           env: Optional[Dict[str, str]] = None) -> Completed:
+           env: Optional[Dict[str, str]] = None,
+           secrets: Optional[Sequence[str]] = None) -> Completed:
     """Run a long command, tee-ing stdout+stderr to `log_path` and to stderr.
 
     Output goes to stderr rather than stdout so that `--json` remains a clean
     single object on stdout even while a fifteen-minute archive is scrolling
     past.
+
+    `secrets` are values to blank out of the echoed command line and of the
+    output — the child process is still given the real ones.
     """
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     captured: List[str] = []
-    header = "$ %s\n" % quote(argv)
+    header = "$ %s\n" % redact(quote(argv), secrets)
     if not quiet:
         sys.stderr.write(header)
         sys.stderr.flush()
@@ -121,6 +138,7 @@ def stream(argv: Sequence[str], log_path: str, cwd: Optional[str] = None,
         assert proc.stdout is not None
         try:
             for line in proc.stdout:
+                line = redact(line, secrets)
                 captured.append(line)
                 log.write(line)
                 if not quiet:

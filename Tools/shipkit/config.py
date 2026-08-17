@@ -21,7 +21,17 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import tempfile
 from typing import Any, Dict, List, Optional
+
+from . import proc
+
+
+class SecretWriteRefused(Exception):
+    """Raised rather than writing a credential somewhere git could commit it.
+
+    An exception and not a False return, because the one caller who forgets to
+    check a boolean is the reason the secret ends up in the repository."""
 
 # Beside the package rather than at a hardcoded repo path, so the whole of
 # `Tools/` can be copied into another project and still find its own settings.
@@ -35,10 +45,15 @@ ASC_VARS = ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_PATH")
 
 
 def repo_root(start: Optional[str] = None) -> str:
-    """Nearest ancestor holding a .git. Falls back to the start directory."""
+    """Nearest ancestor holding a `.git`. Falls back to the start directory.
+
+    `exists`, not `isdir`: inside a git worktree or a submodule, `.git` is a
+    *file* pointing at the real git directory. Testing for a directory walks
+    straight past it and returns some unrelated outer repository — which would
+    then be where a credential got written."""
     path = os.path.abspath(start or os.getcwd())
     while True:
-        if os.path.isdir(os.path.join(path, ".git")):
+        if os.path.exists(os.path.join(path, ".git")):
             return path
         parent = os.path.dirname(path)
         if parent == path:
@@ -178,17 +193,65 @@ class Config:
         return all(creds.values()) and os.path.exists(creds["key_path"])
 
     def write_env(self, values: Dict[str, str]) -> str:
-        """Persist credentials, then make sure the file they went into is
-        ignored — writing a secret into a tracked file only relocates the leak."""
+        """Persist credentials. Refuses rather than leaking.
+
+        Order is the whole point. The ignore rule goes in *before* the secret
+        touches the disk, and git is asked whether it actually took — writing
+        first and checking after means the one run where the check fails is the
+        run that already wrote the credential into a committable file.
+
+        The write itself is atomic: a temp file in the same directory, created
+        0600 so it is never briefly world-readable, then `os.replace`. Opening
+        the real path with "w" truncates it before a single byte is written, so
+        a crash mid-write would destroy an existing .env holding unrelated
+        secrets — which is exactly what this promises not to do."""
+        self.ensure_env_gitignored()
+        protected, reason = self.env_protected()
+        if not protected:
+            raise SecretWriteRefused(
+                "Refusing to write credentials to %s: %s" % (self.env_path, reason))
+
         text = ""
         if os.path.exists(self.env_path):
             with open(self.env_path, encoding="utf-8") as handle:
                 text = handle.read()
-        with open(self.env_path, "w", encoding="utf-8") as handle:
-            handle.write(upsert_env_text(text, values))
-        os.chmod(self.env_path, 0o600)
-        self.ensure_env_gitignored()
+        updated = upsert_env_text(text, values)
+
+        directory = os.path.dirname(self.env_path) or "."
+        handle_fd, temp = tempfile.mkstemp(dir=directory, prefix=".env.", suffix=".tmp")
+        try:
+            os.fchmod(handle_fd, 0o600)
+            with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+                handle.write(updated)
+            os.replace(temp, self.env_path)
+        except BaseException:
+            if os.path.exists(temp):
+                os.unlink(temp)
+            raise
         return self.env_path
+
+    def env_protected(self) -> "tuple[bool, str]":
+        """(is the .env safe to write, why not).
+
+        Ask git rather than pattern-matching the .gitignore: git is the only
+        authority on its own rules, and it is the thing that will or will not
+        commit the file. Two answers matter and only one of them is obvious —
+        a file git already *tracks* is never ignored no matter what rule exists,
+        so adding one would be a fix that changes nothing."""
+        if not os.path.exists(os.path.join(self.root, ".git")):
+            return True, ""  # not a repo: nothing here can be committed
+        tracked = proc.run(["git", "-C", self.root, "ls-files", "--error-unmatch",
+                            self.env_path], timeout=30)
+        if tracked.ok:
+            return False, ("git already tracks it, so no ignore rule can help. Run "
+                           "`git rm --cached %s` first, and treat anything already committed "
+                           "there as disclosed." % os.path.relpath(self.env_path, self.root))
+        ignored = proc.run(["git", "-C", self.root, "check-ignore", "-q", self.env_path],
+                           timeout=30)
+        if ignored.ok:
+            return True, ""
+        return False, ("git does not ignore it, and the ignore rule could not be added. Add "
+                       "`.env` to %s by hand." % os.path.join(self.root, ".gitignore"))
 
     def ensure_env_gitignored(self) -> bool:
         ignore = os.path.join(self.root, ".gitignore")
@@ -198,12 +261,16 @@ class Config:
                 text = handle.read()
             if gitignore_covers_env(text):
                 return True
-        elif not os.path.isdir(os.path.join(self.root, ".git")):
+        elif not os.path.exists(os.path.join(self.root, ".git")):
             return False
         if text and not text.endswith("\n"):
             text += "\n"
-        with open(ignore, "w", encoding="utf-8") as handle:
-            handle.write(text + "\n# App Store Connect API credentials (Tools/ship auth)\n.env\n")
+        try:
+            with open(ignore, "w", encoding="utf-8") as handle:
+                handle.write(text
+                             + "\n# App Store Connect API credentials (Tools/ship auth)\n.env\n")
+        except OSError:
+            return False
         return True
 
     # ── persistence ───────────────────────────────────────────────────────────
