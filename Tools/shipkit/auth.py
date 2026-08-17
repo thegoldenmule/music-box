@@ -45,13 +45,13 @@ def import_key(cfg: config.Config, p8_path: str) -> Result:
     p8_path = os.path.abspath(os.path.expanduser(p8_path))
     if not os.path.exists(p8_path):
         return fail("No such file: %s" % p8_path,
-                    "Point this at the .p8 Apple downloaded — it can only be downloaded once, "
-                    "so if it is gone you need a new key.", links=[KEY_LINK])
+                    "Apple lets a .p8 be downloaded once. If it is gone, make a new key.",
+                    links=[KEY_LINK])
     key_id = key_id_from_filename(p8_path)
     if not key_id:
         return fail("Expected Apple's filename AuthKey_<KEYID>.p8, got %s" % os.path.basename(p8_path),
-                    "The key id is only recoverable from the filename. Rename it back to exactly "
-                    "what Apple downloaded, or create a new key.", links=[KEY_LINK])
+                    "The key id lives only in the filename. Rename it back, or make a new key.",
+                    links=[KEY_LINK])
     # Bytes, not text. A .p8 is PEM and so ASCII in practice, but a text read
     # with errors="replace" turns any byte that is not into U+FFFD and reports
     # success — storing a corrupt copy of a key Apple will not issue twice.
@@ -83,16 +83,14 @@ def import_key(cfg: config.Config, p8_path: str) -> Result:
     notes = []
     if os.path.commonpath([os.path.abspath(p8_path), cfg.root]) == cfg.root:
         # Copying it to safety does nothing about the original sitting in a repo.
-        notes.append("The original is inside this repository (%s). Delete it — the copy in %s "
-                     "is the one this tool uses." % (p8_path, KEY_DIR))
+        notes.append("Delete the original at %s — it is inside the repo. The copy in %s is "
+                     "the one this tool uses." % (p8_path, KEY_DIR))
     needs_issuer = not cfg.asc_credentials()["issuer_id"]
-    guidance = "Key %s is at %s (chmod 600, outside the repo).\nId and path saved to %s." % (
-        key_id, destination, env_path)
+    guidance = "Saved to %s. Key kept at %s." % (env_path, destination)
     if notes:
         guidance += "\n\n" + "\n".join(notes)
     if needs_issuer:
-        guidance += ("\n\nOne field left. Copy the Issuer ID from the top of the API keys page "
-                     "and run:\n  Tools/ship auth set-issuer <uuid>")
+        guidance += "\n\nNext:  Tools/ship auth set-issuer <uuid>"
     return ok("API key %s imported" % key_id, guidance,
               data={"key_id": key_id, "key_path": destination, "env": env_path,
                     "needs_issuer": needs_issuer, "notes": notes},
@@ -103,8 +101,7 @@ def set_issuer(cfg: config.Config, issuer: str) -> Result:
     issuer = issuer.strip()
     if not ISSUER_RE.match(issuer):
         return fail("That does not look like an Issuer ID",
-                    "It is a UUID, like 69a6de78-1234-47e3-e053-5b8c7c11a4d1, and it sits at the "
-                    "top of the API keys page with a Copy button next to it.", links=[KEY_LINK])
+                    "A UUID, at the top of the API keys page.", links=[KEY_LINK])
     try:
         env_path = cfg.write_env({"ASC_ISSUER_ID": issuer})
     except config.SecretWriteRefused as refusal:
@@ -148,8 +145,8 @@ def show(cfg: config.Config) -> Result:
     # Blocked, not failed: nothing this tool can run produces a key. Apple has
     # to mint one, in a browser, for a human who is signed in.
     return blocked(title,
-                "1. Create a key. App Manager reads state and uploads; cloud signing is reported "
-                "to need Admin, and a role cannot be changed once the key exists.\n"
-                "2. Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
-                "3. Tools/ship auth set-issuer <uuid from the top of that page>",
+                "Create a key (role: App Manager, or Admin for cloud signing — the role "
+                "cannot be changed later), then:\n"
+                "  Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
+                "  Tools/ship auth set-issuer <uuid>",
                 data=data, links=[KEY_LINK])

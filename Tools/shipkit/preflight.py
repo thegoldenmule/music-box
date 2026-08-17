@@ -135,7 +135,7 @@ def check_xcode(facts: Facts) -> Row:
     present, version = xcode.xcodebuild_version()
     if not present:
         return Row("xcode", "Xcode", FAIL, "",
-                   "Install Xcode, then point the command line tools at it:\n"
+                   "Install Xcode, then:\n"
                    "  sudo xcode-select -s /Applications/Xcode.app",
                    [XCODE_LINK], manual=True)
     return Row("xcode", "Xcode", OK, "%s · %s" % (version.split("\n")[0], xcode.developer_dir()))
@@ -144,9 +144,8 @@ def check_xcode(facts: Facts) -> Row:
 def check_project(facts: Facts) -> Row:
     if not facts.settings:
         return Row("project", "Project and scheme", FAIL, facts.cfg.scheme,
-                   "xcodebuild could not resolve scheme '%s' in %s.\nAvailable: %s"
-                   % (facts.cfg.scheme, facts.cfg.xcodeproj,
-                      ", ".join(xcode.schemes(facts.cfg.xcodeproj)) or "none"),
+                   "No such scheme. Available: %s"
+                   % (", ".join(xcode.schemes(facts.cfg.xcodeproj)) or "none"),
                    manual=True)
     problems = []
     if not facts.bundle_id:
@@ -157,8 +156,7 @@ def check_project(facts: Facts) -> Row:
                                   facts.marketing_version, facts.build_number)
     if problems:
         return Row("project", "Project and scheme", FAIL, detail,
-                   "Set it in Xcode: target → Signing & Capabilities. Missing: %s."
-                   % ", ".join(problems), manual=True)
+                   "Set it in Xcode: target → Signing & Capabilities.", manual=True)
     return Row("project", "Project and scheme", OK, detail)
 
 
@@ -185,17 +183,14 @@ def check_floor(facts: Facts) -> Row:
     if conditional:
         return Row("floor", "Deployment target", FAIL,
                    "resolved %s, declared %s" % (resolved or "?", ", ".join(values)),
-                   "IPHONEOS_DEPLOYMENT_TARGET is written in the conditional %s form. Xcode "
-                   "accepts that and then resolves it to the SDK default — the declared value "
-                   "never takes effect, and the shipped binary refuses to install below the "
-                   "current SDK.\nSet it unconditionally in Xcode (target → General → Minimum "
-                   "Deployments) and check this row again." % conditional[0], manual=True)
+                   "Written as %s, which Xcode resolves to the SDK default instead. Set it "
+                   "unconditionally in Xcode: target → General → Minimum Deployments."
+                   % conditional[0], manual=True)
     if values and resolved and resolved not in values:
         return Row("floor", "Deployment target", FAIL, "resolved %s, project says %s"
                    % (resolved, ", ".join(values)),
-                   "The project file and the resolved build setting disagree. Something is "
-                   "overriding it — an xcconfig, or a target-level setting shadowing the "
-                   "project-level one. The resolved value is what ships.", manual=True)
+                   "Something is overriding it — an xcconfig, or a target-level setting. "
+                   "The resolved value is what ships.", manual=True)
     return Row("floor", "Deployment target", OK, "iOS %s" % (resolved or ", ".join(values)))
 
 
@@ -203,10 +198,10 @@ def check_floor(facts: Facts) -> Row:
 # history: INFOPLIST_KEY_UIBackgroundModes is accepted as a build setting and
 # never reaches the generated plist, which is why a partial Info.plist file
 # exists at all.
+# `audio` keeps the player alive at lock; `remote-notification` is where a
+# parent's change lands, and without it a deny waits for the next launch.
 REQUIRED_PLIST: List[Any] = [
-    ("UIBackgroundModes", ["audio"], "background audio — the player stops at lock without it"),
-    ("UIBackgroundModes", ["remote-notification"],
-     "where a parent's change arrives; without it a deny waits for the next launch"),
+    ("UIBackgroundModes", ["audio", "remote-notification"]),
 ]
 
 
@@ -214,18 +209,15 @@ def check_info_plist(facts: Facts) -> Row:
     path = facts.info_plist_path
     if not path or not os.path.exists(path):
         return Row("plist", "Info.plist keys", WARN, path or "no INFOPLIST_FILE",
-                   "This target generates its whole Info.plist from build settings. That is fine "
-                   "until a key Xcode silently drops is needed (UIBackgroundModes is one), at "
-                   "which point a partial Info.plist file is the only way to set it.")
+                   "No partial Info.plist, so any key Xcode drops from the generated one "
+                   "cannot be set at all.")
     missing = []
-    for key, wanted, why in REQUIRED_PLIST:
+    for key, wanted in REQUIRED_PLIST:
         have = facts.info_plist.get(key) or []
-        for value in wanted:
-            if value not in have:
-                missing.append("%s → %s (%s)" % (key, value, why))
+        missing += ["%s → %s" % (key, value) for value in wanted if value not in have]
     if missing:
         return Row("plist", "Info.plist keys", FAIL, os.path.basename(path),
-                   "Missing from %s:\n  %s" % (path, "\n  ".join(missing)), manual=True)
+                   "Add to %s: %s" % (path, ", ".join(missing)), manual=True)
     return Row("plist", "Info.plist keys", OK,
                "%s · %s" % (os.path.basename(path),
                             ", ".join(facts.info_plist.get("UIBackgroundModes") or [])))
@@ -247,12 +239,11 @@ def check_encryption(facts: Facts) -> Row:
                    "%s = %s" % (ENCRYPTION_KEY, "true" if value else "false"))
     if not facts.info_plist_path:
         return Row("encryption", "Export compliance", WARN, "no Info.plist file to declare it in",
-                   "Every uploaded build will sit in TestFlight as 'Missing Compliance' until "
-                   "someone answers the encryption question by hand.")
+                   "Every build will sit in TestFlight as 'Missing Compliance' until "
+                   "answered by hand.")
     return Row("encryption", "Export compliance", WARN, "not declared",
-               "Every build will land in TestFlight as 'Missing Compliance' and be untestable "
-               "until someone answers the question in the console — per build, forever.\n"
-               "This app uses only HTTPS, which is exempt, so the answer is 'false'.",
+               "Otherwise every build sits in TestFlight as 'Missing Compliance' until "
+               "answered by hand, per build.",
                fix="encryption")
 
 
@@ -289,9 +280,8 @@ def check_working_tree(facts: Facts) -> Row:
     if dirty:
         return Row("git", "Working tree", WARN, "%s + %d uncommitted change%s"
                    % (commit, len(dirty), "" if len(dirty) == 1 else "s"),
-                   "A build uploaded from a dirty tree cannot be reproduced later — the commit "
-                   "in the crash report will not be the code that crashed. Commit first, or pass "
-                   "--allow-dirty if you mean it.")
+                   "Commit first, or pass --allow-dirty. A build from a dirty tree cannot be "
+                   "reproduced later.")
     return Row("git", "Working tree", OK, "clean at %s" % commit)
 
 
@@ -304,10 +294,9 @@ def check_signing(facts: Facts) -> Row:
     return Row("signing", "Distribution certificate", WARN,
                "%d codesigning identit%s, none for distribution"
                % (len(identities), "y" if len(identities) == 1 else "ies"),
-               "Export can still mint one through cloud signing (an Xcode session, or an "
-               "App Manager API key). If it cannot:\n"
-               "1. Xcode → Settings → Accounts → your team\n"
-               "2. Manage Certificates… → ＋ → Apple Distribution")
+               "Cloud signing can usually mint one during export. If it cannot: Xcode → "
+               "Settings → Accounts → your team → Manage Certificates… → ＋ → Apple "
+               "Distribution.")
 
 
 def check_team(facts: Facts) -> Row:
@@ -319,14 +308,13 @@ def check_team(facts: Facts) -> Row:
     if not teams:
         status = WARN if facts.cfg.has_asc_key() else FAIL
         return Row("team", "Xcode account", status, "no signed-in teams",
-                   "Sign into Xcode (Settings → Accounts → ＋). Not needed once an App Store "
-                   "Connect API key is configured — cloud signing then works with no session.",
+                   "Sign into Xcode: Settings → Accounts → ＋. Not needed once an API key is "
+                   "configured.",
                    [Link("Apple Developer account", "https://developer.apple.com/account")],
                    manual=True)
     return Row("team", "Xcode account", WARN,
                "signed in as %s, project wants %s" % (", ".join(ids), facts.team_id),
-               "Xcode has no session for the team this project builds for. Signing will fall "
-               "back to the API key if one is configured, and fail otherwise.",
+               "Signing falls back to the API key if one is configured, and fails otherwise.",
                manual=True)
 
 
@@ -334,24 +322,21 @@ def check_asc_key(facts: Facts) -> Row:
     creds = facts.cfg.asc_credentials()
     if not any(creds.values()):
         return Row("asc_key", "App Store Connect API key", WARN, "not configured",
-                   "Optional but it is most of this tool's value: without it nothing can be "
-                   "checked before a build, and build status cannot be read at all.\n"
-                   "1. ↗ Create a key. App Manager is enough to read state and upload; cloud "
-                   "signing is reported to need Admin, and a role cannot be changed after "
-                   "creation — so if the machine has no distribution certificate of its own, "
-                   "make it Admin.\n"
-                   "2. Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
-                   "3. Tools/ship auth set-issuer <uuid from the top of that page>",
+                   "Without it nothing can be checked before a build and no build state read "
+                   "after one. Create one (role: App Manager, or Admin if this machine has no "
+                   "distribution certificate), then:\n"
+                   "  Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
+                   "  Tools/ship auth set-issuer <uuid>",
                    [KEY_LINK], manual=True)
     if not creds["key_path"] or not os.path.exists(creds["key_path"]):
         return Row("asc_key", "App Store Connect API key", FAIL, creds["key_path"] or "no path",
-                   "The key file is gone. Apple only lets a .p8 be downloaded once, so unless "
-                   "you have a copy this needs a new key.", [KEY_LINK], manual=True)
+                   "Apple lets a .p8 be downloaded once. Without a copy, make a new key.",
+                   [KEY_LINK], manual=True)
     if not creds["issuer_id"]:
         return Row("asc_key", "App Store Connect API key", WARN,
                    "key %s, no issuer id" % creds["key_id"],
-                   "One field left:\n  Tools/ship auth set-issuer <uuid>\n"
-                   "It is at the top of the API keys page with a Copy button.",
+                   "  Tools/ship auth set-issuer <uuid>\n"
+                   "The UUID is at the top of the API keys page.",
                    [KEY_LINK], manual=True)
     if facts.offline:
         return Row("asc_key", "App Store Connect API key", SKIP, "key %s (not validated)"
@@ -362,13 +347,10 @@ def check_asc_key(facts: Facts) -> Row:
     if facts.team_id and facts.asc_team and facts.asc_team != facts.team_id:
         return Row("asc_key", "App Store Connect API key", FAIL,
                    "wrong team — key %s belongs to %s" % (creds["key_id"], facts.asc_team),
-                   "This project builds for %s. A key issued for another team authenticates "
-                   "fine and then answers every question truthfully about the wrong team, which "
-                   "is worse than no key at all.\n"
-                   "1. ↗ On the API keys page, switch the team picker (top right) to %s\n"
-                   "2. ＋ → role App Manager → Generate → Download\n"
-                   "3. Tools/ship auth import ~/Downloads/AuthKey_<NEWID>.p8"
-                   % (facts.team_id, facts.team_id), [KEY_LINK], manual=True)
+                   "This project builds for %s. Switch the team picker at the top right of "
+                   "the API keys page, make a new key there, then:\n"
+                   "  Tools/ship auth import ~/Downloads/AuthKey_<NEWID>.p8"
+                   % facts.team_id, [KEY_LINK], manual=True)
     suffix = " (team %s)" % facts.asc_team if facts.asc_team else " (team has no assets yet)"
     return Row("asc_key", "App Store Connect API key", OK, "key %s%s" % (creds["key_id"], suffix))
 
@@ -392,21 +374,17 @@ def check_bundle_id(facts: Facts) -> Row:
                    facts.asc_error)
     if not facts.bundle_record:
         return Row("bundle_id", "App ID registration", FAIL, "%s not registered" % facts.bundle_id,
-                   "Nothing has registered this App ID yet, so the New App dialog's Bundle ID "
-                   "dropdown has nothing to pick. Registering it is the same operation as "
-                   "Identifiers → ＋.", [IDENTIFIERS_LINK], fix="bundle_id")
+                   "Register it, or the New App dialog has nothing to pick.",
+                   [IDENTIFIERS_LINK], fix="bundle_id")
     capabilities = facts.bundle_record.get("capabilities") or []
     wanted = _entitlement_capabilities(facts.entitlements)
     missing = [name for name in wanted if name not in capabilities]
     detail = "%s · %s" % (facts.bundle_id, ", ".join(capabilities) or "no capabilities")
     if missing:
         return Row("bundle_id", "App ID registration", FAIL, detail,
-                   "The entitlements file asks for %s, and the App ID does not have %s enabled. "
-                   "A provisioning profile cannot grant what the App ID does not carry, so "
-                   "signing will fail — or worse, succeed with the capability quietly absent.\n"
-                   "  ↗ Identifiers → %s → enable it, then run this again."
-                   % (", ".join(CAPABILITY_NOTES.get(m, m) for m in wanted),
-                      ", ".join(missing), facts.bundle_id),
+                   "The entitlements ask for it and the App ID does not carry it.\n"
+                   "  ↗ Identifiers → %s → enable %s."
+                   % (facts.bundle_id, ", ".join(missing)),
                    [IDENTIFIERS_LINK], manual=True)
     return Row("bundle_id", "App ID registration", OK, detail)
 
@@ -432,31 +410,20 @@ def check_musickit(facts: Facts) -> Row:
     is exactly why a row that guessed "not enabled" from an empty API answer
     would be worse than useless."""
     return Row("musickit", "MusicKit on the App ID", SKIP, "not checkable from here",
-               "MusicKit is an App Service, not a capability: it is absent from the API's "
-               "vocabulary and from every provisioning profile, so neither this tool nor a "
-               "successful signed build can confirm it.\n"
-               "Eyes-on check: ↗ Identifiers → %s → App Services → MusicKit.\n"
-               "The real proof is a catalog request on a device that comes back — and a "
-               "well-formed API error counts, while an authorization failure does not."
-               % facts.bundle_id,
+               "Check by eye: ↗ Identifiers → %s → App Services → MusicKit." % facts.bundle_id,
                [IDENTIFIERS_LINK], manual=True)
 
 
 def check_app_record(facts: Facts) -> Row:
     if facts.asc_blocked:
         return Row("app_record", "App Store Connect record", SKIP, facts.asc_blocked,
-                   facts.asc_error or
-                   "Unchecked is not the same as absent: without an answer here, a missing app "
-                   "record is only discovered at upload time, twenty minutes into a release.")
+                   facts.asc_error)
     if not facts.app:
         return Row("app_record", "App Store Connect record", FAIL,
                    "none for %s" % facts.bundle_id,
-                   "App creation is the one step genuinely absent from Apple's public API — "
-                   "about two minutes by hand, once:\n"
-                   "1. My Apps → ＋ → New App\n"
-                   "2. Platform iOS. Name: must be unique across the whole App Store.\n"
-                   "3. Bundle ID: pick %s from the dropdown\n"
-                   "4. SKU: any internal identifier." % facts.bundle_id,
+                   "Create it by hand — Apple has no API for this.\n"
+                   "  My Apps → ＋ → New App → iOS, pick %s from the Bundle ID dropdown.\n"
+                   "The name must be unique across the App Store." % facts.bundle_id,
                    [APPS_LINK], manual=True)
     builds = facts.app.get("builds") or []
     detail = facts.app["name"]
@@ -479,9 +446,7 @@ def check_beta_group(facts: Facts) -> Row:
         return Row("beta_group", "Internal TestFlight group", OK,
                    ", ".join(group["name"] for group in internal))
     return Row("beta_group", "Internal TestFlight group", WARN, "none",
-               "Uploads will process successfully, reach 'Ready to Test', and be visible to "
-               "nobody. The fix creates a group with automatic distribution on, so this and "
-               "every later build lands in it without touching the console.\n"
+               "Without one a build reaches 'Ready to Test' and is visible to nobody. "
                "Testers still have to be added once, in the TestFlight tab.",
                fix="beta_group")
 
@@ -499,21 +464,16 @@ def check_build_number(facts: Facts) -> Row:
     current = facts.build_number
     if not current:
         return Row("build_number", "Build number", WARN, "CURRENT_PROJECT_VERSION not set",
-                   "Set a build number once in Xcode (target → General → Build); this tool can "
-                   "advance it from then on.")
+                   "Set one in Xcode: target → General → Build.")
     conditional = os.path.exists(facts.pbxproj) and _has_conditional_build_number(facts.pbxproj)
     if conditional:
         return Row("build_number", "Build number", FAIL,
                    "%s (declared conditionally)" % current,
-                   "CURRENT_PROJECT_VERSION is written in the `[sdk=…]` conditional form. That "
-                   "value is what the build uses and it is invisible to a plain rewrite, so "
-                   "`Tools/ship bump` would report success while the shipped build kept the old "
-                   "number. Set it unconditionally in Xcode.")
+                   "Written in the `[sdk=…]` form, which a bump cannot safely rewrite. Set it "
+                   "unconditionally in Xcode: target → General → Build.")
     if facts.asc_blocked or not facts.app:
         return Row("build_number", "Build number", SKIP,
-                   "%s (%s) — not checked against Apple" % (current, facts.marketing_version),
-                   "The project file is not authoritative here: a build uploaded from another "
-                   "machine raises Apple's floor without touching it.")
+                   "%s (%s) — not checked against Apple" % (current, facts.marketing_version))
     train = [build for build in (facts.app.get("builds") or [])
              if not facts.marketing_version or build.get("train") == facts.marketing_version]
     used = [build["version"] for build in train if build["version"]]
@@ -521,9 +481,7 @@ def check_build_number(facts: Facts) -> Row:
         highest = max(used, key=xcode.build_number_sort_key)
         return Row("build_number", "Build number", FAIL, "%s already uploaded for %s"
                    % (current, facts.marketing_version),
-                   "Apple rejects a repeated CFBundleVersion within a marketing version, and it "
-                   "does so after the upload. The highest it holds for %s is %s.\n"
-                   "  Tools/ship bump" % (facts.marketing_version, highest),
+                   "Apple holds up to %s for %s. Bump it." % (highest, facts.marketing_version),
                    fix="build_number")
     if used:
         highest = max(used, key=xcode.build_number_sort_key)
@@ -531,8 +489,8 @@ def check_build_number(facts: Facts) -> Row:
             return Row("build_number", "Build number", WARN,
                        "%s is below Apple's highest for %s (%s)"
                        % (current, facts.marketing_version, highest),
-                       "TestFlight requires the number to rise within a train, so this upload "
-                       "will be rejected.\n  Tools/ship bump", fix="build_number")
+                       "The number has to rise, or the upload is rejected.",
+                       fix="build_number")
     return Row("build_number", "Build number", OK, "%s (%s)" % (current, facts.marketing_version))
 
 

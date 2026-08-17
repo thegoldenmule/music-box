@@ -30,8 +30,8 @@ def run(cfg: config.Config) -> Result:
     if client is None:
         return blocked(
             "No App Store Connect API key configured",
-            "Build state can only be read through the API — a signed-in Xcode session cannot "
-            "answer it.\n  Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
+            "Build state can only be read through the API.\n"
+            "  Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
             "  Tools/ship auth set-issuer <uuid>",
             links=[Link("Create API key",
                         "https://appstoreconnect.apple.com/access/integrations/api")])
@@ -49,12 +49,8 @@ def run(cfg: config.Config) -> Result:
     if not app:
         return blocked(
             "No app record for %s" % bundle_id,
-            "App creation is the one step genuinely absent from Apple's public API — about two "
-            "minutes by hand:\n"
-            "1. My Apps → ＋ → New App\n"
-            "2. Platform iOS. Name: must be unique across the whole App Store.\n"
-            "3. Bundle ID: pick %s from the dropdown\n"
-            "4. SKU: any internal identifier." % bundle_id,
+            "Create it by hand — Apple has no API for this.\n"
+            "  My Apps → ＋ → New App → iOS, pick %s from the Bundle ID dropdown." % bundle_id,
             data={"bundle_id": bundle_id}, links=[APPS_LINK])
 
     builds: List[Dict[str, Any]] = app.get("builds") or []
@@ -79,8 +75,8 @@ def run(cfg: config.Config) -> Result:
 
     if not builds:
         return fail("The app record exists but holds no builds",
-                    "Nothing has been uploaded for %s yet. `Tools/ship release` does that."
-                    % bundle_id, data=data, links=links)
+                    "Nothing uploaded yet. `Tools/ship release` does that.",
+                    data=data, links=links)
 
     latest = builds[0]
     name = "Build %s (%s)" % (latest["version"], latest["train"] or "?")
@@ -89,8 +85,8 @@ def run(cfg: config.Config) -> Result:
     # it looks identical to success everywhere else.
     group_note = ""
     if not internal:
-        group_note = ("\n\nThere is no internal TestFlight group, so even a ready build reaches "
-                      "nobody.\n  Tools/ship fix beta_group")
+        group_note = "\n\nNo internal group, so a ready build reaches nobody:\n"\
+                     "  Tools/ship fix beta_group"
 
     # processingState is Apple's scan; internalBuildState is whether a tester can
     # actually install it. They disagree in the case that matters most: a build
@@ -99,38 +95,35 @@ def run(cfg: config.Config) -> Result:
     beta = latest["beta_state"]
     if beta == "MISSING_EXPORT_COMPLIANCE":
         return fail("%s is waiting on an export compliance answer" % name,
-                    "It uploaded and processed fine and no tester can install it. Answer it "
-                    "once in the build's page — or, better, declare it at build time so it never "
-                    "happens again:\n  Tools/ship fix encryption",
+                    "Answer it on the build's page. To stop it recurring:\n"
+                    "  Tools/ship fix encryption",
                     data=data, links=links)
     if beta in ("READY_FOR_BETA_TESTING", "IN_BETA_TESTING"):
         return ok("%s is ready to test" % name,
-                  "Open the TestFlight app on the phone, signed in with the same Apple ID.%s"
+                  "Open TestFlight on the phone, signed in with the same Apple ID.%s"
                   % group_note, data=data, links=links)
     if beta == "EXPIRED":
         return fail("%s has expired" % name,
-                    "TestFlight builds expire ninety days after upload. Ship a new one.",
+                    "TestFlight builds expire ninety days after upload.",
                     data=data, links=links)
 
     state = latest["state"]
     if state == "PROCESSING":
         return ok("%s is still processing" % name,
-                  "Apple is scanning it — usually a few minutes. Ask again shortly.%s"
+                  "Apple is scanning it — usually a few minutes.%s"
                   % group_note, data=data, links=links)
     if state == "FAILED":
         return fail("%s failed processing" % name,
-                    "Apple rejected the binary after upload. The reason was emailed to the "
-                    "developer account address — it is in no local log.",
+                    "The reason was emailed to the developer account — it is in no local log.",
                     data=data, links=links)
     if state == "INVALID":
         return fail("%s is invalid" % name,
-                    "Usually an entitlement the provisioning profile does not carry, or a "
-                    "missing Info.plist value. The TestFlight tab carries the specific "
-                    "complaint.", data=data, links=links)
+                    "Usually a missing entitlement or Info.plist value. The TestFlight tab "
+                    "has the specific complaint.", data=data, links=links)
     if state == "VALID":
         # VALID with an unrecognised beta state: report both rather than
         # inventing a verdict from the half we understand.
         return ok("%s processed (%s)" % (name, beta or "no beta state reported"),
-                  "Apple's scan passed. Whether a tester can install it is the beta state above."
+                  "Apple's scan passed; the beta state above decides whether it is installable."
                   + group_note, data=data, links=links)
     return ok("%s: %s" % (name, state or "unknown"), data=data, links=links)

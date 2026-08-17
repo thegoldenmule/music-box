@@ -87,18 +87,23 @@ def header(facts: preflight.Facts, rows: List) -> None:
     out(RULE)
 
 
+# Steps that get their own guided conversation below. Printing the row's
+# guidance as well would say the same thing twice in two different voices.
+GUIDED = {"asc_key"}
+
+
 def show(action: nextstep.Action) -> None:
     label = {"run": ("36", "NEXT"), "wait": ("33", "WAIT"),
              "manual": ("33", "YOU"), "done": ("32", "DONE")}.get(action.kind, ("0", "NEXT"))
     out("")
     out("  %s  %s" % (_c(label[0], label[1]), bold(action.title)))
-    if action.why:
+    if action.why and action.id not in GUIDED:
         out("")
         for line in action.why.split("\n"):
             out("  " + line)
-    for link in action.links:
-        out("")
-        out("  " + dim("↗ %s  %s" % (link.label, link.url)))
+    if action.id not in GUIDED:
+        for link in action.links:
+            out("  " + dim("↗ %s" % link.url))
 
 
 # ── running a step ────────────────────────────────────────────────────────────
@@ -140,9 +145,6 @@ def walk_asc_key(cfg: config.Config) -> bool:
     from . import auth
 
     creds = cfg.asc_credentials()
-    out("")
-    out("  " + bold("Setting up the App Store Connect API key"))
-
     if not creds["key_id"] or not os.path.exists(creds["key_path"] or ""):
         candidates = find_keys()
         if candidates:
@@ -166,13 +168,10 @@ def walk_asc_key(cfg: config.Config) -> bool:
                 candidates = []
         if not candidates:
             out("")
-            out("  Apple has to mint the key — nothing here can do it:")
-            out("    1. Users and Access → Integrations → ＋")
-            out("    2. Any name. Role: App Manager reads state and uploads;")
-            out("       Admin is what cloud signing needs, and the role cannot be")
-            out("       changed afterwards.")
-            out("    3. Generate → Download. Apple lets you download it once.")
-            answer = ask("Open that page now? [Y/n/q]", "y").lower()
+            out("  Make one: Users and Access → Integrations → ＋")
+            out("  " + dim("Role: App Manager. Admin if cloud signing needs to mint a "
+                           "certificate — the role cannot be changed later."))
+            answer = ask("Open that page? [Y/n/q]", "y").lower()
             if answer.startswith("q"):
                 return False
             if answer.startswith("y"):
@@ -189,9 +188,8 @@ def walk_asc_key(cfg: config.Config) -> bool:
 
     if not cfg.asc_credentials()["issuer_id"]:
         out("")
-        out("  The Issuer ID is not in the key file. It is at the top of the same")
-        out("  page, with a Copy button — a UUID like 69a6de78-1234-....")
-        answer = ask("Paste it (blank to skip):")
+        out("  " + dim("The Issuer ID is the UUID at the top of the API keys page."))
+        answer = ask("Issuer ID (blank to skip):")
         if answer in ("", "q"):
             return False
         result = auth.set_issuer(cfg, answer)

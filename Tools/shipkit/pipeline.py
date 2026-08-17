@@ -161,8 +161,7 @@ class Run:
         if blocking:
             manual = all(row.manual and not row.fix for row in blocking)
             message = "Preflight failed: %s" % ", ".join(row.label for row in blocking)
-            guidance = ("Each failing row above carries its steps; `Tools/ship fix <id>` handles "
-                        "the repairable ones. --skip-preflight builds anyway.")
+            guidance = "Each row above carries its steps. --skip-preflight builds anyway."
             result = (blocked(message, guidance) if manual else fail(message, guidance))
             return self.failed("preflight", result)
         # WARN, not "anything but ok": a `skip` row means this is not a git
@@ -172,8 +171,7 @@ class Run:
         if dirty and self.upload and not self.args.allow_dirty:
             return self.failed("preflight", fail(
                 "The working tree has uncommitted changes",
-                "A build uploaded from a dirty tree cannot be reproduced: the commit recorded "
-                "against it is not the code that shipped. Commit first, or pass --allow-dirty."))
+                "Commit first, or pass --allow-dirty."))
         self.record("preflight", ok("%d checks" % len(rows)))
         return None
 
@@ -324,8 +322,7 @@ class Run:
                 return None
             return self.failed("verify_export", fail(
                 "The export produced no .ipa",
-                "Nothing landed in %s. The export log is the place to look."
-                % os.path.join(self.cfg.build_dir, "export")))
+                "Nothing landed in %s." % os.path.join(self.cfg.build_dir, "export")))
         say("")
         say("── verify the export ──")
         result = verify.run(self.cfg, ipa, self.facts.settings, self.build_number)
@@ -345,11 +342,10 @@ class Run:
         if not (creds["key_id"] and creds["issuer_id"] and creds["key_path"]):
             return self.failed("upload", blocked(
                 "Uploading needs an App Store Connect API key",
-                "The .ipa is built, signed and verified at %s — nothing is lost.\n"
+                "The .ipa is built and verified at %s — nothing is lost.\n"
                 "  Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
                 "  Tools/ship auth set-issuer <uuid>\n"
-                "Then `Tools/ship upload` sends this same file.\n"
-                "Or upload it through Xcode's Organizer by hand." % ipa))
+                "Then `Tools/ship upload` sends this same file." % ipa))
         # altool finds the .p8 by searching a fixed set of directories; naming
         # the one the key actually lives in is unambiguous and works wherever
         # the credentials came from.
@@ -365,8 +361,8 @@ class Run:
             diagnosis = classify.classify(result.out, self.context)
             return self.failed("upload", fail(
                 diagnosis.title,
-                "%s\n\nThe .ipa is still at %s — `Tools/ship upload` retries without rebuilding."
-                "\n\nFull log: %s" % (diagnosis.guidance, ipa, result.log),
+                "%s\n\nThe .ipa is still at %s — `Tools/ship upload` retries without "
+                "rebuilding.\nLog: %s" % (diagnosis.guidance, ipa, result.log),
                 links=diagnosis.links, blocked=diagnosis.manual), result.log)
         self.record("upload", ok("Uploaded %s" % os.path.basename(ipa)), result.log)
         return None
@@ -396,10 +392,8 @@ def run(cfg: config.Config, args, upload: bool) -> Result:
     if upload and getattr(args, "unsigned_archive", False) and args.upload_with == "xcodebuild":
         return fail(
             "--unsigned-archive cannot be combined with --upload-with xcodebuild",
-            "An unsigned archive carries no entitlements, so the export has to restore them and "
-            "the check on the exported binary is what proves it did. Uploading from inside the "
-            "export step means the build reaches Apple before anything can look at it.\n"
-            "Drop one of the two flags.")
+            "An unsigned archive carries no entitlements, and uploading from inside the export "
+            "step means nothing checks the result. Drop one of the two flags.")
     if not os.path.isdir(cfg.build_dir):
         os.makedirs(cfg.build_dir, exist_ok=True)
     pipeline = Run(cfg, args, upload)
@@ -425,14 +419,12 @@ def run(cfg: config.Config, args, upload: bool) -> Result:
 
     if not upload:
         return ok("Signed .ipa exported",
-                  "It is at %s, verified against what the project declares.\n"
-                  "`Tools/ship upload` sends this same file to TestFlight."
+                  "%s\n`Tools/ship upload` sends this same file to TestFlight."
                   % (pipeline.exported_ipa() or os.path.join(cfg.build_dir, "export")),
                   data=pipeline.data())
     return ok("Build %s uploaded to App Store Connect" % pipeline.build_number,
               "Apple processes it in a few minutes.\n"
-              "  Tools/ship status      — has it finished, and can anyone install it\n"
-              "Then: the TestFlight app on the phone, signed in with the same Apple ID.",
+              "  Tools/ship status",
               data=pipeline.data(), links=[APPS_LINK, TESTFLIGHT_APP])
 
 
@@ -465,5 +457,4 @@ def upload_only(cfg: config.Config, args) -> Result:
     if failure is not None:
         return failure
     return ok("Build %s uploaded to App Store Connect" % pipeline.build_number,
-              "  Tools/ship status — has it finished processing, and can anyone install it",
-              data=pipeline.data(), links=[APPS_LINK, TESTFLIGHT_APP])
+              "  Tools/ship status", data=pipeline.data(), links=[APPS_LINK, TESTFLIGHT_APP])

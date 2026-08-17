@@ -83,28 +83,24 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
     # 2. Credentials. Not a failure — the pipeline runs on an Xcode session —
     #    but without them nothing can be checked before a build or read after
     #    one, so every later step is guesswork.
-    # A network outage is not a missing key. Both surface as a warning on the
-    # same row, and telling someone to go and create a key they already have —
-    # as a `manual` action, which the contract says retrying cannot help — is
-    # the wrong answer to a problem that fixes itself.
+    #
+    #    An outage is not a missing key, though both land on the same row.
+    #    Telling someone to create a key they already have, as a `manual` action
+    #    the contract says retrying cannot help, is the wrong answer to a
+    #    problem that fixes itself.
     if facts.asc_blocked == "App Store Connect unreachable":
         return Action("unreachable", "App Store Connect is unreachable",
-                      "The key is configured; Apple did not answer.\n%s\n\nNothing here is "
-                      "broken — try again shortly." % facts.asc_error,
+                      "%s\nNothing is broken — try again shortly." % facts.asc_error,
                       kind="wait", command="Tools/ship doctor")
 
     key_row = by_id.get("asc_key")
     if (key_row is not None and key_row.status == WARN
             and not facts.cfg.has_asc_key() and not facts.cfg.skip_asc_key):
         action = _from_row(key_row)
-        # It is genuinely optional, so this must not be a dead end: without an
-        # opt-out, `next` would return this same manual step forever and could
-        # never reach `done` on a machine that will never have a key.
-        action.why += (
-            "\n\nIf you would rather not: `Tools/ship release` works without a key — xcodebuild "
-            "rides your Xcode login session. What you lose is every check that happens before "
-            "the build and every answer after it, including `Tools/ship status`.\n"
-            "To stop being asked, put \"skip_asc_key\": true in %s." % facts.cfg.config_path)
+        # Genuinely optional, so this must not be a dead end: without an
+        # opt-out, `next` returns this same step forever and can never reach
+        # `done` on a machine that will never have a key.
+        action.why += "\n\nOptional — skip it and `release` still works, using your Xcode session."
         return action
 
     # 3. The cheap things that are painful later.
@@ -124,24 +120,19 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
             beta = latest.get("beta_state", "")
             if latest.get("state") == "PROCESSING" or beta == "PROCESSING":
                 return Action("wait", "Build %s is processing" % latest["version"],
-                              "Apple is scanning the build already uploaded from this project. "
-                              "Nothing to do but let it finish — wait a few minutes before "
-                              "asking again. `Tools/ship status` reports the same thing without "
-                              "changing it.",
+                              "Apple is scanning it. Usually a few minutes.",
                               kind="wait", command="Tools/ship status")
             if beta == "MISSING_EXPORT_COMPLIANCE":
                 return Action("compliance",
                               "Build %s is waiting on export compliance" % latest["version"],
-                              "It uploaded and processed and no tester can install it. Declaring "
-                              "the key in the Info.plist stops it recurring; this build still "
-                              "needs the answer given once in the console.",
+                              "Answer it once in the build's page — no tester can install it "
+                              "until you do.",
                               kind="manual",
                               links=[Link("Open My Apps",
                                           "https://appstoreconnect.apple.com/apps")])
             if beta in ("READY_FOR_BETA_TESTING", "IN_BETA_TESTING"):
                 return Action("done", "Build %s is ready to test" % latest["version"],
-                              "Nothing left for this tool to do. Open the TestFlight app on the "
-                              "phone, signed in with the same Apple ID.",
+                              "Open TestFlight on the phone, signed in with the same Apple ID.",
                               kind="done",
                               links=[Link("TestFlight for iPhone",
                                           "https://apps.apple.com/app/testflight/id899247664")])
@@ -151,14 +142,11 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
     git_row = by_id.get("git")
     if git_row is not None and git_row.status == WARN:
         return Action("commit", "Commit the working tree",
-                      "A build uploaded from a dirty tree cannot be reproduced: the commit "
-                      "recorded against it is not the code that shipped.\n%s" % git_row.detail,
-                      kind="manual")
+                      "%s — a build from a dirty tree cannot be reproduced later."
+                      % git_row.detail, kind="manual")
 
     return Action("release", "Ship it",
-                  "Everything that can be checked in advance passes. This runs the package "
-                  "tests, bumps the build number, archives, reads the result back out of the "
-                  "artifact, and uploads.",
+                  "Tests, bump, archive, verify, export, upload. Takes a few minutes.",
                   kind="run", command="Tools/ship release")
 
 

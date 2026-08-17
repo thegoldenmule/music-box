@@ -92,9 +92,7 @@ def check_identity(built: Dict[str, Any], settings: Dict[str, str]) -> Row:
     want = settings.get("PRODUCT_BUNDLE_IDENTIFIER", "")
     if want and got != want:
         return Row("identity", "Bundle identifier", FAIL, "%s (project says %s)" % (got, want),
-                   "The artifact is not this project's app, or an override changed the "
-                   "identifier. A bundle identifier cannot be changed after launch — it carries "
-                   "the MusicKit capability, the entitlements and the listing.")
+                   "This artifact is not this project's app.")
     return Row("identity", "Bundle identifier", OK, got or "absent")
 
 
@@ -105,16 +103,14 @@ def check_version(built: Dict[str, Any], settings: Dict[str, str],
     detail = "%s (%s)" % (build or "absent", short or "absent")
     if not build or not short:
         return Row("version", "Version numbers", FAIL, detail,
-                   "Both are required. With GENERATE_INFOPLIST_FILE on they come from "
-                   "CURRENT_PROJECT_VERSION and MARKETING_VERSION — and note that writing them "
-                   "into a partial Info.plist does not work: the generator claims both keys and "
-                   "silently overwrites whatever is there.")
+                   "Both come from CURRENT_PROJECT_VERSION and MARKETING_VERSION. Writing "
+                   "them into a partial Info.plist does not work — the generator overwrites "
+                   "them.")
     if expected_build and build != expected_build:
         return Row("version", "Version numbers", FAIL,
                    "%s, expected %s" % (detail, expected_build),
-                   "The number that reached the binary is not the number this build asked for. "
-                   "The usual cause is a conditional CURRENT_PROJECT_VERSION in the project "
-                   "file taking precedence over the plain one.")
+                   "Usually a conditional CURRENT_PROJECT_VERSION taking precedence over the "
+                   "plain one.")
     return Row("version", "Version numbers", OK, detail)
 
 
@@ -123,10 +119,8 @@ def check_floor(built: Dict[str, Any], settings: Dict[str, str]) -> Row:
     want = settings.get("IPHONEOS_DEPLOYMENT_TARGET", "")
     if want and got != want:
         return Row("floor", "Minimum OS in the binary", FAIL, "%s, project says %s" % (got, want),
-                   "This is the failure that hides: a deployment target written in the "
-                   "conditional form is accepted and then resolves to the SDK's own default. "
-                   "The binary refuses to install on anything below the value above, and "
-                   "nothing in the build output says so.")
+                   "The binary refuses to install below the value above. Usually a "
+                   "conditional IPHONEOS_DEPLOYMENT_TARGET resolving to the SDK default.")
     return Row("floor", "Minimum OS in the binary", OK, "iOS %s" % (got or "absent"))
 
 
@@ -154,16 +148,12 @@ def check_declared_keys(built: Dict[str, Any], source_plist: Dict[str, Any],
     if missing:
         return Row("declared", "Declared Info.plist keys", FAIL,
                    "%d of %d missing" % (len(missing), len(source_plist)),
-                   "Declared in the source Info.plist and absent from the built app: %s.\n"
-                   "A key can be accepted and then dropped without any warning — that is why "
-                   "this reads the artifact rather than the settings.%s"
+                   "Declared in the source and absent from the built app: %s.%s"
                    % (", ".join(missing), _stale_note(stale)))
     if differing:
         return Row("declared", "Declared Info.plist keys", WARN,
                    "%d changed in the build" % len(differing),
-                   "Present but different from the source: %s. Sometimes correct (the generator "
-                   "merges), sometimes an override you did not intend."
-                   % ", ".join(differing))
+                   "Different from the source: %s." % ", ".join(differing))
     return Row("declared", "Declared Info.plist keys", OK,
                "%d present" % len(source_plist))
 
@@ -173,8 +163,7 @@ def check_encryption(built: Dict[str, Any]) -> Row:
         value = built["ITSAppUsesNonExemptEncryption"]
         return Row("encryption", "Export compliance", OK, "declared %s" % bool(value))
     return Row("encryption", "Export compliance", WARN, "not declared in the binary",
-               "This build will land in TestFlight as 'Missing Compliance' — processed, and "
-               "undistributable until someone answers the question by hand.\n"
+               "It will land in TestFlight as 'Missing Compliance'.\n"
                "  Tools/ship fix encryption")
 
 
@@ -185,14 +174,12 @@ def check_signature(app: str, entitlements: Dict[str, Any], kind: str) -> Row:
     if "not signed" in signed.out:
         status = SKIP if kind == "archive" else FAIL
         return Row("signed", "Code signature", status, "not signed",
-                   "An unsigned archive is expected — export applies the only signature that "
-                   "matters. An unsigned *export* is not: it cannot be installed or uploaded."
+                   "Expected — export applies the signature that matters."
                    if kind == "archive" else
-                   "The exported app carries no signature. It cannot be uploaded.")
+                   "It cannot be installed or uploaded.")
     return Row("signed", "Code signature", WARN, "signed, no entitlements readable",
-               "`codesign -d --entitlements` returned nothing. The bundle is signed but carries "
-               "no entitlements at all — which is what an archive built with "
-               "CODE_SIGNING_ALLOWED=NO produces, and what silently drops iCloud.")
+               "Signed, but carrying no entitlements — what CODE_SIGNING_ALLOWED=NO "
+               "produces, and what silently drops iCloud.")
 
 
 def check_entitlements(entitlements: Dict[str, Any], source: Dict[str, Any], kind: str) -> Row:
@@ -209,29 +196,24 @@ def check_entitlements(entitlements: Dict[str, Any], source: Dict[str, Any], kin
         status = SKIP if kind == "archive" else FAIL
         return Row("entitlements", "Entitlements survived", status,
                    "none in the artifact",
-                   "Nothing to compare yet — the archive is unsigned and export applies the "
-                   "signature." if kind == "archive" else
-                   "The source file declares %d entitlements and the signed app has none. An "
-                   "app store build with no entitlements has no CloudKit container and no push; "
-                   "it will install and then fail at runtime in ways no log explains."
-                   % len(source))
+                   "Nothing to compare yet — export applies the signature."
+                   if kind == "archive" else
+                   "The source declares %d and the signed app has none: no CloudKit container, "
+                   "no push, failing at runtime with nothing in any log." % len(source))
     # aps-environment is excluded on purpose: its value comes from the profile's
     # allowlist, never from the source file, and check_push asserts it properly.
     missing = [key for key in source if key not in entitlements and key != "aps-environment"]
     if missing:
         return Row("entitlements", "Entitlements survived", FAIL,
                    "%d of %d missing" % (len(missing), len(source)),
-                   "Declared in the source entitlements and absent from the signature: %s.\n"
-                   "The provisioning profile is a superset and proves nothing here — only the "
-                   "signature does." % ", ".join(missing))
+                   "Absent from the signature: %s." % ", ".join(missing))
     changed = [key for key in source
                if key != "aps-environment" and entitlements.get(key) != source[key]]
     if changed:
         return Row("entitlements", "Entitlements survived", WARN,
                    "%d rewritten during signing" % len(changed),
-                   "Present with a different value: %s. Some of this is normal — the App Store "
-                   "profile adds beta-reports-active and clears get-task-allow — but a changed "
-                   "iCloud container identifier is not." % ", ".join(changed))
+                   "Changed during signing: %s. Normal for beta-reports-active and "
+                   "get-task-allow; not for an iCloud container." % ", ".join(changed))
     return Row("entitlements", "Entitlements survived", OK, "%d present" % len(source))
 
 
@@ -253,18 +235,14 @@ def check_push(entitlements: Dict[str, Any], source: Dict[str, Any], kind: str) 
         return Row("push", "Push environment", OK, "production")
     if not value:
         return Row("push", "Push environment", FAIL, "absent",
-                   "The source entitlements ask for push and the signed app has no "
-                   "aps-environment. The profile does not carry the capability — enable Push "
-                   "Notifications on the App ID and let signing regenerate the profile.")
+                   "The profile does not carry it — enable Push Notifications on the App ID.")
     if kind == "archive":
         return Row("push", "Push environment", SKIP, "%s (archive, pre-export)" % value,
-                   "An archive is signed for development. The value that matters is the one in "
-                   "the exported build.")
+                   "The value that matters is the one in the exported build.")
     return Row("push", "Push environment", FAIL, value,
-               "An App Store build must carry `production`. Apple rejects the upload otherwise "
-               "(ITMS-90164). Do NOT fix this by editing the entitlements file — that breaks "
-               "development builds. It means the export signed with a development profile: "
-               "check that exportOptions says method app-store-connect.")
+               "An App Store build must carry `production` or Apple rejects it (ITMS-90164). "
+               "Do NOT edit the entitlements file — the export signed with a development "
+               "profile.")
 
 
 def check_profile(app: str, kind: str) -> Row:
@@ -280,9 +258,8 @@ def check_profile(app: str, kind: str) -> Row:
     if devices is not None:
         return Row("profile", "Provisioning profile", FAIL if kind != "archive" else SKIP,
                    "%s · %d devices" % (name, len(devices)),
-                   "A profile with a device list is a development or ad-hoc profile. An App "
-                   "Store distribution profile has no device list at all — which is also why "
-                   "it can be minted for a team with nothing registered.")
+                   "A device list means a development or ad-hoc profile; a distribution "
+                   "profile has none.")
     return Row("profile", "Provisioning profile", OK, "%s · expires %s" % (name, expires))
 
 
@@ -323,14 +300,13 @@ def run(cfg: config.Config, path: Optional[str] = None, settings: Optional[Dict[
     target = path or latest_artifact(cfg)
     if not target:
         return fail("Nothing to verify",
-                    "No .ipa or .xcarchive under %s. Pass a path, or run `Tools/ship build` "
-                    "first." % cfg.build_dir)
+                    "Nothing under %s. Pass a path, or run `Tools/ship build` first."
+                    % cfg.build_dir)
     if not os.path.exists(target):
         return fail("No such artifact: %s" % target)
     app, kind = resolve_app(target, os.path.join(cfg.build_dir, "verify"))
     if not app or not os.path.isdir(app):
-        return fail("Could not find an app inside %s" % target,
-                    "Expected a .app, a .ipa containing Payload/<name>.app, or an .xcarchive.")
+        return fail("Could not find an app inside %s" % target)
     if settings is None:
         settings = xcode.build_settings(cfg.xcodeproj, cfg.scheme, cfg.configuration)
     rows = rows_for(cfg, app, kind, settings, expected_build)
