@@ -53,6 +53,20 @@ class Ordering(unittest.TestCase):
         self.assertEqual(action.kind, "manual")
         self.assertEqual(action.command, "")
 
+    def test_the_key_can_be_declined_so_the_loop_can_finish(self) -> None:
+        # Without an opt-out `next` returns the same manual step forever on a
+        # machine that will never have a key, and can never reach `done`.
+        f = facts()
+        f.cfg.skip_asc_key = True
+        action = nextstep.decide(f, rows(asc_key=(WARN, "")))
+        self.assertEqual(action.id, "release")
+
+    def test_declining_the_key_does_not_skip_real_failures(self) -> None:
+        f = facts()
+        f.cfg.skip_asc_key = True
+        action = nextstep.decide(f, rows(asc_key=(WARN, ""), app_record=(FAIL, "")))
+        self.assertEqual(action.id, "app_record")
+
     def test_credentials_come_before_optional_repairs(self) -> None:
         # Without a key nothing can be checked before a build or read after one,
         # so every later decision would be made blind.
@@ -91,7 +105,9 @@ class InFlight(unittest.TestCase):
     def test_waits_while_apple_is_processing(self) -> None:
         action = nextstep.decide(facts(app=self.build(state="PROCESSING")), rows())
         self.assertEqual(action.id, "wait")
-        self.assertEqual(action.command, "Tools/ship status")
+        # NOT kind "run": its command only reports, so a driver that ran it in a
+        # loop would spin against Apple's processing queue and never advance.
+        self.assertEqual(action.kind, "wait")
 
     def test_a_ready_build_terminates_the_loop(self) -> None:
         action = nextstep.decide(

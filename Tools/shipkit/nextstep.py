@@ -43,7 +43,14 @@ class Action:
     id: str
     title: str
     why: str
-    # "run" — this tool can do it; "manual" — a human must; "done" — nothing left.
+    # What the caller should do with it:
+    #   run     this tool can do it — run `command`, then ask again
+    #   wait    nothing to do but let time pass — sleep, then ask again. Distinct
+    #           from `run` because the command here only *reports*; running it in
+    #           a tight loop is how a driver spins forever against Apple's
+    #           processing queue.
+    #   manual  a human must act; asking again changes nothing until they do
+    #   done    nothing left for this tool
     kind: str = "run"
     command: str = ""
     links: List[Link] = dataclasses.field(default_factory=list)
@@ -77,14 +84,16 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
     #    but without them nothing can be checked before a build or read after
     #    one, so every later step is guesswork.
     key_row = by_id.get("asc_key")
-    if key_row is not None and key_row.status == WARN:
+    if key_row is not None and key_row.status == WARN and not facts.cfg.skip_asc_key:
         action = _from_row(key_row)
-        # It is genuinely optional, so this must not be a dead end. A loop that
-        # stops here has to leave the human a way forward that is not "give up".
-        action.why += ("\n\nIf you would rather not: `Tools/ship release` works without a key — "
-                       "xcodebuild rides your Xcode login session. What you lose is every check "
-                       "that happens before the build and every answer after it, including "
-                       "`Tools/ship status`.")
+        # It is genuinely optional, so this must not be a dead end: without an
+        # opt-out, `next` would return this same manual step forever and could
+        # never reach `done` on a machine that will never have a key.
+        action.why += (
+            "\n\nIf you would rather not: `Tools/ship release` works without a key — xcodebuild "
+            "rides your Xcode login session. What you lose is every check that happens before "
+            "the build and every answer after it, including `Tools/ship status`.\n"
+            "To stop being asked, put \"skip_asc_key\": true in %s." % facts.cfg.config_path)
         return action
 
     # 3. The cheap things that are painful later.
@@ -105,8 +114,10 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
             if latest.get("state") == "PROCESSING" or beta == "PROCESSING":
                 return Action("wait", "Build %s is processing" % latest["version"],
                               "Apple is scanning the build already uploaded from this project. "
-                              "Ask again in a few minutes.",
-                              kind="run", command="Tools/ship status")
+                              "Nothing to do but let it finish — wait a few minutes before "
+                              "asking again. `Tools/ship status` reports the same thing without "
+                              "changing it.",
+                              kind="wait", command="Tools/ship status")
             if beta == "MISSING_EXPORT_COMPLIANCE":
                 return Action("compliance",
                               "Build %s is waiting on export compliance" % latest["version"],

@@ -25,7 +25,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import asc, config, proc, xcode
-from .report import (FAIL, OK, SKIP, WARN, Link, Result, Row, blocked, fail, ok, say)
+from .report import (FAIL, OK, SKIP, WARN, Link, Result, Row, blocked, fail, ok, say, usage)
 
 XCODE_LINK = Link("Xcode on the App Store", "https://apps.apple.com/app/xcode/id497799835")
 KEY_LINK = Link("Create API key", "https://appstoreconnect.apple.com/access/integrations/api")
@@ -146,7 +146,8 @@ def check_project(facts: Facts) -> Row:
         return Row("project", "Project and scheme", FAIL, facts.cfg.scheme,
                    "xcodebuild could not resolve scheme '%s' in %s.\nAvailable: %s"
                    % (facts.cfg.scheme, facts.cfg.xcodeproj,
-                      ", ".join(xcode.schemes(facts.cfg.xcodeproj)) or "none"))
+                      ", ".join(xcode.schemes(facts.cfg.xcodeproj)) or "none"),
+                   manual=True)
     problems = []
     if not facts.bundle_id:
         problems.append("no bundle identifier")
@@ -157,7 +158,7 @@ def check_project(facts: Facts) -> Row:
     if problems:
         return Row("project", "Project and scheme", FAIL, detail,
                    "Set it in Xcode: target → Signing & Capabilities. Missing: %s."
-                   % ", ".join(problems))
+                   % ", ".join(problems), manual=True)
     return Row("project", "Project and scheme", OK, detail)
 
 
@@ -188,13 +189,13 @@ def check_floor(facts: Facts) -> Row:
                    "accepts that and then resolves it to the SDK default — the declared value "
                    "never takes effect, and the shipped binary refuses to install below the "
                    "current SDK.\nSet it unconditionally in Xcode (target → General → Minimum "
-                   "Deployments) and check this row again." % conditional[0])
+                   "Deployments) and check this row again." % conditional[0], manual=True)
     if values and resolved and resolved not in values:
         return Row("floor", "Deployment target", FAIL, "resolved %s, project says %s"
                    % (resolved, ", ".join(values)),
                    "The project file and the resolved build setting disagree. Something is "
                    "overriding it — an xcconfig, or a target-level setting shadowing the "
-                   "project-level one. The resolved value is what ships.")
+                   "project-level one. The resolved value is what ships.", manual=True)
     return Row("floor", "Deployment target", OK, "iOS %s" % (resolved or ", ".join(values)))
 
 
@@ -224,7 +225,7 @@ def check_info_plist(facts: Facts) -> Row:
                 missing.append("%s → %s (%s)" % (key, value, why))
     if missing:
         return Row("plist", "Info.plist keys", FAIL, os.path.basename(path),
-                   "Missing from %s:\n  %s" % (path, "\n  ".join(missing)))
+                   "Missing from %s:\n  %s" % (path, "\n  ".join(missing)), manual=True)
     return Row("plist", "Info.plist keys", OK,
                "%s · %s" % (os.path.basename(path),
                             ", ".join(facts.info_plist.get("UIBackgroundModes") or [])))
@@ -739,8 +740,10 @@ def apply_fix(cfg: config.Config, fix_id: Optional[str]) -> Result:
         return ok("Repairable rows", "\n".join("  %s" % name for name in sorted(FIXES)),
                   data={"fixes": sorted(FIXES)})
     if fix_id not in FIXES:
-        return fail("No fix called '%s'" % fix_id,
-                    "Repairable rows: %s" % ", ".join(sorted(FIXES)),
-                    data={"fixes": sorted(FIXES)})
+        # A usage error, not a failure: nothing was attempted and the fix is to
+        # the command line, not to the project.
+        return usage("No fix called '%s'" % fix_id,
+                     "Repairable rows: %s" % ", ".join(sorted(FIXES)),
+                     data={"fixes": sorted(FIXES)})
     facts = gather(cfg, offline=False)
     return FIXES[fix_id](facts)

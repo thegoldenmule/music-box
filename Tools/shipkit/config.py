@@ -146,6 +146,10 @@ class Config:
     # lets `doctor` say "the build will land nowhere" before the upload rather
     # than after.
     beta_group: str = "Internal"
+    # An explicit "I am not going to configure an API key". Without it `next`
+    # would return the same manual step forever on a machine that will never
+    # have one, and could never reach a terminal state.
+    skip_asc_key: bool = False
     extra: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
@@ -281,6 +285,7 @@ class Config:
             "scheme": self.scheme,
             "configuration": self.configuration,
             "beta_group": self.beta_group,
+            "skip_asc_key": self.skip_asc_key,
         }
         payload.update(self.extra)
         with open(self.config_path, "w", encoding="utf-8") as handle:
@@ -308,7 +313,7 @@ def load(start: Optional[str] = None, xcodeproj: Optional[str] = None,
     if project and not os.path.isabs(project):
         project = os.path.join(root, project)
     name = os.path.basename(project)[: -len(".xcodeproj")] if project else ""
-    known = {"xcodeproj", "scheme", "configuration", "beta_group", "build_dir"}
+    known = {"xcodeproj", "scheme", "configuration", "beta_group", "build_dir", "skip_asc_key"}
     return Config(
         root=root,
         xcodeproj=project,
@@ -317,5 +322,6 @@ def load(start: Optional[str] = None, xcodeproj: Optional[str] = None,
         build_dir=stored.get("build_dir") or (os.path.join(os.path.dirname(project), "build", "ship")
                                               if project else os.path.join(root, "build", "ship")),
         beta_group=stored.get("beta_group") or "Internal",
+        skip_asc_key=bool(stored.get("skip_asc_key", False)),
         extra={k: v for k, v in stored.items() if k not in known},
     )

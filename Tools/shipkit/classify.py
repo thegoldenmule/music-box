@@ -95,6 +95,7 @@ RULES: List[Rule] = [
         "3. Run the release again.\n"
         "An App Manager API key can also mint one during export — a Developer-role key cannot.",
         [Link("Open Xcode", "/Applications/Xcode.app")],
+        manual=True,
     ),
     Rule(
         "cloud_signing_permission",
@@ -109,6 +110,7 @@ RULES: List[Rule] = [
         "Or sidestep it: with a distribution certificate already in the keychain and a signed-in "
         "Xcode session, nothing needs to be minted in the cloud.",
         [INTEGRATIONS],
+        manual=True,
     ),
     Rule(
         "redundant_binary",
@@ -147,6 +149,7 @@ RULES: List[Rule] = [
         "If the log names aps-environment, check `Tools/ship verify` output: an App Store export "
         "must end up with `production`, whatever the source entitlements file says.",
         [IDENTIFIERS],
+        manual=True,
     ),
     Rule(
         "signing_conflict",
@@ -177,6 +180,7 @@ RULES: List[Rule] = [
         "configure an API key, which works headless and does not expire the way a login session "
         "does:\n  Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8",
         [INTEGRATIONS],
+        manual=True,
     ),
     Rule(
         "asc_auth",
@@ -188,6 +192,7 @@ RULES: List[Rule] = [
         "anything is built, because a wrong-team key answers every other question truthfully "
         "about the wrong team.",
         [INTEGRATIONS],
+        manual=True,
     ),
     Rule(
         "asset_validation",
@@ -198,6 +203,7 @@ RULES: List[Rule] = [
         "back out of the built artifact, which catches the Info.plist family of these before an "
         "upload rather than after.",
         [APPS],
+        manual=True,
     ),
     Rule(
         "network",

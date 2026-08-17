@@ -136,17 +136,23 @@ class Result:
     links: List[Link] = dataclasses.field(default_factory=list)
     data: Dict[str, Any] = dataclasses.field(default_factory=dict)
     blocked: bool = False
+    # The caller asked for something that does not exist. Distinct from a
+    # failure: nothing was attempted, and the invocation is what needs changing.
+    usage: bool = False
 
     @property
     def exit_code(self) -> int:
         if self.ok:
             return EXIT_OK
+        if self.usage:
+            return EXIT_USAGE
         return EXIT_BLOCKED if self.blocked else EXIT_FAIL
 
     def as_dict(self, command: str = "") -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "ok": self.ok,
             "blocked": self.blocked,
+            "usage": self.usage,
             "title": self.title,
             "guidance": self.guidance,
             "links": [l.as_dict() for l in self.links],
@@ -171,6 +177,13 @@ def blocked(title: str, guidance: str = "", data: Optional[Dict[str, Any]] = Non
             links: Optional[List[Link]] = None) -> Result:
     """A human has to do something. Distinct from failure: retrying won't help."""
     return fail(title, guidance, data, links, blocked=True)
+
+
+def usage(title: str, guidance: str = "", data: Optional[Dict[str, Any]] = None) -> Result:
+    """The invocation named something that does not exist. Nothing was tried."""
+    result = fail(title, guidance, data)
+    result.usage = True
+    return result
 
 
 def say(text: str = "") -> None:

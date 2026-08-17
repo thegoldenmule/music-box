@@ -65,12 +65,13 @@ is gitignored first. Apple lets a `.p8` be downloaded exactly once.
 
 Every command takes `--json` and prints exactly one object on stdout. All
 prose, progress and subprocess output goes to stderr, so the two never mix and
-`Tools/ship doctor --json | jq` works while a build scrolls past.
+`Tools/ship doctor --json | jq` works while a build scrolls past. (`--help` and
+`--version` are argparse, not commands, and print to stdout as usual.)
 
 ```
 0  ok
 1  failed — something the tool tried did not work
-2  usage error
+2  usage error — the invocation named something that does not exist
 3  blocked on a human: a step no tool can perform. Retrying will not help.
 ```
 
@@ -86,10 +87,20 @@ while :; do
   case $(jq -r .data.next.kind <<<"$step") in
     done)   break ;;
     manual) jq -r .guidance <<<"$step"; break ;;
+    wait)   sleep 120 ;;
     run)    eval "$(jq -r .data.next.command <<<"$step")" || break ;;
   esac
 done
 ```
+
+`wait` is separate from `run` because its command only *reports* — Apple is
+processing the build and nothing you run changes that. A driver that treats it
+as `run` spins against the processing queue.
+
+The loop is only guaranteed to terminate if it can reach `done`. On a machine
+that will never have an App Store Connect key, `next` would otherwise return
+the same manual step forever; `"skip_asc_key": true` in
+`Tools/ship.config.json` is the explicit opt-out, and the action itself says so.
 
 Its ordering is the design: not most-severe-first, but the order in which doing
 one thing stops being wasted effort. Repairable failures come before manual

@@ -27,24 +27,30 @@ a first run
 driving this from a script or an agent
   Every command takes --json and prints exactly one object on stdout; all
   progress and subprocess output goes to stderr, so the two never mix.
+  (--help and --version are argparse, not commands, and print to stdout as
+  usual.)
 
   Exit codes
     0  ok
     1  failed — something the tool tried did not work
-    2  usage error
+    2  usage error — the invocation named something that does not exist
     3  blocked on a human: a step no tool can perform (create the app record,
        accept an agreement, wait for Apple). Retrying will not help.
 
-  `ship next` returns one action with a `kind` of run, manual or done:
+  `ship next` returns one action whose `kind` says what to do with it:
 
       while :; do
         step=$(Tools/ship next --json)
         case $(jq -r .data.next.kind <<<"$step") in
           done)   break ;;
           manual) jq -r .guidance <<<"$step"; break ;;
+          wait)   sleep 120 ;;
           run)    eval "$(jq -r .data.next.command <<<"$step")" || break ;;
         esac
       done
+
+  `wait` is separate from `run` on purpose: its command only reports, so
+  treating it as `run` is how a driver spins against Apple's processing queue.
 
   Tools/SHIPPING.md has the longer version, including what this cannot do.
 """
