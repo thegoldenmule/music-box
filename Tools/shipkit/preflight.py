@@ -32,6 +32,9 @@ KEY_LINK = Link("Create API key", "https://appstoreconnect.apple.com/access/inte
 APPS_LINK = Link("Open My Apps", "https://appstoreconnect.apple.com/apps")
 IDENTIFIERS_LINK = Link("Open Identifiers",
                         "https://developer.apple.com/account/resources/identifiers/list")
+# `open` handles an app bundle path the same way it handles a URL, so a row that
+# says "set this in Xcode" can offer to put Xcode in front of you.
+XCODE_APP = Link("Open Xcode", "/Applications/Xcode.app")
 
 
 @dataclasses.dataclass
@@ -146,7 +149,7 @@ def check_project(facts: Facts) -> Row:
         return Row("project", "Project and scheme", FAIL, facts.cfg.scheme,
                    "No such scheme. Available: %s"
                    % (", ".join(xcode.schemes(facts.cfg.xcodeproj)) or "none"),
-                   manual=True)
+                   [XCODE_APP], manual=True)
     problems = []
     if not facts.bundle_id:
         problems.append("no bundle identifier")
@@ -156,7 +159,8 @@ def check_project(facts: Facts) -> Row:
                                   facts.marketing_version, facts.build_number)
     if problems:
         return Row("project", "Project and scheme", FAIL, detail,
-                   "Set it in Xcode: target → Signing & Capabilities.", manual=True)
+                   "Set it in Xcode: target → Signing & Capabilities.",
+                   [XCODE_APP], manual=True)
     return Row("project", "Project and scheme", OK, detail)
 
 
@@ -185,12 +189,12 @@ def check_floor(facts: Facts) -> Row:
                    "resolved %s, declared %s" % (resolved or "?", ", ".join(values)),
                    "Written as %s, which Xcode resolves to the SDK default instead. Set it "
                    "unconditionally in Xcode: target → General → Minimum Deployments."
-                   % conditional[0], manual=True)
+                   % conditional[0], [XCODE_APP], manual=True)
     if values and resolved and resolved not in values:
         return Row("floor", "Deployment target", FAIL, "resolved %s, project says %s"
                    % (resolved, ", ".join(values)),
                    "Something is overriding it — an xcconfig, or a target-level setting. "
-                   "The resolved value is what ships.", manual=True)
+                   "The resolved value is what ships.", [XCODE_APP], manual=True)
     return Row("floor", "Deployment target", OK, "iOS %s" % (resolved or ", ".join(values)))
 
 
@@ -217,7 +221,7 @@ def check_info_plist(facts: Facts) -> Row:
         missing += ["%s → %s" % (key, value) for value in wanted if value not in have]
     if missing:
         return Row("plist", "Info.plist keys", FAIL, os.path.basename(path),
-                   "Add to %s: %s" % (path, ", ".join(missing)), manual=True)
+                   "Add to %s: %s" % (path, ", ".join(missing)), [XCODE_APP], manual=True)
     return Row("plist", "Info.plist keys", OK,
                "%s · %s" % (os.path.basename(path),
                             ", ".join(facts.info_plist.get("UIBackgroundModes") or [])))
@@ -296,7 +300,7 @@ def check_signing(facts: Facts) -> Row:
                % (len(identities), "y" if len(identities) == 1 else "ies"),
                "Cloud signing can usually mint one during export. If it cannot: Xcode → "
                "Settings → Accounts → your team → Manage Certificates… → ＋ → Apple "
-               "Distribution.")
+               "Distribution.", [XCODE_APP])
 
 
 def check_team(facts: Facts) -> Row:
@@ -309,13 +313,11 @@ def check_team(facts: Facts) -> Row:
         status = WARN if facts.cfg.has_asc_key() else FAIL
         return Row("team", "Xcode account", status, "no signed-in teams",
                    "Sign into Xcode: Settings → Accounts → ＋. Not needed once an API key is "
-                   "configured.",
-                   [Link("Apple Developer account", "https://developer.apple.com/account")],
-                   manual=True)
+                   "configured.", [XCODE_APP], manual=True)
     return Row("team", "Xcode account", WARN,
                "signed in as %s, project wants %s" % (", ".join(ids), facts.team_id),
                "Signing falls back to the API key if one is configured, and fails otherwise.",
-               manual=True)
+               [XCODE_APP], manual=True)
 
 
 def check_asc_key(facts: Facts) -> Row:
@@ -432,6 +434,16 @@ def check_app_record(facts: Facts) -> Row:
     return Row("app_record", "App Store Connect record", OK, detail)
 
 
+def testflight_link(facts: Facts) -> Link:
+    """The app's own TestFlight tab when the app id is known, the app list
+    otherwise — a link to the right page beats a link to the front door."""
+    app_id = str((facts.app or {}).get("id", ""))
+    if app_id:
+        return Link("Open the TestFlight tab",
+                    "https://appstoreconnect.apple.com/apps/%s/testflight/ios" % app_id)
+    return APPS_LINK
+
+
 def check_beta_group(facts: Facts) -> Row:
     """A build that reaches nobody.
 
@@ -448,7 +460,7 @@ def check_beta_group(facts: Facts) -> Row:
     return Row("beta_group", "Internal TestFlight group", WARN, "none",
                "Without one a build reaches 'Ready to Test' and is visible to nobody. "
                "Testers still have to be added once, in the TestFlight tab.",
-               fix="beta_group")
+               [testflight_link(facts)], fix="beta_group")
 
 
 def check_build_number(facts: Facts) -> Row:

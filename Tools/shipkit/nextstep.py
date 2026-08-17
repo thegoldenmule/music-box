@@ -125,16 +125,15 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
             if beta == "MISSING_EXPORT_COMPLIANCE":
                 return Action("compliance",
                               "Build %s is waiting on export compliance" % latest["version"],
-                              "Answer it once in the build's page — no tester can install it "
+                              "Answer it on the build's page — no tester can install it "
                               "until you do.",
-                              kind="manual",
-                              links=[Link("Open My Apps",
-                                          "https://appstoreconnect.apple.com/apps")])
+                              kind="manual", links=[preflight.testflight_link(facts)])
             if beta in ("READY_FOR_BETA_TESTING", "IN_BETA_TESTING"):
                 return Action("done", "Build %s is ready to test" % latest["version"],
                               "Open TestFlight on the phone, signed in with the same Apple ID.",
                               kind="done",
-                              links=[Link("TestFlight for iPhone",
+                              links=[preflight.testflight_link(facts),
+                                     Link("TestFlight for iPhone",
                                           "https://apps.apple.com/app/testflight/id899247664")])
 
     # 5. The tree. Only when a release is actually next — a dirty tree does not

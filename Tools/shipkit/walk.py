@@ -29,6 +29,7 @@ from . import config, nextstep, preflight
 from .report import EXIT_OK, EXIT_USAGE, FAIL, OK, SKIP, WARN, Result, fail, ok
 
 RULE = "─" * 72
+KEY_PAGE = "https://appstoreconnect.apple.com/access/integrations/api"
 
 
 def _tty() -> bool:
@@ -101,9 +102,9 @@ def show(action: nextstep.Action) -> None:
         out("")
         for line in action.why.split("\n"):
             out("  " + line)
-    if action.id not in GUIDED:
-        for link in action.links:
-            out("  " + dim("↗ %s" % link.url))
+    for link in action.links:
+        out("")
+        out("  %s  %s" % (dim("↗ " + link.label), link.url))
 
 
 # ── running a step ────────────────────────────────────────────────────────────
@@ -175,7 +176,7 @@ def walk_asc_key(cfg: config.Config) -> bool:
             if answer.startswith("q"):
                 return False
             if answer.startswith("y"):
-                open_url("https://appstoreconnect.apple.com/access/integrations/api")
+                open_url(KEY_PAGE)
             answer = ask("Path to the downloaded .p8 (blank to skip):")
             if answer in ("", "q"):
                 return False
@@ -188,7 +189,12 @@ def walk_asc_key(cfg: config.Config) -> bool:
 
     if not cfg.asc_credentials()["issuer_id"]:
         out("")
-        out("  " + dim("The Issuer ID is the UUID at the top of the API keys page."))
+        out("  " + dim("The Issuer ID is the UUID at the top of that page."))
+        answer = ask("Open it? [Y/n]", "y").lower()
+        if answer.startswith("q"):
+            return False
+        if answer.startswith("y"):
+            open_url(KEY_PAGE)
         answer = ask("Issuer ID (blank to skip):")
         if answer in ("", "q"):
             return False
