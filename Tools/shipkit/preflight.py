@@ -50,6 +50,13 @@ class Facts:
     client: Optional[asc.Client] = None
     asc_error: str = ""
     asc_team: str = ""
+    # Why the App Store Connect probes did not run. Empty means they did.
+    # Without this, a wrong-team key makes `gather` bail after validation and
+    # every row below reads its own empty result as an answer — reporting the
+    # app record as *missing* when it was never asked about. That is precisely
+    # the false confidence the wrong-team check exists to prevent, arriving by
+    # a different door.
+    asc_blocked: str = ""
     bundle_record: Dict[str, Any] = dataclasses.field(default_factory=dict)
     app: Dict[str, Any] = dataclasses.field(default_factory=dict)
     groups: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -94,9 +101,11 @@ def gather(cfg: config.Config, offline: bool = False) -> Facts:
     if facts.entitlements_path:
         facts.entitlements = xcode.read_plist(facts.entitlements_path)
     if offline:
+        facts.asc_blocked = "not checked (--offline)"
         return facts
     client = asc.client_for(cfg)
     if client is None:
+        facts.asc_blocked = "needs an API key"
         return facts
     facts.client = client
     try:
@@ -105,14 +114,18 @@ def gather(cfg: config.Config, offline: bool = False) -> Facts:
         # wrong team, so nothing it says may be shown until this passes.
         facts.asc_team = client.team_id()
         if facts.team_id and facts.asc_team and facts.asc_team != facts.team_id:
+            facts.asc_blocked = "blocked — the API key belongs to team %s" % facts.asc_team
             return facts
-        if facts.bundle_id:
-            facts.bundle_record = client.bundle_id_record(facts.bundle_id)
-            facts.app = client.live_app(facts.bundle_id)
-            if facts.app:
-                facts.groups = client.beta_groups(facts.app["id"])
+        if not facts.bundle_id:
+            facts.asc_blocked = "no bundle identifier to ask about"
+            return facts
+        facts.bundle_record = client.bundle_id_record(facts.bundle_id)
+        facts.app = client.live_app(facts.bundle_id)
+        if facts.app:
+            facts.groups = client.beta_groups(facts.app["id"])
     except asc.ASCError as error:
         facts.asc_error = str(error)
+        facts.asc_blocked = "App Store Connect unreachable"
     return facts
 
 
@@ -370,10 +383,9 @@ CAPABILITY_NOTES = {
 
 
 def check_bundle_id(facts: Facts) -> Row:
-    if facts.offline or facts.client is None:
-        return Row("bundle_id", "App ID registration", SKIP, "needs an API key")
-    if facts.asc_error:
-        return Row("bundle_id", "App ID registration", SKIP, "App Store Connect unreachable")
+    if facts.asc_blocked:
+        return Row("bundle_id", "App ID registration", SKIP, facts.asc_blocked,
+                   facts.asc_error)
     if not facts.bundle_record:
         return Row("bundle_id", "App ID registration", FAIL, "%s not registered" % facts.bundle_id,
                    "Nothing has registered this App ID yet, so the New App dialog's Bundle ID "
@@ -427,12 +439,11 @@ def check_musickit(facts: Facts) -> Row:
 
 
 def check_app_record(facts: Facts) -> Row:
-    if facts.offline or facts.client is None:
-        return Row("app_record", "App Store Connect record", SKIP, "needs an API key",
-                   "Without a key this is only discovered at upload time, twenty minutes into "
-                   "a release.")
-    if facts.asc_error:
-        return Row("app_record", "App Store Connect record", SKIP, "App Store Connect unreachable")
+    if facts.asc_blocked:
+        return Row("app_record", "App Store Connect record", SKIP, facts.asc_blocked,
+                   facts.asc_error or
+                   "Unchecked is not the same as absent: without an answer here, a missing app "
+                   "record is only discovered at upload time, twenty minutes into a release.")
     if not facts.app:
         return Row("app_record", "App Store Connect record", FAIL,
                    "none for %s" % facts.bundle_id,
@@ -456,8 +467,9 @@ def check_beta_group(facts: Facts) -> Row:
     This is the row that exists because the failure is invisible: processing
     succeeds, the state says Ready to Test, and no tester is ever notified
     because no internal group was ever created."""
-    if facts.offline or facts.client is None or facts.asc_error or not facts.app:
-        return Row("beta_group", "Internal TestFlight group", SKIP, "needs an app record")
+    if facts.asc_blocked or not facts.app:
+        return Row("beta_group", "Internal TestFlight group", SKIP,
+                   facts.asc_blocked or "needs an app record")
     internal = [group for group in facts.groups if group["internal"]]
     if internal:
         return Row("beta_group", "Internal TestFlight group", OK,
@@ -493,9 +505,11 @@ def check_build_number(facts: Facts) -> Row:
                    "value is what the build uses and it is invisible to a plain rewrite, so "
                    "`Tools/ship bump` would report success while the shipped build kept the old "
                    "number. Set it unconditionally in Xcode.")
-    if facts.offline or facts.client is None or facts.asc_error or not facts.app:
+    if facts.asc_blocked or not facts.app:
         return Row("build_number", "Build number", SKIP,
-                   "%s (%s) — not checked against Apple" % (current, facts.marketing_version))
+                   "%s (%s) — not checked against Apple" % (current, facts.marketing_version),
+                   "The project file is not authoritative here: a build uploaded from another "
+                   "machine raises Apple's floor without touching it.")
     train = [build for build in (facts.app.get("builds") or [])
              if not facts.marketing_version or build.get("train") == facts.marketing_version]
     used = [build["version"] for build in train if build["version"]]
