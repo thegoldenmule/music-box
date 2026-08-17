@@ -78,7 +78,14 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
     #    one, so every later step is guesswork.
     key_row = by_id.get("asc_key")
     if key_row is not None and key_row.status == WARN:
-        return _from_row(key_row)
+        action = _from_row(key_row)
+        # It is genuinely optional, so this must not be a dead end. A loop that
+        # stops here has to leave the human a way forward that is not "give up".
+        action.why += ("\n\nIf you would rather not: `Tools/ship release` works without a key — "
+                       "xcodebuild rides your Xcode login session. What you lose is every check "
+                       "that happens before the build and every answer after it, including "
+                       "`Tools/ship status`.")
+        return action
 
     # 3. The cheap things that are painful later.
     for row_id in RECOMMENDED:
