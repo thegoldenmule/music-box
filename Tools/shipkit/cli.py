@@ -56,14 +56,30 @@ driving this from a script or an agent
 """
 
 
+# The shared options and what they mean when absent. They carry
+# `default=SUPPRESS` because `common` is a parent of BOTH the root parser and
+# every subparser: without it, argparse parses the subcommand into a fresh
+# namespace and copies every key back — *including the subparser's defaults* —
+# so `ship --json info` has its --json silently overwritten with False and
+# prints no JSON at all. SUPPRESS leaves an unsupplied option out of the
+# namespace entirely, so nothing is there to overwrite, and `apply_defaults`
+# fills in the rest afterwards.
+SHARED_DEFAULTS = {"json": False, "project": None, "scheme": None,
+                   "configuration": None, "quiet": False}
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--json", action="store_true",
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                         help="print one JSON object on stdout (prose still goes to stderr)")
-    common.add_argument("--project", metavar="PATH", help="path to the .xcodeproj (default: discovered)")
-    common.add_argument("--scheme", metavar="NAME", help="scheme to build (default: the project's name)")
-    common.add_argument("--configuration", metavar="NAME", help="build configuration (default: Release)")
-    common.add_argument("-q", "--quiet", action="store_true", help="do not stream subprocess output")
+    common.add_argument("--project", metavar="PATH", default=argparse.SUPPRESS,
+                        help="path to the .xcodeproj (default: discovered)")
+    common.add_argument("--scheme", metavar="NAME", default=argparse.SUPPRESS,
+                        help="scheme to build (default: the project's name)")
+    common.add_argument("--configuration", metavar="NAME", default=argparse.SUPPRESS,
+                        help="build configuration (default: Release)")
+    common.add_argument("-q", "--quiet", action="store_true", default=argparse.SUPPRESS,
+                        help="do not stream subprocess output")
 
     parser = argparse.ArgumentParser(
         prog="ship",
@@ -144,6 +160,11 @@ def cmd_info(cfg: config.Config, args: argparse.Namespace) -> Result:
     if not cfg.xcodeproj:
         return fail("No .xcodeproj found",
                     "Looked under %s. Pass --project if it lives somewhere else." % cfg.root)
+    if not os.path.isdir(cfg.xcodeproj):
+        # A supplied path that is not there resolves every setting to empty and
+        # would otherwise render as a row of dashes under a green tick.
+        return fail("No project at %s" % cfg.xcodeproj,
+                    "The path was supplied but there is nothing there.")
     settings = xcode.build_settings(cfg.xcodeproj, cfg.scheme, cfg.configuration)
     pbxproj = os.path.join(cfg.xcodeproj, "project.pbxproj")
     data = {
@@ -275,21 +296,36 @@ COMMANDS: Dict[str, Callable[[config.Config, argparse.Namespace], Result]] = {
 }
 
 
+def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill in the shared options that SUPPRESS left out of the namespace."""
+    for name, default in SHARED_DEFAULTS.items():
+        if not hasattr(args, name):
+            setattr(args, name, default)
+    return args
+
+
 def main(argv: List[str]) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = apply_defaults(parser.parse_args(argv))
     if not args.command:
         parser.print_help(sys.stderr)
         return report.EXIT_USAGE
 
     cfg = config.load(xcodeproj=args.project, scheme=args.scheme,
                       configuration=args.configuration)
-    if not cfg.xcodeproj and args.command not in ("auth", "selftest"):
-        return report.emit(
-            fail("No .xcodeproj found",
-                 "Searched %s and its Apps/ directory. Pass --project if it is elsewhere."
-                 % cfg.root),
-            args.json, args.command)
+    if args.command not in ("auth", "selftest"):
+        if not cfg.xcodeproj:
+            return report.emit(
+                fail("No .xcodeproj found",
+                     "Searched %s and its Apps/ directory. Pass --project if it is elsewhere."
+                     % cfg.root),
+                args.json, args.command)
+        if not os.path.isdir(cfg.xcodeproj):
+            return report.emit(
+                fail("No project at %s" % cfg.xcodeproj,
+                     "Every build setting would resolve to empty, which reads as a project with "
+                     "nothing configured rather than as a path that is not there."),
+                args.json, args.command)
 
     handler = COMMANDS.get(args.command)
     if handler is None:

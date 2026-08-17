@@ -30,7 +30,7 @@ import shutil
 from typing import Any, Dict, List, Optional
 
 from . import classify, config, preflight, proc, verify, xcode
-from .report import FAIL, OK, Link, Result, blocked, fail, ok, say
+from .report import FAIL, OK, WARN, Link, Result, blocked, fail, ok, say
 
 APPS_LINK = Link("Open My Apps", "https://appstoreconnect.apple.com/apps")
 TESTFLIGHT_APP = Link("TestFlight for iPhone", "https://apps.apple.com/app/testflight/id899247664")
@@ -165,7 +165,10 @@ class Run:
                         "the repairable ones. --skip-preflight builds anyway.")
             result = (blocked(message, guidance) if manual else fail(message, guidance))
             return self.failed("preflight", result)
-        dirty = next((row for row in rows if row.id == "git" and row.status != OK), None)
+        # WARN, not "anything but ok": a `skip` row means this is not a git
+        # checkout at all, and refusing to release with "the working tree has
+        # uncommitted changes" would state the opposite of what happened.
+        dirty = next((row for row in rows if row.id == "git" and row.status == WARN), None)
         if dirty and self.upload and not self.args.allow_dirty:
             return self.failed("preflight", fail(
                 "The working tree has uncommitted changes",
@@ -209,6 +212,10 @@ class Run:
             self.build_number = self.facts.build_number
         else:
             self.build_number = preflight.next_build_number(self.facts)
+        # Into the classifier context too: the duplicate-build-number rules
+        # substitute {build_number}, and a diagnosis printing the literal
+        # placeholder is worse than one that never mentions it.
+        self.context["build_number"] = self.build_number
         self.record("build_number", ok("Build %s" % self.build_number))
         say("")
         say("── build number %s (was %s) ──" % (self.build_number, self.facts.build_number))
@@ -379,6 +386,20 @@ class Run:
 
 
 def run(cfg: config.Config, args, upload: bool) -> Result:
+    # `--upload-with xcodebuild` sends the bytes from inside the export stage,
+    # so there is no file left to check afterwards. That is a fair trade on its
+    # own. Combined with `--unsigned-archive` it is not: the unsigned path
+    # produces a binary carrying no entitlements at all, and the post-export
+    # check is the only thing standing between that and an uploaded build whose
+    # CloudKit container simply is not there. Refuse rather than upload first
+    # and report the gap second.
+    if upload and getattr(args, "unsigned_archive", False) and args.upload_with == "xcodebuild":
+        return fail(
+            "--unsigned-archive cannot be combined with --upload-with xcodebuild",
+            "An unsigned archive carries no entitlements, so the export has to restore them and "
+            "the check on the exported binary is what proves it did. Uploading from inside the "
+            "export step means the build reaches Apple before anything can look at it.\n"
+            "Drop one of the two flags.")
     if not os.path.isdir(cfg.build_dir):
         os.makedirs(cfg.build_dir, exist_ok=True)
     pipeline = Run(cfg, args, upload)

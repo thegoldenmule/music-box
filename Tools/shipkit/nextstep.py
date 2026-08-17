@@ -83,8 +83,19 @@ def decide(facts: preflight.Facts, rows: List) -> Action:
     # 2. Credentials. Not a failure — the pipeline runs on an Xcode session —
     #    but without them nothing can be checked before a build or read after
     #    one, so every later step is guesswork.
+    # A network outage is not a missing key. Both surface as a warning on the
+    # same row, and telling someone to go and create a key they already have —
+    # as a `manual` action, which the contract says retrying cannot help — is
+    # the wrong answer to a problem that fixes itself.
+    if facts.asc_blocked == "App Store Connect unreachable":
+        return Action("unreachable", "App Store Connect is unreachable",
+                      "The key is configured; Apple did not answer.\n%s\n\nNothing here is "
+                      "broken — try again shortly." % facts.asc_error,
+                      kind="wait", command="Tools/ship doctor")
+
     key_row = by_id.get("asc_key")
-    if key_row is not None and key_row.status == WARN and not facts.cfg.skip_asc_key:
+    if (key_row is not None and key_row.status == WARN
+            and not facts.cfg.has_asc_key() and not facts.cfg.skip_asc_key):
         action = _from_row(key_row)
         # It is genuinely optional, so this must not be a dead end: without an
         # opt-out, `next` would return this same manual step forever and could

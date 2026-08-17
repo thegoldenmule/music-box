@@ -709,6 +709,8 @@ def next_build_number(facts: Facts) -> str:
 
 
 def fix_build_number(facts: Facts) -> Result:
+    if not os.path.exists(facts.pbxproj):
+        return fail("No project.pbxproj at %s" % facts.pbxproj)
     current = xcode.read_build_numbers(facts.pbxproj)
     if not current:
         return fail("CURRENT_PROJECT_VERSION is not set in the project",

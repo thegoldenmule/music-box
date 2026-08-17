@@ -67,6 +67,21 @@ class Ordering(unittest.TestCase):
         action = nextstep.decide(f, rows(asc_key=(WARN, ""), app_record=(FAIL, "")))
         self.assertEqual(action.id, "app_record")
 
+    def test_an_outage_is_a_wait_not_a_missing_key(self) -> None:
+        # Both surface as a warning on the same row. Telling someone to create a
+        # key they already have — as `manual`, which the contract says retrying
+        # cannot help — is the wrong answer to a problem that fixes itself.
+        f = facts(asc_blocked="App Store Connect unreachable",
+                  asc_error="cannot reach App Store Connect: timed out")
+        action = nextstep.decide(f, rows(asc_key=(WARN, "")))
+        self.assertEqual(action.id, "unreachable")
+        self.assertEqual(action.kind, "wait")
+
+    def test_a_real_failure_still_beats_an_outage(self) -> None:
+        f = facts(asc_blocked="App Store Connect unreachable", asc_error="timed out")
+        action = nextstep.decide(f, rows(plist=(FAIL, "")))
+        self.assertEqual(action.id, "plist")
+
     def test_credentials_come_before_optional_repairs(self) -> None:
         # Without a key nothing can be checked before a build or read after one,
         # so every later decision would be made blind.

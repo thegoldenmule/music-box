@@ -215,7 +215,12 @@ RULES: List[Rule] = [
     ),
     Rule(
         "test_failed",
-        ["** TEST FAILED **", "Testing failed:"],
+        # Both dialects. The only stage that runs tests runs `swift test`, which
+        # emits none of xcodebuild's strings — a rule carrying only those could
+        # never fire on the one place it is asked to.
+        ["** TEST FAILED **", "Testing failed:",
+         "Test Suite 'All tests' failed", "error: fatalError", "Fatal error:",
+         "with 1 failure", "failures, ", " failure ("],
         "The package tests failed",
         "The failing test is named just above the summary in the log. Fix it, or run with "
         "--skip-tests if you are certain and in a hurry — but a red suite is the cheapest signal "
