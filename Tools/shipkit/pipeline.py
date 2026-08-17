@@ -30,7 +30,7 @@ import shutil
 from typing import Any, Dict, List, Optional
 
 from . import classify, config, preflight, proc, verify, xcode
-from .report import FAIL, Link, Result, blocked, fail, ok, say
+from .report import FAIL, OK, Link, Result, blocked, fail, ok, say
 
 APPS_LINK = Link("Open My Apps", "https://appstoreconnect.apple.com/apps")
 TESTFLIGHT_APP = Link("TestFlight for iPhone", "https://apps.apple.com/app/testflight/id899247664")
@@ -152,7 +152,7 @@ class Run:
         rows = preflight.rows_for(self.facts)
         failures = [row for row in rows if row.status == FAIL]
         for row in rows:
-            if row.status != "ok":
+            if row.status != OK:
                 say(row.render())
         if self.args.skip_preflight:
             self.record("preflight", ok("Skipped"))
@@ -165,7 +165,7 @@ class Run:
                         "the repairable ones. --skip-preflight builds anyway.")
             result = (blocked(message, guidance) if manual else fail(message, guidance))
             return self.failed("preflight", result)
-        dirty = next((row for row in rows if row.id == "git" and row.status != "ok"), None)
+        dirty = next((row for row in rows if row.id == "git" and row.status != OK), None)
         if dirty and self.upload and not self.args.allow_dirty:
             return self.failed("preflight", fail(
                 "The working tree has uncommitted changes",
