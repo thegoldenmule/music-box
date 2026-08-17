@@ -134,6 +134,45 @@ the generated plist. Verify anything load-bearing by reading it back out of the
 built app with `plutil -p` — never `plutil -extract KEY raw FILE`, which
 rewrites the file in place unless given `-o -`.
 
+## Getting a build out
+
+**Do not hand-assemble `xcodebuild` invocations for a release.** `Tools/ship`
+owns that, and `Tools/SHIPPING.md` is its manual.
+
+```sh
+Tools/ship doctor      # fifteen checks, each with the steps that clear it
+Tools/ship next        # the single next action — the loop to drive
+Tools/ship release     # tests → bump → archive → verify → export → verify → upload
+Tools/ship status      # has Apple finished, and can anyone actually install it
+Tools/ship selftest    # its own unit tests
+```
+
+Every command takes `--json`: one object on stdout, all prose and subprocess
+output on stderr. Exit codes are 0 ok, 1 failed, 2 usage, and **3 blocked on a
+human** — a step no tool can perform, which a caller must not retry.
+
+Four facts it encodes that are expensive to rediscover, all measured on this
+project rather than read somewhere:
+
+- **The exported `.ipa` carries `aps-environment: production` while the archive
+  carries `development`.** The substitution comes from the distribution
+  profile's allowlist. **Do not "fix" `AuralSandbox-iOS.entitlements` to say
+  `production`** — that is the classic wrong answer to ITMS-90164 and it breaks
+  local development. `ship verify` asserts the exported value instead.
+- **`manageAppVersionAndBuildNumber` defaults to true**, which means Xcode
+  rewrites the build number during upload. Every export option is stated
+  explicitly for reasons of that shape; `method` alone defaults to `debugging`.
+- **`MUSIC_KIT` is not an App Store Connect `CapabilityType`** and appears in no
+  provisioning profile, so neither the API nor a clean signed build can confirm
+  MusicKit is enabled. The checklist says it cannot be checked rather than
+  guessing. Same for Family Controls.
+- **Build numbers are unique per marketing version**, not globally, and
+  `Build.version` in Apple's API *is* the build number — the marketing version
+  lives on the related `preReleaseVersion`.
+
+Credentials live in a gitignored `.env`; the `.p8` goes to `~/private_keys/`,
+never into the repo.
+
 ## Git
 
 **Commit directly to `main`. Never create a branch.** This overrides any default
