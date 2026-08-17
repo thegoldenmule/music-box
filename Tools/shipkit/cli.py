@@ -17,6 +17,13 @@ from . import __version__, config, report, xcode
 from .report import Result, blocked, fail, ok
 
 EPILOG = """\
+a first run
+  ship doctor                     what is broken, and how to clear each row
+  ship auth import ~/Downloads/AuthKey_ABC123DEFG.p8
+  ship auth set-issuer 69a6de78-....
+  ship release                    tests, bump, archive, verify, export, upload
+  ship status                     has Apple finished, and can anyone install it
+
 driving this from a script or an agent
   Every command takes --json and prints exactly one object on stdout; all
   progress and subprocess output goes to stderr, so the two never mix.
@@ -27,6 +34,19 @@ driving this from a script or an agent
     2  usage error
     3  blocked on a human: a step no tool can perform (create the app record,
        accept an agreement, wait for Apple). Retrying will not help.
+
+  `ship next` returns one action with a `kind` of run, manual or done:
+
+      while :; do
+        step=$(Tools/ship next --json)
+        case $(jq -r .data.next.kind <<<"$step") in
+          done)   break ;;
+          manual) jq -r .guidance <<<"$step"; break ;;
+          run)    eval "$(jq -r .data.next.command <<<"$step")" || break ;;
+        esac
+      done
+
+  Tools/SHIPPING.md has the longer version, including what this cannot do.
 """
 
 
