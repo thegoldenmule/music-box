@@ -27,5 +27,12 @@
 	     feature's front door — simply do not happen. -->
 	<key>CKSharingSupported</key>
 	<true/>
+
+	<!-- Answers the export compliance question once, at build time. Without it every
+	     upload lands in TestFlight as 'Missing Compliance' and is untestable until
+	     somebody answers the same question by hand, per build. This app's only
+	     cryptography is HTTPS, which is exempt. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
