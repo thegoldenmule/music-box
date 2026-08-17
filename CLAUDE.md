@@ -162,10 +162,12 @@ project rather than read somewhere:
 - **`manageAppVersionAndBuildNumber` defaults to true**, which means Xcode
   rewrites the build number during upload. Every export option is stated
   explicitly for reasons of that shape; `method` alone defaults to `debugging`.
-- **`MUSIC_KIT` is not an App Store Connect `CapabilityType`** and appears in no
-  provisioning profile, so neither the API nor a clean signed build can confirm
-  MusicKit is enabled. The checklist says it cannot be checked rather than
-  guessing. Same for Family Controls.
+- **`MUSIC_KIT` is absent from Apple's published `CapabilityType` enum and the
+  live API returns it anyway** — confirmed on this App ID, which reports
+  `MUSIC_KIT` alongside `ICLOUD` and `PUSH_NOTIFICATIONS`. So the enum is not
+  the vocabulary the service speaks: decode capability lists as open strings,
+  and never conclude a capability is absent because Apple has not documented
+  its name. `Tools/ship doctor` checks MusicKit for real.
 - **Build numbers are unique per marketing version**, not globally, and
   `Build.version` in Apple's API *is* the build number — the marketing version
   lives on the related `preReleaseVersion`.

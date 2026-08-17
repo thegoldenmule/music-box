@@ -60,6 +60,10 @@ class Facts:
     # the false confidence the wrong-team check exists to prevent, arriving by
     # a different door.
     asc_blocked: str = ""
+    # A rejected key and an unreachable API are opposite problems: one never
+    # fixes itself and one always does. Collapsing them into "unreachable" is
+    # how a walkthrough tells you to wait for something that will never happen.
+    asc_rejected: bool = False
     bundle_record: Dict[str, Any] = dataclasses.field(default_factory=dict)
     app: Dict[str, Any] = dataclasses.field(default_factory=dict)
     groups: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -128,7 +132,9 @@ def gather(cfg: config.Config, offline: bool = False) -> Facts:
             facts.groups = client.beta_groups(facts.app["id"])
     except asc.ASCError as error:
         facts.asc_error = str(error)
-        facts.asc_blocked = "App Store Connect unreachable"
+        facts.asc_rejected = error.status in (401, 403)
+        facts.asc_blocked = ("the API key was rejected" if facts.asc_rejected
+                             else "App Store Connect unreachable")
     return facts
 
 
@@ -343,6 +349,14 @@ def check_asc_key(facts: Facts) -> Row:
     if facts.offline:
         return Row("asc_key", "App Store Connect API key", SKIP, "key %s (not validated)"
                    % creds["key_id"])
+    if facts.asc_rejected:
+        # Apple rejects the pair, not the file: a revoked key, or a key and an
+        # Issuer ID from two different accounts. No amount of retrying moves it.
+        return Row("asc_key", "App Store Connect API key", FAIL,
+                   "key %s rejected" % creds["key_id"],
+                   "Apple refused this key with the stored Issuer ID. Either it was revoked, or "
+                   "the two came from different accounts.",
+                   [KEY_LINK], fix="asc_key")
     if facts.asc_error:
         return Row("asc_key", "App Store Connect API key", WARN, "could not validate",
                    "App Store Connect said: %s" % facts.asc_error, [KEY_LINK])
@@ -367,6 +381,7 @@ def check_asc_key(facts: Facts) -> Row:
 CAPABILITY_NOTES = {
     "ICLOUD": "iCloud/CloudKit — where the family's records live",
     "PUSH_NOTIFICATIONS": "push — how one parent's change reaches a child's device",
+    "MUSIC_KIT": "MusicKit — the entire catalog layer",
 }
 
 
@@ -402,17 +417,31 @@ def _entitlement_capabilities(entitlements: Dict[str, Any]) -> List[str]:
 
 
 def check_musickit(facts: Facts) -> Row:
-    """MusicKit cannot be verified from here, and saying so is the point.
+    """Is MusicKit enabled on the App ID?
 
-    It is an App Service on the App ID, not an entitlement and not a bundle-id
-    capability: there is no `MUSIC_KIT` value in Apple's CapabilityType enum and
-    no App Services resource in the API, so it appears in no provisioning
-    profile and a clean signed build proves nothing about it. With it off, every
-    catalog request fails in a way that reads as a bug in our own code — which
-    is exactly why a row that guessed "not enabled" from an empty API answer
-    would be worse than useless."""
-    return Row("musickit", "MusicKit on the App ID", SKIP, "not checkable from here",
-               "Check by eye: ↗ Identifiers → %s → App Services → MusicKit." % facts.bundle_id,
+    This row spent a while saying the question could not be answered, on the
+    strength of Apple's published `CapabilityType` enum, which has no
+    `MUSIC_KIT` value. The live API returns one anyway — measured on this
+    project's own App ID, which reports MUSIC_KIT alongside ICLOUD and
+    PUSH_NOTIFICATIONS. Apple's documented enum is not the vocabulary the
+    service actually speaks, so the capability list is read as open strings and
+    this is a real check.
+
+    It earns a row of its own because MusicKit is the one whose absence is
+    invisible: it appears in no provisioning profile, so a clean signed build
+    proves nothing, and with it off every catalog request fails in a way that
+    reads as a bug in our own code."""
+    if facts.asc_blocked or not facts.bundle_record:
+        return Row("musickit", "MusicKit on the App ID", SKIP,
+                   facts.asc_blocked or "App ID not registered",
+                   "Check by eye: ↗ Identifiers → %s → App Services → MusicKit."
+                   % facts.bundle_id, [IDENTIFIERS_LINK])
+    capabilities = facts.bundle_record.get("capabilities") or []
+    if "MUSIC_KIT" in capabilities:
+        return Row("musickit", "MusicKit on the App ID", OK, "enabled")
+    return Row("musickit", "MusicKit on the App ID", FAIL, "not enabled",
+               "Every catalog request will fail in a way that reads as a bug in our code.\n"
+               "  ↗ Identifiers → %s → App Services → MusicKit." % facts.bundle_id,
                [IDENTIFIERS_LINK], manual=True)
 
 
@@ -702,7 +731,49 @@ def fix_build_number(facts: Facts) -> Result:
               data={"build_number": candidate, "configurations": bump.count})
 
 
+def fix_asc_key(facts: Facts) -> Result:
+    """Find a key on this machine that Apple actually accepts.
+
+    A rejected key is usually not the only one lying around — Apple hands out a
+    fresh .p8 every time somebody clicks Generate, and the newest file on disk
+    has no special claim to being the live one. Trying each against the stored
+    Issuer ID answers in a couple of seconds what otherwise takes a trip to the
+    portal to guess at."""
+    from . import auth
+    issuer = facts.cfg.asc_credentials()["issuer_id"]
+    if not issuer:
+        return blocked("No Issuer ID to test keys against",
+                       "  Tools/ship auth set-issuer <uuid>", links=[KEY_LINK])
+    candidates = auth.candidate_keys()
+    if not candidates:
+        return blocked("No AuthKey_*.p8 found on this machine",
+                       "Looked in ~/private_keys, ~/Downloads and ~/Desktop.", links=[KEY_LINK])
+    tried = []
+    seen = set()
+    for path in candidates:
+        key_id = auth.key_id_from_filename(path)
+        # The same key is routinely in ~/Downloads and ~/private_keys both.
+        # Testing it twice costs a round trip and reports it twice.
+        if not key_id or key_id in seen:
+            continue
+        seen.add(key_id)
+        if auth.works(path, key_id, issuer):
+            result = auth.import_key(facts.cfg, path)
+            if result.ok:
+                return ok("Key %s works — now using it" % key_id,
+                          ("Apple rejected %s." % ", ".join(tried)) if tried else "",
+                          data={"key_id": key_id, "rejected": tried})
+            return result
+        tried.append(key_id)
+    return blocked("Apple rejected every key on this machine",
+                   "Tried %s against Issuer ID %s.\nEither the Issuer ID belongs to a different "
+                   "account, or these keys are revoked. Both are on the API keys page — the "
+                   "Issuer ID is at the top, above the list."
+                   % (", ".join(tried), issuer), links=[KEY_LINK])
+
+
 FIXES = {
+    "asc_key": fix_asc_key,
     "encryption": fix_encryption,
     "bundle_id": fix_bundle_id,
     "beta_group": fix_beta_group,

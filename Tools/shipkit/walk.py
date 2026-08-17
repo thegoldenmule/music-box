@@ -129,12 +129,19 @@ def run_command(command: str) -> int:
 # ── the manual steps worth a conversation ─────────────────────────────────────
 
 def find_keys() -> List[str]:
-    """Downloaded .p8 files, newest first. Apple always names them
-    AuthKey_<KEYID>.p8, so this is a reliable search rather than a guess."""
-    found: Set[str] = set()
-    for directory in ("~/Downloads", "~/private_keys", "~/Desktop", "."):
-        found.update(glob.glob(os.path.expanduser(os.path.join(directory, "AuthKey_*.p8"))))
-    return sorted(found, key=os.path.getmtime, reverse=True)
+    """Candidate .p8 files, one entry per key id.
+
+    Newest first is a display order, not a ranking: the most recently downloaded
+    key is exactly as likely to be a revoked one. Where an Issuer ID is already
+    known, walk_asc_key tests them rather than trusting this order."""
+    from . import auth
+    out, seen = [], set()
+    for path in auth.candidate_keys():
+        key_id = auth.key_id_from_filename(path)
+        if key_id and key_id not in seen:
+            seen.add(key_id)
+            out.append(path)
+    return out
 
 
 def walk_asc_key(cfg: config.Config) -> bool:
@@ -148,6 +155,21 @@ def walk_asc_key(cfg: config.Config) -> bool:
     creds = cfg.asc_credentials()
     if not creds["key_id"] or not os.path.exists(creds["key_path"] or ""):
         candidates = find_keys()
+        issuer = creds["issuer_id"]
+        if candidates and issuer:
+            # With an Issuer ID in hand there is no need to make anyone choose:
+            # ask Apple which of these it accepts. This is the step that
+            # silently picked a revoked key and then reported an outage.
+            out("")
+            out(dim("  testing %d key%s…" % (len(candidates), "" if len(candidates) == 1 else "s")))
+            for path in candidates:
+                key_id = auth.key_id_from_filename(path)
+                if auth.works(path, key_id, issuer):
+                    result = auth.import_key(cfg, path)
+                    out("  %s %s" % ("✓" if result.ok else "✗", result.title))
+                    return result.ok
+            out("  " + dim("Apple rejected all of them."))
+            candidates = []
         if candidates:
             out("")
             out("  Found:")

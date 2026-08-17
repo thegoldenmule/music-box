@@ -18,9 +18,10 @@ down, into a `.env` this tool checks is gitignored first.
 
 from __future__ import annotations
 
+import glob
 import os
 import re
-from typing import Dict
+from typing import Dict, List, Set
 
 from . import config
 from .report import Link, Result, blocked, fail, ok, say
@@ -30,6 +31,33 @@ KEY_DIR = os.path.join(os.path.expanduser("~"), "private_keys")
 
 ISSUER_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def candidate_keys() -> List[str]:
+    """Every AuthKey_*.p8 within reach, newest first.
+
+    Apple names them all `AuthKey_<KEYID>.p8`, which makes this a search rather
+    than a guess. Newest first is only a display order — it is emphatically not
+    a ranking, because the most recently downloaded key is as likely to be the
+    revoked one as the working one."""
+    found: Set[str] = set()
+    for directory in ("~/private_keys", "~/Downloads", "~/Desktop", "."):
+        found.update(glob.glob(os.path.expanduser(os.path.join(directory, "AuthKey_*.p8"))))
+    return sorted(found, key=os.path.getmtime, reverse=True)
+
+
+def works(key_path: str, key_id: str, issuer: str) -> bool:
+    """Does Apple accept this pair? One cheap authenticated call.
+
+    The only question that matters and the only one nothing local can answer —
+    a .p8 that parses, signs correctly and belongs to a revoked key is
+    indistinguishable from a good one until Apple is asked."""
+    from . import asc
+    try:
+        asc.Client(key_path, key_id, issuer).get("/v1/apps?limit=1")
+        return True
+    except Exception:
+        return False
 
 
 def key_id_from_filename(path: str) -> str:
@@ -106,6 +134,17 @@ def set_issuer(cfg: config.Config, issuer: str) -> Result:
         env_path = cfg.write_env({"ASC_ISSUER_ID": issuer})
     except config.SecretWriteRefused as refusal:
         return fail("Could not save the Issuer ID", str(refusal))
+
+    creds = cfg.asc_credentials()
+    if creds["key_id"] and creds["key_path"]:
+        if works(creds["key_path"], creds["key_id"], issuer):
+            return ok("Issuer ID saved — Apple accepts key %s" % creds["key_id"],
+                      data={"issuer_id": issuer, "env": env_path, "verified": True})
+        return fail("Issuer ID saved, but Apple rejects it with key %s" % creds["key_id"],
+                    "The key and the Issuer ID have to come from the same account, and a "
+                    "revoked key fails the same way.\n  Tools/ship fix asc_key",
+                    data={"issuer_id": issuer, "env": env_path, "verified": False},
+                    links=[KEY_LINK])
     return ok("Issuer ID saved", "Written to %s." % env_path,
               data={"issuer_id": issuer, "env": env_path})
 
