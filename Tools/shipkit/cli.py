@@ -54,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("info", "print the resolved project facts and where the tool will write")
 
+    add("status", "what App Store Connect currently says about this app's builds")
+
     bump = add("bump", "set or advance CURRENT_PROJECT_VERSION in the project file")
     bump.add_argument("value", nargs="?", help="the exact build number (default: advance by one)")
 
@@ -141,8 +143,14 @@ def cmd_selftest(cfg: config.Config, args: argparse.Namespace) -> Result:
                 data=data)
 
 
+def cmd_status(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import status
+    return status.run(cfg)
+
+
 COMMANDS: Dict[str, Callable[[config.Config, argparse.Namespace], Result]] = {
     "info": cmd_info,
+    "status": cmd_status,
     "bump": cmd_bump,
     "auth": cmd_auth,
     "selftest": cmd_selftest,
