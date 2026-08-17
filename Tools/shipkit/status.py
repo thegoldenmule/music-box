@@ -70,7 +70,8 @@ def run(cfg: config.Config) -> Result:
     say("")
     say("  %s  (%s)" % (app["name"], bundle_id))
     for build in builds[:5]:
-        say("  build %-8s %-12s %s" % (build["version"], build["state"], build["uploaded"] or ""))
+        say("  %-8s %-8s %-12s %-24s %s" % (build["train"], build["version"], build["state"],
+                                            build["beta_state"] or "—", build["uploaded"] or ""))
     if not builds:
         say("  no builds uploaded")
 
@@ -82,31 +83,54 @@ def run(cfg: config.Config) -> Result:
                     % bundle_id, data=data, links=links)
 
     latest = builds[0]
-    state = latest["state"]
+    name = "Build %s (%s)" % (latest["version"], latest["train"] or "?")
 
     # A build nobody can install is the failure this command exists to catch —
     # it looks identical to success everywhere else.
     group_note = ""
     if not internal:
-        group_note = ("\n\nNo internal TestFlight group exists, so even a Ready build reaches "
+        group_note = ("\n\nThere is no internal TestFlight group, so even a ready build reaches "
                       "nobody.\n  Tools/ship fix beta_group")
 
-    if state == "VALID":
-        return ok("Build %s is ready to test" % latest["version"],
-                  ("Install it: open the TestFlight app on the phone, signed in with the same "
-                   "Apple ID.%s" % group_note), data=data, links=links)
+    # processingState is Apple's scan; internalBuildState is whether a tester can
+    # actually install it. They disagree in the case that matters most: a build
+    # can be VALID and still sit in MISSING_EXPORT_COMPLIANCE, processed
+    # perfectly and undistributable.
+    beta = latest["beta_state"]
+    if beta == "MISSING_EXPORT_COMPLIANCE":
+        return fail("%s is waiting on an export compliance answer" % name,
+                    "It uploaded and processed fine and no tester can install it. Answer it "
+                    "once in the build's page — or, better, declare it at build time so it never "
+                    "happens again:\n  Tools/ship fix encryption",
+                    data=data, links=links)
+    if beta in ("READY_FOR_BETA_TESTING", "IN_BETA_TESTING"):
+        return ok("%s is ready to test" % name,
+                  "Open the TestFlight app on the phone, signed in with the same Apple ID.%s"
+                  % group_note, data=data, links=links)
+    if beta == "EXPIRED":
+        return fail("%s has expired" % name,
+                    "TestFlight builds expire ninety days after upload. Ship a new one.",
+                    data=data, links=links)
+
+    state = latest["state"]
     if state == "PROCESSING":
-        return ok("Build %s is still processing" % latest["version"],
-                  "Apple is scanning it — usually a few minutes. Ask again shortly.%s" % group_note,
-                  data=data, links=links)
+        return ok("%s is still processing" % name,
+                  "Apple is scanning it — usually a few minutes. Ask again shortly.%s"
+                  % group_note, data=data, links=links)
     if state == "FAILED":
-        return fail("Build %s failed processing" % latest["version"],
+        return fail("%s failed processing" % name,
                     "Apple rejected the binary after upload. The reason was emailed to the "
-                    "developer account address — it is not in any local log.",
+                    "developer account address — it is in no local log.",
                     data=data, links=links)
     if state == "INVALID":
-        return fail("Build %s is invalid" % latest["version"],
-                    "Usually a missing export-compliance answer or an entitlement the "
-                    "provisioning profile does not carry. Check the TestFlight tab for the "
-                    "specific complaint.", data=data, links=links)
-    return ok("Build %s: %s" % (latest["version"], state), data=data, links=links)
+        return fail("%s is invalid" % name,
+                    "Usually an entitlement the provisioning profile does not carry, or a "
+                    "missing Info.plist value. The TestFlight tab carries the specific "
+                    "complaint.", data=data, links=links)
+    if state == "VALID":
+        # VALID with an unrecognised beta state: report both rather than
+        # inventing a verdict from the half we understand.
+        return ok("%s processed (%s)" % (name, beta or "no beta state reported"),
+                  "Apple's scan passed. Whether a tester can install it is the beta state above."
+                  + group_note, data=data, links=links)
+    return ok("%s: %s" % (name, state or "unknown"), data=data, links=links)

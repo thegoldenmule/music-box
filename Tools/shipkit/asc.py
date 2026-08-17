@@ -81,10 +81,17 @@ def der_to_raw(der: bytes) -> bytes:
 
 
 class Client:
-    def __init__(self, key_path: str, key_id: str, issuer_id: str):
+    def __init__(self, key_path: str, key_id: str, issuer_id: str, individual: bool = False):
         self.key_path = os.path.expanduser(key_path)
         self.key_id = key_id
         self.issuer_id = issuer_id
+        # Apple issues two kinds of key and they need different payloads: a team
+        # key carries `iss` (the issuer UUID), an individual key carries
+        # `sub: "user"` and no `iss` at all. Nothing in the key or the filename
+        # says which you have — the only signal is a 401 — so start with the
+        # common form and flip once if Apple refuses it.
+        self.individual = individual
+        self._flipped = False
         self._token = ""
         self._token_expires = 0.0
 
@@ -97,8 +104,11 @@ class Client:
             raise ASCError("API key file missing: %s" % self.key_path)
         header = {"alg": "ES256", "kid": self.key_id, "typ": "JWT"}
         now = int(time.time())
-        payload = {"iss": self.issuer_id, "iat": now, "exp": now + TOKEN_LIFETIME,
-                   "aud": "appstoreconnect-v1"}
+        payload = {"iat": now, "exp": now + TOKEN_LIFETIME, "aud": "appstoreconnect-v1"}
+        if self.individual:
+            payload["sub"] = "user"
+        else:
+            payload["iss"] = self.issuer_id
         signing_input = (_b64url(json.dumps(header, separators=(",", ":")).encode())
                          + "." + _b64url(json.dumps(payload, separators=(",", ":")).encode()))
         with tempfile.NamedTemporaryFile() as handle:
@@ -141,7 +151,15 @@ class Client:
                         "%s — %s" % (e.get("title", ""), e.get("detail", "")) for e in errors)
             except ValueError:
                 pass
-            # 429 and 5xx are worth one retry; 4xx never is.
+            # A 401 on the first call may just mean this is an individual key
+            # rather than a team key: same file, different JWT payload. Flip
+            # once and retry before telling anyone their key is revoked.
+            if error.code == 401 and not self._flipped:
+                self._flipped = True
+                self.individual = not self.individual
+                self._token = ""
+                return self._request(method, path, payload, attempt)
+            # 429 and 5xx are worth one retry; every other 4xx is a real answer.
             if error.code in (429, 500, 502, 503, 504) and attempt == 0:
                 time.sleep(2)
                 return self._request(method, path, payload, attempt + 1)
@@ -207,14 +225,19 @@ class Client:
             "capabilities": [c for c in capabilities if c],
         }
 
-    def register_bundle_id(self, identifier: str) -> bool:
-        """Register the App ID. Returns False when it already existed."""
+    def register_bundle_id(self, identifier: str, platform: str = "UNIVERSAL") -> bool:
+        """Register the App ID. Returns False when it already existed.
+
+        `platform` matters and is easy to get wrong: an App ID used by both an
+        iOS and a Mac target is `UNIVERSAL`, and a `UNIVERSAL` record does not
+        match `filter[platform]=IOS`. Registering as IOS when the project builds
+        for both is a record that has to be recreated later."""
         if self.bundle_id_record(identifier):
             return False
         name = "".join(c for c in identifier.split(".")[-1].title() if c.isalnum()) or "App"
         self.post("/v1/bundleIds", {"data": {
             "type": "bundleIds",
-            "attributes": {"identifier": identifier, "name": name, "platform": "IOS"},
+            "attributes": {"identifier": identifier, "name": name, "platform": platform},
         }})
         return True
 
@@ -233,17 +256,50 @@ class Client:
                 for app in (payload.get("data") or [])
                 if app.get("attributes", {}).get("bundleId") == bundle_id]
 
-    def builds(self, app_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        payload = self.get(
-            "/v1/builds?filter[app]=%s&sort=-uploadedDate&limit=%d"
-            "&fields[builds]=version,processingState,uploadedDate,expired" % (app_id, limit))
-        return [{
-            "version": build.get("attributes", {}).get("version", ""),
-            "state": build.get("attributes", {}).get("processingState", ""),
-            "uploaded": build.get("attributes", {}).get("uploadedDate"),
-            "expired": build.get("attributes", {}).get("expired", False),
-            "id": build.get("id", ""),
-        } for build in (payload.get("data") or [])]
+    def builds(self, app_id: str, limit: int = 10, train: str = "") -> List[Dict[str, Any]]:
+        """Recent builds, newest first.
+
+        Two traps live in this one call.
+
+        `version` on a build is the **build number** (CFBundleVersion), not the
+        marketing version — that lives on the related preReleaseVersion, which
+        Apple calls the "train". `filter[version]=1.2.0` therefore filters on the
+        wrong field and silently returns nothing.
+
+        And `processingState: VALID` does not mean a tester can install it. The
+        state that decides that is `buildBetaDetail.internalBuildState`, where
+        `READY_FOR_BETA_TESTING` is the green light and `MISSING_EXPORT_COMPLIANCE`
+        is a build that processed perfectly and is still undistributable."""
+        query = ("/v1/builds?filter[app]=%s&sort=-uploadedDate&limit=%d"
+                 "&include=preReleaseVersion,buildBetaDetail"
+                 "&fields[builds]=version,processingState,uploadedDate,expired,"
+                 "preReleaseVersion,buildBetaDetail" % (app_id, limit))
+        if train:
+            query += "&filter[preReleaseVersion.version]=" + train
+        payload = self.get(query)
+        included = {(item.get("type"), item.get("id")): item.get("attributes", {})
+                    for item in (payload.get("included") or [])}
+
+        def related(build: Dict[str, Any], name: str, kind: str) -> Dict[str, Any]:
+            data = (build.get("relationships", {}).get(name, {}) or {}).get("data") or {}
+            return included.get((kind, data.get("id")), {})
+
+        out = []
+        for build in (payload.get("data") or []):
+            attributes = build.get("attributes", {})
+            beta = related(build, "buildBetaDetail", "buildBetaDetails")
+            out.append({
+                "id": build.get("id", ""),
+                "version": attributes.get("version", ""),
+                "train": related(build, "preReleaseVersion",
+                                 "preReleaseVersions").get("version", ""),
+                "state": attributes.get("processingState", ""),
+                "beta_state": beta.get("internalBuildState", ""),
+                "external_state": beta.get("externalBuildState", ""),
+                "uploaded": attributes.get("uploadedDate"),
+                "expired": attributes.get("expired", False),
+            })
+        return out
 
     def live_app(self, bundle_id: str) -> Dict[str, Any]:
         """The app record that actually holds builds, with them attached.

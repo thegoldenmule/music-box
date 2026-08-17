@@ -36,33 +36,63 @@ PBXPROJ = """\
 
 class BuildNumberRewrite(unittest.TestCase):
     def test_rewrites_every_configuration(self) -> None:
-        out, count = xcode.bump_build_number_text(PBXPROJ, "8")
-        self.assertEqual(count, 2)
-        self.assertEqual(out.count("CURRENT_PROJECT_VERSION = 8;"), 2)
-        self.assertNotIn("CURRENT_PROJECT_VERSION = 7;", out)
+        bump = xcode.bump_build_number_text(PBXPROJ, "8")
+        self.assertEqual(bump.count, 2)
+        self.assertEqual(bump.text.count("CURRENT_PROJECT_VERSION = 8;"), 2)
+        self.assertNotIn("CURRENT_PROJECT_VERSION = 7;", bump.text)
 
     def test_touches_nothing_else(self) -> None:
-        out, _ = xcode.bump_build_number_text(PBXPROJ, "8")
+        bump = xcode.bump_build_number_text(PBXPROJ, "8")
         for line in ("DEVELOPMENT_TEAM = QKMK66X2FU;", "MARKETING_VERSION = 0.1;",
                      "isa = XCBuildConfiguration;", "name = Release;"):
-            self.assertIn(line, out)
-        self.assertEqual(len(out.split("\n")), len(PBXPROJ.split("\n")))
+            self.assertIn(line, bump.text)
+        self.assertEqual(len(bump.text.split("\n")), len(PBXPROJ.split("\n")))
 
     def test_reports_zero_when_the_setting_is_absent(self) -> None:
-        _, count = xcode.bump_build_number_text("buildSettings = {\n};\n", "8")
-        self.assertEqual(count, 0)
+        self.assertEqual(xcode.bump_build_number_text("buildSettings = {\n};\n", "8").count, 0)
 
-    def test_handles_a_quoted_dotted_value(self) -> None:
-        text = "\t\t\t\tCURRENT_PROJECT_VERSION = 1.2.3;\n"
-        out, count = xcode.bump_build_number_text(text, "1.2.4")
-        self.assertEqual(count, 1)
-        self.assertIn("CURRENT_PROJECT_VERSION = 1.2.4;", out)
+    def test_handles_a_dotted_value(self) -> None:
+        bump = xcode.bump_build_number_text("\t\t\t\tCURRENT_PROJECT_VERSION = 1.2.3;\n", "1.2.4")
+        self.assertEqual(bump.count, 1)
+        self.assertIn("CURRENT_PROJECT_VERSION = 1.2.4;", bump.text)
 
     def test_does_not_match_a_differently_named_setting(self) -> None:
         # A prefix match would rewrite this and silently change a different key.
         text = "\t\t\t\tMY_CURRENT_PROJECT_VERSION_SUFFIX = 7;\n"
-        _, count = xcode.bump_build_number_text(text, "8")
-        self.assertEqual(count, 0)
+        self.assertEqual(xcode.bump_build_number_text(text, "8").count, 0)
+
+    def test_trailing_whitespace_is_not_captured_into_the_value(self) -> None:
+        bump = xcode.bump_build_number_text("\tCURRENT_PROJECT_VERSION = 7 ;\n", "8")
+        self.assertIn("CURRENT_PROJECT_VERSION = 8 ;", bump.text)
+
+
+class ConditionalBuildNumber(unittest.TestCase):
+    """The form that makes a successful-looking rewrite ship the old number.
+
+    `CURRENT_PROJECT_VERSION[sdk=iphone*]` is legal, takes precedence over the
+    plain form, and a regex written for the plain form cannot see it. The bump
+    has to refuse rather than report a success the build will not honour."""
+
+    QUOTED = '\t\t\t\t"CURRENT_PROJECT_VERSION[sdk=iphone*]" = 555;\n'
+    BARE = "\t\t\t\tCURRENT_PROJECT_VERSION[sdk=iphoneos*] = 555;\n"
+
+    def test_detects_the_quoted_form(self) -> None:
+        self.assertTrue(xcode.bump_build_number_text(self.QUOTED, "8").conditional)
+
+    def test_detects_the_bare_form(self) -> None:
+        self.assertTrue(xcode.bump_build_number_text(self.BARE, "8").conditional)
+
+    def test_detects_it_even_when_a_plain_form_is_also_present(self) -> None:
+        # The dangerous case: the plain form rewrites cleanly, so without this
+        # flag the bump reports "1 configuration updated" and changes nothing
+        # the build actually reads.
+        bump = xcode.bump_build_number_text(
+            "\tCURRENT_PROJECT_VERSION = 7;\n" + self.QUOTED, "8")
+        self.assertEqual(bump.count, 1)
+        self.assertTrue(bump.conditional)
+
+    def test_plain_project_is_not_flagged(self) -> None:
+        self.assertFalse(xcode.bump_build_number_text(PBXPROJ, "8").conditional)
 
 
 class NextBuildNumber(unittest.TestCase):

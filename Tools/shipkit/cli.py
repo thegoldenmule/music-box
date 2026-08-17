@@ -54,6 +54,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("info", "print the resolved project facts and where the tool will write")
 
+    doctor = add("doctor", "check every link in the chain and say how to fix each broken one")
+    doctor.add_argument("--offline", action="store_true",
+                        help="skip the App Store Connect probes")
+
+    fix = add("fix", "apply a repair the checklist offered")
+    fix.add_argument("id", nargs="?", help="the row id; omit to list what is repairable")
+
     add("status", "what App Store Connect currently says about this app's builds")
 
     bump = add("bump", "set or advance CURRENT_PROJECT_VERSION in the project file")
@@ -112,11 +119,20 @@ def cmd_bump(cfg: config.Config, args: argparse.Namespace) -> Result:
         return fail("CURRENT_PROJECT_VERSION is not set in the project",
                     "Set a build number in Xcode (target → General → Build) once, then this "
                     "tool can advance it.")
-    value = args.value or xcode.next_build_number(current[0])
-    count = xcode.write_build_number(pbxproj, value)
+    value = args.value or xcode.next_build_number(max(current, key=xcode.build_number_sort_key))
+    bump = xcode.write_build_number(pbxproj, value)
+    if bump.conditional:
+        return fail("CURRENT_PROJECT_VERSION is declared conditionally — refusing to edit it",
+                    "The `[sdk=…]` form takes precedence over the plain one and is invisible to "
+                    "this rewrite, so editing would report success while the build kept the old "
+                    "number. Set it unconditionally in Xcode (target → General → Build).")
+    if not xcode.pbxproj_parses(pbxproj):
+        return fail("The project file no longer parses after the edit",
+                    "Restore it with `git checkout -- %s`." % pbxproj)
     return ok("Build number %s → %s" % (", ".join(sorted(set(current))), value),
-              "Rewritten in %d build configuration%s." % (count, "" if count == 1 else "s"),
-              data={"previous": current, "build_number": value, "configurations": count})
+              "Rewritten in %d build configuration%s." % (bump.count,
+                                                          "" if bump.count == 1 else "s"),
+              data={"previous": current, "build_number": value, "configurations": bump.count})
 
 
 def cmd_auth(cfg: config.Config, args: argparse.Namespace) -> Result:
@@ -148,8 +164,20 @@ def cmd_status(cfg: config.Config, args: argparse.Namespace) -> Result:
     return status.run(cfg)
 
 
+def cmd_doctor(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import preflight
+    return preflight.run(cfg, offline=args.offline, as_json=args.json)
+
+
+def cmd_fix(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import preflight
+    return preflight.apply_fix(cfg, args.id)
+
+
 COMMANDS: Dict[str, Callable[[config.Config, argparse.Namespace], Result]] = {
     "info": cmd_info,
+    "doctor": cmd_doctor,
+    "fix": cmd_fix,
     "status": cmd_status,
     "bump": cmd_bump,
     "auth": cmd_auth,
