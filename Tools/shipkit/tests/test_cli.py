@@ -82,10 +82,6 @@ class EveryDeclaredCommandIsWired(unittest.TestCase):
         self.assertEqual(declared - set(cli.COMMANDS), set())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WalkIsWiredAndGuarded(unittest.TestCase):
     def test_walk_is_a_declared_command(self) -> None:
         self.assertIn("walk", cli.COMMANDS)
@@ -97,3 +93,7 @@ class WalkIsWiredAndGuarded(unittest.TestCase):
         result = walk.run(config.Config(root="/tmp", xcodeproj="/tmp/A.xcodeproj", scheme="A"),
                           as_json=True)
         self.assertFalse(result.ok)
+
+
+if __name__ == "__main__":
+    unittest.main()
