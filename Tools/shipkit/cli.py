@@ -17,10 +17,11 @@ from . import __version__, config, report, xcode
 from .report import Result, fail, ok
 
 EPILOG = """\
-a first run
+start here
+  Tools/ship                      walks you through it, one step at a time
+
+the individual pieces, if you would rather drive
   ship doctor                     what is broken, and how to clear each row
-  ship auth import ~/Downloads/AuthKey_ABC123DEFG.p8
-  ship auth set-issuer 69a6de78-....
   ship release                    tests, bump, archive, verify, export, upload
   ship status                     has Apple finished, and can anyone install it
 
@@ -102,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     fix = add("fix", "apply a repair the checklist offered")
     fix.add_argument("id", nargs="?", help="the row id; omit to list what is repairable")
+
+    add("walk", "walk through the whole thing, one step at a time (the default)")
 
     add("next", "the single next action — the loop a script or an agent should drive")
 
@@ -255,6 +258,11 @@ def cmd_fix(cfg: config.Config, args: argparse.Namespace) -> Result:
     return preflight.apply_fix(cfg, args.id)
 
 
+def cmd_walk(cfg: config.Config, args: argparse.Namespace) -> Result:
+    from . import walk
+    return walk.run(cfg, as_json=args.json)
+
+
 def cmd_next(cfg: config.Config, args: argparse.Namespace) -> Result:
     from . import nextstep
     return nextstep.run(cfg)
@@ -284,6 +292,7 @@ COMMANDS: Dict[str, Callable[[config.Config, argparse.Namespace], Result]] = {
     "info": cmd_info,
     "doctor": cmd_doctor,
     "fix": cmd_fix,
+    "walk": cmd_walk,
     "next": cmd_next,
     "release": cmd_release,
     "build": cmd_build,
@@ -308,8 +317,14 @@ def main(argv: List[str]) -> int:
     parser = build_parser()
     args = apply_defaults(parser.parse_args(argv))
     if not args.command:
-        parser.print_help(sys.stderr)
-        return report.EXIT_USAGE
+        # With somebody at the keyboard, the useful thing to do is the thing
+        # they came for. Printing usage and exiting non-zero is correct for a
+        # script and unhelpful to a person who typed the tool's name.
+        if sys.stdin.isatty() and sys.stderr.isatty() and not args.json:
+            args.command = "walk"
+        else:
+            parser.print_help(sys.stderr)
+            return report.EXIT_USAGE
 
     cfg = config.load(xcodeproj=args.project, scheme=args.scheme,
                       configuration=args.configuration)

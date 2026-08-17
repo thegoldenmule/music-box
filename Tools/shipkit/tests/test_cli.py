@@ -84,3 +84,16 @@ class EveryDeclaredCommandIsWired(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WalkIsWiredAndGuarded(unittest.TestCase):
+    def test_walk_is_a_declared_command(self) -> None:
+        self.assertIn("walk", cli.COMMANDS)
+
+    def test_walk_refuses_json(self) -> None:
+        # It is a conversation, not an output format. Silently ignoring --json
+        # would put prompts where a caller expects one parseable object.
+        from shipkit import config, walk
+        result = walk.run(config.Config(root="/tmp", xcodeproj="/tmp/A.xcodeproj", scheme="A"),
+                          as_json=True)
+        self.assertFalse(result.ok)
