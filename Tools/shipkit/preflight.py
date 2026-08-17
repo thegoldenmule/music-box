@@ -264,15 +264,18 @@ def check_entitlements(facts: Facts) -> Row:
     aps = facts.entitlements.get("aps-environment", "")
     detail = "%s · %d keys" % (os.path.basename(path), len(keys))
     if aps == "development":
-        # Not a defect: Xcode substitutes `production` when signing with an App
-        # Store distribution profile. It is called out because if the
-        # substitution does NOT happen the upload is rejected, and `ship verify`
-        # is what proves which of those two worlds you are in.
-        return Row("entitlements", "Entitlements", WARN, detail + " · aps-environment development",
-                   "The source file says `development`. An App Store export is expected to "
-                   "substitute `production` when it signs — `Tools/ship verify` reads the "
-                   "signature back and says which actually happened. If it stays `development`, "
-                   "Apple rejects the upload.")
+        # Correct, and deliberately not a warning. `aps-environment` comes from
+        # the provisioning profile's allowlist rather than from this file, and a
+        # distribution profile always says `production` — measured on this
+        # project: archive `development`, exported .ipa `production`. Editing the
+        # file to say `production` is the classic wrong answer to ITMS-90164 and
+        # breaks local development.
+        #
+        # It was a warning until it became clear it could never clear, and a row
+        # that warns on every run forever teaches people to skim the warnings.
+        # The assertion that matters is on the exported binary, in `verify`.
+        return Row("entitlements", "Entitlements", OK,
+                   detail + " · aps-environment development (production after export)")
     return Row("entitlements", "Entitlements", OK, detail)
 
 
