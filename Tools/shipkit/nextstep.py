@@ -26,10 +26,10 @@ from a tree whose commit will not describe what shipped.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from . import config, preflight, xcode
-from .report import FAIL, OK, WARN, Link, Result, blocked, ok, say
+from . import config, preflight
+from .report import FAIL, WARN, Link, Result, blocked, ok, say
 
 # Warnings worth clearing before a first upload even though nothing blocks on
 # them. Each one costs more later than now: an undeclared compliance answer

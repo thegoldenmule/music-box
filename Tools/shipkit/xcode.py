@@ -27,7 +27,7 @@ import json
 import os
 import plistlib
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from . import proc
 

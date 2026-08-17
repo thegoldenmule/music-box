@@ -23,7 +23,7 @@ import re
 from typing import Dict
 
 from . import config
-from .report import Link, Result, fail, ok, say
+from .report import Link, Result, blocked, fail, ok, say
 
 KEY_LINK = Link("Create API key", "https://appstoreconnect.apple.com/access/integrations/api")
 KEY_DIR = os.path.join(os.path.expanduser("~"), "private_keys")
@@ -111,19 +111,23 @@ def show(cfg: config.Config) -> Result:
         "complete": cfg.has_asc_key(),
     }
     say("")
-    for label, value in (("key id", creds["key_id"] or "—"),
-                         ("issuer id", creds["issuer_id"] or "—"),
-                         ("key file", creds["key_path"] or "—")):
-        say("  %-10s %s  %s" % (label, value, "" if label != "key file" or not creds["key_path"]
-                                else ("(present)" if key_present else "(MISSING)")))
+    say("  key id     %s" % (creds["key_id"] or "—"))
+    say("  issuer id  %s" % (creds["issuer_id"] or "—"))
+    say("  key file   %s%s" % (creds["key_path"] or "—",
+                               "" if not creds["key_path"]
+                               else ("  (present)" if key_present else "  (MISSING)")))
     if cfg.has_asc_key():
         return ok("App Store Connect API key configured", data=data)
-    missing = [name for name, value in (("key", creds["key_id"]), ("issuer id", creds["issuer_id"]),
+    missing = [name for name, value in (("key id", creds["key_id"]),
+                                        ("issuer id", creds["issuer_id"]),
                                         ("key file", creds["key_path"])) if not value]
-    return fail("App Store Connect API key incomplete (missing: %s)" % ", ".join(missing) if missing
-                else "The configured key file is missing from disk",
-                "1. Create a key: role App Manager (a Developer-role key authenticates but cannot "
-                "manage signing assets)\n"
+    title = ("App Store Connect API key incomplete (missing: %s)" % ", ".join(missing) if missing
+             else "The configured key file is not on disk")
+    # Blocked, not failed: nothing this tool can run produces a key. Apple has
+    # to mint one, in a browser, for a human who is signed in.
+    return blocked(title,
+                "1. Create a key. App Manager reads state and uploads; cloud signing is reported "
+                "to need Admin, and a role cannot be changed once the key exists.\n"
                 "2. Tools/ship auth import ~/Downloads/AuthKey_<KEYID>.p8\n"
                 "3. Tools/ship auth set-issuer <uuid from the top of that page>",
                 data=data, links=[KEY_LINK])

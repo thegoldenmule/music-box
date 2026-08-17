@@ -14,7 +14,7 @@ import sys
 from typing import Callable, Dict, List
 
 from . import __version__, config, report, xcode
-from .report import Result, blocked, fail, ok
+from .report import Result, fail, ok
 
 EPILOG = """\
 a first run

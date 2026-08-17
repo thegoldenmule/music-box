@@ -29,8 +29,8 @@ import os
 import shutil
 from typing import Any, Dict, List, Optional
 
-from . import asc, classify, config, preflight, proc, verify, xcode
-from .report import FAIL, Link, Result, Row, blocked, fail, ok, say
+from . import classify, config, preflight, proc, verify, xcode
+from .report import FAIL, Link, Result, blocked, fail, ok, say
 
 APPS_LINK = Link("Open My Apps", "https://appstoreconnect.apple.com/apps")
 TESTFLIGHT_APP = Link("TestFlight for iPhone", "https://apps.apple.com/app/testflight/id899247664")
