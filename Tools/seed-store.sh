@@ -149,11 +149,30 @@ else:
 " "$wanted"
 }
 
+# Opens the window, not just the device.
+#
+# `simctl boot` boots a simulator **headlessly**. The device reaches Booted, the
+# app installs, launches and runs — `launchctl list` will show it with a pid —
+# and there is nothing on screen anywhere. Which produced exactly the report it
+# should have: "I don't see a simulator. Did this work or not?"
+#
+# Simulator.app is a separate application from the device it shows, so it gets
+# opened separately. Skipped under --no-launch: seeding to drive from Xcode's Run
+# button should not take over a screen.
+show_simulator() {
+    [ "$DO_LAUNCH" = 1 ] || return 0
+    open -a Simulator --args -CurrentDeviceUDID "$1" 2>/dev/null || true
+}
+
 boot_simulator() {
     local udid="$1" state="$2"
-    [ "$state" = "Booted" ] && return 0
+    if [ "$state" = "Booted" ]; then
+        show_simulator "$udid"
+        return 0
+    fi
     note "  booting…"
     xcrun simctl boot "$udid" 2>/dev/null || true
+    show_simulator "$udid"
     # No `bootstatus` on every Xcode, so poll. A simulator that never reaches
     # Booted is a broken simulator, and saying so beats hanging.
     local i
@@ -382,5 +401,6 @@ if [ "$DO_LAUNCH" = 1 ]; then
     xcrun simctl launch --console-pty "$UDID" "$BUNDLE_ID" || true
 else
     ok "Seeded. Press Run in Xcode, or:"
+    note "  open -a Simulator --args -CurrentDeviceUDID $UDID"
     note "  xcrun simctl launch --console-pty $UDID $BUNDLE_ID"
 fi
