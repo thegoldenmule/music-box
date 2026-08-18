@@ -68,6 +68,11 @@ note() { printf '\033[2m%s\033[0m\n' "$*"; }
 ok() { printf '\033[32m%s\033[0m\n' "$*"; }
 step() { printf '\033[1m%s\033[0m\n' "$*"; }
 
+# Where the app's data lives on the chosen simulator. Recorded by `seed` while
+# the device is still up, because everything after it runs against a device that
+# is deliberately down.
+CONTAINER=""
+
 DO_BUILD=1
 DO_LAUNCH=1
 DO_BACKUP=1
@@ -254,14 +259,32 @@ Install it once from Xcode and try again."
 # container — so that is done explicitly first, and it matters: SwiftData holding
 # the store open while it is replaced underneath is how you get a corrupt file
 # and a puzzling afternoon.
+#
+# **And the simulator is shut down for the copy, which is not tidiness.**
+# `Library/Preferences` is not a directory the app owns; `cfprefsd` does, it is a
+# system daemon rather than part of the app, and it caches every domain in
+# memory. Terminating the app does not flush it. So a seeded plist is replaced on
+# disk while cfprefsd is still serving the old contents to the next launch — and
+# it can write its stale cache back over the file at any point, which is the
+# failure mode that eats the seed silently.
+#
+# What that looked like: a seeded store whose `deviceLibraryState` said
+# `hasBeenAsked: true` on disk, and an app that put the shared-device question up
+# anyway on every launch. `get_app_container` needs a booted device, so the path
+# is captured while it is up and the copy happens after the shutdown.
 seed() {
     local udid="$1" from="$2"
 
     xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
 
-    local dest
-    dest=$(xcrun simctl get_app_container "$udid" "$BUNDLE_ID" data) \
+    # Captured first: the lookup fails once the device is down.
+    CONTAINER=$(xcrun simctl get_app_container "$udid" "$BUNDLE_ID" data) \
         || die "Could not find the app's data container."
+    local dest="$CONTAINER"
+
+    note "  shutting the simulator down, so cfprefsd lets go of Preferences"
+    xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+    sleep 2
 
     local path
     for path in "${CONTAINER_PATHS[@]}"; do
@@ -284,11 +307,11 @@ seed() {
 # that landed short is invisible from inside the app — it just looks like a
 # family with less history — so it gets checked here instead.
 compare_rows() {
-    local from="$1" udid="$2"
+    local from="$1"
 
-    local seeded
-    seeded=$(xcrun simctl get_app_container "$udid" "$BUNDLE_ID" data 2>/dev/null) || return 0
-    local seeded_store="$seeded/Library/Application Support/default.store"
+    # The recorded path, not a fresh lookup: the device is deliberately down at
+    # this point and `get_app_container` refuses to answer for one that is.
+    local seeded_store="$CONTAINER/Library/Application Support/default.store"
     [ -f "$seeded_store" ] || { note "  (no store in the simulator container to compare)"; return 0; }
 
     printf '\n'
@@ -391,16 +414,21 @@ step "Replacing the container"
 ensure_container "$UDID"
 seed "$UDID" "$FROM"
 
-compare_rows "$FROM" "$UDID"
+compare_rows "$FROM"
 
 if [ "$DO_LAUNCH" = 1 ]; then
     step "Launching"
+    # Back up from the shutdown the seed needed. cfprefsd starts fresh with it,
+    # which is the whole point of having gone down.
+    xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
+    boot_simulator "$UDID" "Shutdown"
     # --console-pty, not --console: the plain one swallows print(). And the
     # bundle id really is missing a 'd' — the correctly-spelled one fails with
     # FBSOpenApplicationServiceErrorDomain code=4.
     xcrun simctl launch --console-pty "$UDID" "$BUNDLE_ID" || true
 else
-    ok "Seeded. Press Run in Xcode, or:"
+    ok "Seeded. The simulator is shut down — the seed needs it that way."
+    note "  xcrun simctl boot $UDID"
     note "  open -a Simulator --args -CurrentDeviceUDID $UDID"
     note "  xcrun simctl launch --console-pty $UDID $BUNDLE_ID"
 fi
