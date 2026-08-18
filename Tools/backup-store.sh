@@ -155,6 +155,38 @@ report() {
 
 # --- the two ways of getting it ---------------------------------------------
 
+# One `devicectl` copy, retried, because the connection drops on its own.
+#
+# Measured, not guessed: the same copy of the same path to the same device fails
+# and then succeeds with nothing changed in between, with
+# `Network.NWError error 54 - Connection reset by peer` or
+# `CoreDeviceError 4000 — The device disconnected immediately after connecting`.
+#
+# Retrying matters more than the seconds it costs, because the caller cannot tell
+# a dropped tunnel from a missing directory — both are a non-zero exit — and the
+# message on the way out blames development signing. A transient drop then reads
+# as "your build is not development-signed", which is a wrong answer to a
+# question nobody asked, and it is wrong in the direction of giving up.
+copy_with_retry() {
+    local device="$1" path="$2" dest="$3"
+    local attempt
+    for attempt in 1 2 3; do
+        if xcrun devicectl device copy from \
+            --device "$device" \
+            --domain-type appDataContainer \
+            --domain-identifier "$BUNDLE_ID" \
+            --source "$path" \
+            --destination "$dest" \
+            --quiet 2>/dev/null
+        then
+            return 0
+        fi
+        [ "$attempt" = 3 ] && return 1
+        note "    · retrying ($path)"
+        sleep 2
+    done
+}
+
 backup_device() {
     local device="$1"
     local dest="$OUT_ROOT/$(stamp)-device"
@@ -168,14 +200,7 @@ backup_device() {
         # merges them into one flat directory, which loses which file came from
         # where — so each gets its own destination mirroring the container.
         mkdir -p "$dest/$path"
-        if xcrun devicectl device copy from \
-            --device "$device" \
-            --domain-type appDataContainer \
-            --domain-identifier "$BUNDLE_ID" \
-            --source "$path" \
-            --destination "$dest/$path" \
-            --quiet 2>/dev/null
-        then
+        if copy_with_retry "$device" "$path" "$dest/$path"; then
             got_any=1
             note "  ✓ $path"
         else
