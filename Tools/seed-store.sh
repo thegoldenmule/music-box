@@ -422,10 +422,23 @@ if [ "$DO_LAUNCH" = 1 ]; then
     # which is the whole point of having gone down.
     xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
     boot_simulator "$UDID" "Shutdown"
+    # Retried, because Booted is not ready. `simctl boot` returns, and the state
+    # reads Booted, well before SpringBoard will accept anything — launching into
+    # that window fails with `FBSOpenApplicationServiceErrorDomain code=1, "The
+    # request was denied by service delegate (SBMainWorkspace)"`, which sounds
+    # like a permissions problem and is a timing one. `simctl bootstatus` is what
+    # would wait properly and is not on every Xcode, so: try until it takes.
+    #
     # --console-pty, not --console: the plain one swallows print(). And the
     # bundle id really is missing a 'd' — the correctly-spelled one fails with
-    # FBSOpenApplicationServiceErrorDomain code=4.
-    xcrun simctl launch --console-pty "$UDID" "$BUNDLE_ID" || true
+    # FBSOpenApplicationServiceErrorDomain code=4, which is a different error
+    # that also sounds like this one.
+    for attempt in 1 2 3 4 5 6; do
+        if xcrun simctl launch --console-pty "$UDID" "$BUNDLE_ID"; then break; fi
+        [ "$attempt" = 6 ] && die "The app would not launch after six tries."
+        note "  springboard is not ready yet…"
+        sleep 5
+    done
 else
     ok "Seeded. The simulator is shut down — the seed needs it that way."
     note "  xcrun simctl boot $UDID"
