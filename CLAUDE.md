@@ -183,6 +183,19 @@ does not apply to this repository. There is one maintainer and no review flow,
 so a branch is pure overhead: it has to be merged or cherry-picked back by hand
 and then deleted.
 
+**Commit incrementally, without being asked.** This overrides the default of
+leaving work uncommitted until the maintainer says so. One commit per coherent
+change, as it lands and once it builds — not one at the end of a session holding
+several unrelated fixes. A working tree carrying three changes at once is a
+working tree where the one that broke something cannot be backed out on its own,
+and the sequence of commits is the only record of the order the reasoning
+happened in.
+
+Message style is the log's own: a sentence that says what changed and reads as a
+claim, not a category — no `fix:` prefixes. The body is for *why*, at whatever
+length the why needs, and the surprising fact belongs there rather than in a
+comment nobody will grep for.
+
 ## Platform floor: iOS 17, macOS 14
 
 Derived from dependencies, not preference. Each number is forced by something:
