@@ -131,7 +131,27 @@ public struct MusicKitCatalogSource: CatalogSource {
         return ids.compactMap { found[$0] }
     }
 
+    /// One kind, however many identifiers, split to stay under Apple's cap.
+    ///
+    /// Sequential rather than concurrent. The lists this reads are a family's,
+    /// so the count is small — two requests for a long playlist, not twenty —
+    /// and firing them together buys a few hundred milliseconds at the cost of
+    /// being the one call site in the app that can burst the rate limit.
+    ///
+    /// A failed batch fails the whole call, which is deliberate: a partial
+    /// answer would render as a playlist that silently drops its tail, and a
+    /// list that is quietly short is worse than one that is visibly unresolved.
+    /// See ``CatalogFetchLimit``.
     private func items(ofKind kind: ItemKind, ids: [MusicItemID]) async throws -> [CatalogItem] {
+        var found: [CatalogItem] = []
+        for batch in CatalogFetchLimit.batches(ids, for: kind) {
+            found += try await fetch(ofKind: kind, ids: batch)
+        }
+        return found
+    }
+
+    /// One request. The caller has already made `ids` short enough to send.
+    private func fetch(ofKind kind: ItemKind, ids: [MusicItemID]) async throws -> [CatalogItem] {
         switch kind {
         case .song:
             var request = MusicCatalogResourceRequest<Song>(matching: \.id, memberOf: ids)
@@ -245,8 +265,13 @@ public struct MusicKitCatalogSource: CatalogSource {
 
         var ancestryByID: [CatalogID: [Ancestor]] = [:]
 
-        if !songIDs.isEmpty {
-            var request = MusicCatalogResourceRequest<Song>(matching: \.id, memberOf: songIDs)
+        // Split for the same reason ``items(ofKind:ids:)`` is. Chunking only the
+        // lookup would move the failure here rather than fix it: every caller
+        // that resolves a stored list judges it immediately afterwards, and a
+        // song whose lineage never arrived cannot be judged against a denied
+        // artist. See ``CatalogFetchLimit``.
+        for batch in CatalogFetchLimit.batches(songIDs, for: .song) {
+            var request = MusicCatalogResourceRequest<Song>(matching: \.id, memberOf: batch)
             request.properties = [.albums, .artists]
             let response = try await mapErrors { try await request.response() }
             for song in response.items {
@@ -254,8 +279,8 @@ public struct MusicKitCatalogSource: CatalogSource {
             }
         }
 
-        if !albumIDs.isEmpty {
-            var request = MusicCatalogResourceRequest<Album>(matching: \.id, memberOf: albumIDs)
+        for batch in CatalogFetchLimit.batches(albumIDs, for: .album) {
+            var request = MusicCatalogResourceRequest<Album>(matching: \.id, memberOf: batch)
             request.properties = [.artists]
             let response = try await mapErrors { try await request.response() }
             for album in response.items {
