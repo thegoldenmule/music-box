@@ -21,6 +21,15 @@ struct PlaylistView: View {
     @State private var isLoading = true
     @State private var isRenaming = false
     @State private var isConfirmingDelete = false
+    /// Why the list could not be read. Distinct from ``trouble`` because only
+    /// this one is rendered: "Can't load this" is the wrong sentence for a
+    /// removal that failed to save, and the two failures share nothing but a
+    /// type.
+    @State private var loadTrouble: String?
+
+    /// A write that did not take. Set and, as before, never shown — what a kid
+    /// sees when a reorder fails is its own question, and answering it with the
+    /// load state's copy would answer it wrongly.
     @State private var trouble: String?
     @Environment(\.dismiss) private var dismiss
 
@@ -30,8 +39,24 @@ struct PlaylistView: View {
 
     var body: some View {
         Group {
-            if isLoading {
+            // `songs.isEmpty` as well, so that a reload — a reorder, a removal,
+            // any change to `modifiedAt` — does not replace a list the kid is
+            // looking at with a spinner.
+            if isLoading && songs.isEmpty {
                 ProgressView()
+            } else if songs.isEmpty, let loadTrouble {
+                // Before the empty state and behind `songs.isEmpty`, which is two
+                // rules rather than one. Before, because an outage that reaches
+                // this screen has already turned every song down, and "nothing
+                // here" is the wrong answer to "we could not read your playlist."
+                // Behind, because a failed *re*-load still has the last good list
+                // in hand, and covering songs a kid can still play with an error
+                // is the same mistake in the other direction.
+                ContentUnavailableView(
+                    "Can't load this",
+                    systemImage: "wifi.slash",
+                    description: Text(loadTrouble)
+                )
             } else if songs.isEmpty {
                 ContentUnavailableView {
                     Label("Nothing in here yet", systemImage: "music.note.list")
@@ -108,12 +133,36 @@ struct PlaylistView: View {
     }
 
     private func load() async {
+        isLoading = true
         defer { isLoading = false }
         do {
-            songs = try await session.playlistSongs(handle)
+            let results = try await session.playlistSongs(handle)
+            songs = results.items
+            loadTrouble = Self.loadTrouble(with: results)
         } catch {
-            trouble = Session.kidMessage(for: error)
+            loadTrouble = Session.kidMessage(for: error)
         }
+    }
+
+    /// Whether a read that did not throw still failed.
+    ///
+    /// `songs(in:)` swallows a catalog that will not answer and judges the rows
+    /// on their bare identifiers instead, which is what keeps the rest of the app
+    /// drawing offline. For a playlist it has a second effect: a row judged
+    /// without a rating is unrated, and `UnratedBehavior` defaults to `.block`,
+    /// so the whole list comes back turned down and `items` is empty. Read from
+    /// `items` alone that is indistinguishable from a playlist the kid never put
+    /// anything in — and telling a child they have nothing in here is the app
+    /// describing its own outage as their empty playlist.
+    ///
+    /// **Only when nothing survived.** An unresolved read that still has songs to
+    /// show is a provisional verdict, which every other surface renders rather
+    /// than reports; the player's re-check immediately before playback is what
+    /// makes that safe. Reporting it here would put an error over a screenful of
+    /// perfectly playable music.
+    private static func loadTrouble(with results: LibraryResults) -> String? {
+        guard !results.isResolved, results.items.isEmpty else { return nil }
+        return Session.kidUnresolvedMessage
     }
 
     /// The drag, applied to the whole order at once.

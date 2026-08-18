@@ -2045,8 +2045,15 @@ final class Session {
 
     /// One playlist's songs, in the order the kid put them in. Blocks are not
     /// logged, for the same reason.
-    func playlistSongs(_ handle: PlaylistHandle) async throws -> [CatalogItem] {
-        try await library.songs(in: handle).items
+    ///
+    /// **The whole result rather than its items**, because an empty `items` is
+    /// two different screens and only one of them is about the child: a playlist
+    /// with nothing in it, and one whose songs could not be read. `isResolved` is
+    /// the only thing that tells them apart, and dropping it here is what let a
+    /// failed catalog read render as *"Nothing in here yet"* over three hundred
+    /// songs a kid had put there themselves.
+    func playlistSongs(_ handle: PlaylistHandle) async throws -> LibraryResults {
+        try await library.songs(in: handle)
     }
 
     /// A local predicate over the kid's own rows. Never a catalog search, and
@@ -2608,6 +2615,18 @@ final class Session {
     ///
     /// The detail is not lost: every grown-up surface still calls
     /// ``message(for:)`` with the same error.
+    /// What a kid is told when a screen came back empty because the catalog did
+    /// not answer.
+    ///
+    /// Reached without an error to map: ``KidLibrary/LibraryResults/isResolved``
+    /// is a flag rather than a thrown thing, and the failure it reports was
+    /// already swallowed a layer down so the shelves could still draw. It routes
+    /// through ``kidMessage(for:)`` anyway rather than carrying a sentence of its
+    /// own, so this cannot drift out of the four things a child is ever shown.
+    static var kidUnresolvedMessage: String {
+        kidMessage(for: CatalogError.underlying("the catalog did not answer"))
+    }
+
     static func kidMessage(for error: any Error) -> String {
         switch error as? CatalogError {
         case .offline:
