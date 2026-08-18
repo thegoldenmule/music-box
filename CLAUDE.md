@@ -123,9 +123,26 @@ APIs, and nothing caught it. When adding an API, check its availability
 annotation against the declared floor by hand. Building the app against
 `iphonesimulator` is the closest thing to a real check.
 
-Building to a **device** does not work on this machine yet —
-`generic/platform=iOS` reports *iOS 26.5 is not installed*, and the iOS platform
-component needs installing from Xcode → Settings → Components.
+Building to a **device works**, and this paragraph used to say it did not. The
+iOS platform component that was missing has been installed since; both
+destinations build clean, and the whole loop runs from the command line:
+
+```sh
+xcodebuild build -project Apps/AuralSandbox/AuralSandbox.xcodeproj \
+  -scheme AuralSandbox -destination 'id=<device-udid>' -allowProvisioningUpdates
+xcrun devicectl device install app --device <coredevice-uuid> \
+  ~/Library/Developer/Xcode/DerivedData/AuralSandbox-*/Build/Products/Debug-iphoneos/AuralSandbox.app
+```
+
+Two identifiers, and they are not the same one: `xcodebuild -destination id=`
+wants the **hardware UDID**, while `devicectl --device` wants the **CoreDevice
+UUID** that `xcrun devicectl list devices` prints. Passing either where the other
+belongs fails in a way that reads like the device is missing.
+
+None of this replaces the `iphonesimulator` build as the check that matters — it
+is faster, needs no phone, and catches the availability mistakes. What a device
+install is for is the thing no build can answer: whether this build opens the
+family's real store.
 
 **Build settings can be accepted and then ignored.** Two have bitten already,
 neither failing to compile: `IPHONEOS_DEPLOYMENT_TARGET[sdk=iphone*]` silently
