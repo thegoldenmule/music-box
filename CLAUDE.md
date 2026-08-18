@@ -70,7 +70,7 @@ Packages/
   KidLibrary/     the kid's favorites and playlists — the provider seam
 Apps/
   AuralSandbox/  one Xcode project, iOS + Mac — currently a thin debug slice
-Tools/           spikes and throwaway probes — nothing yet
+Tools/           ship, and the store round trip — not throwaway any more
 ```
 
 `CatalogKit` and `FamilyStore` each depend on `PolicyEngine` and on nothing
@@ -513,6 +513,33 @@ on. So: a headless probe behind a launch argument, run with
 `simctl launch --console-pty` (plain `--console` swallows `print()`), is a
 legitimate and cheap way to answer a question about a real API. Write down what
 it answered and delete the probe.
+
+**The second sanctioned use is running the family's own store under a new
+build.** `Tools/seed-store.sh` pulls a container off the phone — via
+`Tools/backup-store.sh`, which never writes inside the working tree because the
+contents are a child's real history — puts it into a simulator, builds HEAD over
+it and launches. Two things only that can answer:
+
+- **Shapes no fixture has.** A 316-song playlist opened empty, and empty is what
+  a playlist looks like whether the engine turned every song down or the catalog
+  request was refused for being one identifier over Apple's cap of 300. Nobody
+  writing a fixture invents three hundred and sixteen of anything; the shape
+  exists only in a store a family made. `swift test` cannot reach it and neither
+  can reading the code.
+- **Whether this build eats the data.** Opening a store migrates it, so seeding
+  a store the *installed* build wrote and comparing row counts before and after
+  is the pre-push migration check. There is no other answer short of finding out
+  on the phone.
+
+This does not soften the paragraph above it. Seeding to *look* at a layout is
+still the thing not to do; what is sanctioned is running it to find out whether
+a read path returns rows, and reporting the counts. Anything about how it feels
+is still the maintainer's, on a device.
+
+`simctl install_app_data` is the documented mechanism for the seeding half and
+it does not work — `containermanager` code 55 for an app that is installed and
+whose data container `get_app_container` will print. The script's header records
+how far each variant gets, so nobody spends the morning re-deriving it.
 
 ## Style
 
