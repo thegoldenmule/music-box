@@ -18,6 +18,12 @@ struct PlaylistView: View {
     let handle: PlaylistHandle
 
     @State private var songs: [CatalogItem] = []
+
+    /// Rows still being read. Drawn as a row of its own at the bottom, because a
+    /// list that stops at thirty of three hundred with nothing under it reads as
+    /// a list that ended — the same lie the empty state used to tell.
+    @State private var pending = 0
+
     @State private var isLoading = true
     @State private var isRenaming = false
     @State private var isConfirmingDelete = false
@@ -84,6 +90,16 @@ struct PlaylistView: View {
                     }
                     .onMove(perform: move)
                     .onDelete(perform: remove)
+
+                    if pending > 0 {
+                        HStack(spacing: 12) {
+                            ProgressView()
+                            Text("Loading \(pending) more")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .listRowSeparator(.hidden)
+                    }
                 }
                 // No edit mode. `onMove` gives long-press-and-drag on its own,
                 // which is the gesture a kid already knows from rearranging
@@ -132,16 +148,26 @@ struct PlaylistView: View {
         .onChange(of: playlist?.modifiedAt) { _, _ in Task { await load() } }
     }
 
+    /// Reads the playlist a page at a time, drawing each one as it lands.
+    ///
+    /// **The list only ever grows downward**, which is what makes this safe to
+    /// watch: `songsIncrementally` yields a settled prefix, never a longer list
+    /// with a hole in it, so nothing a kid is already looking at moves. The last
+    /// snapshot is the whole playlist and is what the trouble check is made
+    /// against — a page still out is not a failure, and reporting one while rows
+    /// are still arriving would put an error over a list that is merely busy.
     private func load() async {
         isLoading = true
         defer { isLoading = false }
-        do {
-            let results = try await session.playlistSongs(handle)
-            songs = results.items
-            loadTrouble = Self.loadTrouble(with: results)
-        } catch {
-            loadTrouble = Session.kidMessage(for: error)
+
+        var last: LibraryResults?
+        for await snapshot in session.playlistSongsIncrementally(handle) {
+            songs = snapshot.items
+            pending = snapshot.pending
+            last = snapshot
         }
+        pending = 0
+        loadTrouble = last.flatMap(Self.loadTrouble(with:))
     }
 
     /// Whether a read that did not throw still failed.

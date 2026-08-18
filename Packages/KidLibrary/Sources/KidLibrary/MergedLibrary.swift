@@ -23,10 +23,30 @@ public struct LibraryResults: Sendable, Hashable {
     /// kid; the player's re-check is what makes it safe.
     public let isResolved: Bool
 
-    public init(items: [CatalogItem], blocked: [BlockedItem], isResolved: Bool) {
+    /// Rows this answer has not looked at yet.
+    ///
+    /// **Zero means finished, and that is the only claim it makes.** A read is
+    /// delivered a page at a time so the top of a long list can be on screen
+    /// while the rest is still coming, which means a caller can be handed an
+    /// answer that is complete as far as it goes and short of the whole. Without
+    /// this there is no way to tell that from a list that has genuinely ended —
+    /// and a playlist that stops at thirty of three hundred, with nothing saying
+    /// more is on its way, is the same lie as one that reads as empty.
+    ///
+    /// Always counted from the *end*: pages are settled as a prefix, so what is
+    /// pending is always the tail. See ``MergedLibrary``'s paged reads.
+    public let pending: Int
+
+    public init(
+        items: [CatalogItem],
+        blocked: [BlockedItem],
+        isResolved: Bool,
+        pending: Int = 0
+    ) {
         self.items = items
         self.blocked = blocked
         self.isResolved = isResolved
+        self.pending = pending
     }
 
     public static let empty = LibraryResults(items: [], blocked: [], isResolved: true)
@@ -171,12 +191,35 @@ public final class MergedLibrary {
     /// anything of its own. A blocked track is absent from `items` and present in
     /// `blocked` — which is what the player skips over rather than stopping on.
     public func songs(in handle: PlaylistHandle) async throws -> LibraryResults {
-        guard let row = await playlist(handle) else { return .empty }
-        return await judge(
-            row.entries.map {
-                Stored(id: $0.catalogID, name: $0.displayName, artworkURL: $0.artworkURL)
+        var latest = LibraryResults.empty
+        for await snapshot in songsIncrementally(in: handle) { latest = snapshot }
+        return latest
+    }
+
+    /// The same playlist, delivered top-first as each page of it resolves.
+    ///
+    /// What a screen showing a long list should read. The first snapshot covers
+    /// the rows that are actually on screen; the rest arrive underneath. See
+    /// ``judged(_:)`` for the ordering guarantee, and
+    /// ``LibraryResults/pending`` for how a caller knows more is coming.
+    public func songsIncrementally(
+        in handle: PlaylistHandle
+    ) -> AsyncStream<LibraryResults> {
+        AsyncStream { continuation in
+            let task = Task { @MainActor in
+                guard let row = await playlist(handle) else {
+                    continuation.yield(.empty)
+                    continuation.finish()
+                    return
+                }
+                let stored = row.entries.map {
+                    Stored(id: $0.catalogID, name: $0.displayName, artworkURL: $0.artworkURL)
+                }
+                for await snapshot in judged(stored) { continuation.yield(snapshot) }
+                continuation.finish()
             }
-        )
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Search the kid's own library.
@@ -217,13 +260,67 @@ public final class MergedLibrary {
     /// already carry, and the write that records those names so the second batch
     /// does not happen again. Steady state is the first alone.
     public func contents() async -> LibraryContents {
-        let stored = await mergedRows()
-        let indexed = await indexedRows()
-        guard !stored.isEmpty || !indexed.isEmpty else { return .empty }
+        var latest = LibraryContents.empty
+        for await snapshot in contentsIncrementally() { latest = snapshot }
+        return latest
+    }
 
-        let judged = await judge(stored)
-        let ancestry = await toppedUpAncestry(for: stored, judged: judged)
+    /// The same library, delivered as each page of it resolves.
+    ///
+    /// The browser's four columns and every drill-in below them are computed
+    /// from one value, which is what makes filtering as a kid types synchronous
+    /// — and it is also why this one read was worth the wait for the whole
+    /// library before anything could be shown. In this family's store that is
+    /// 470 song identifiers.
+    ///
+    /// Two passes rather than one, and the second is why this is not simply
+    /// ``judged(_:)`` forwarded. The lineage top-up names albums and artists the
+    /// stored rows did not carry, and doing it per page would ask for the same
+    /// names over and over. So each page yields contents built from the lineage
+    /// already written down, and one final snapshot carries the top-up — which
+    /// is the same single naming request the batched version made.
+    public func contentsIncrementally() -> AsyncStream<LibraryContents> {
+        AsyncStream { continuation in
+            let task = Task { @MainActor in
+                let stored = await mergedRows()
+                let indexed = await indexedRows()
+                guard !stored.isEmpty || !indexed.isEmpty else {
+                    continuation.yield(.empty)
+                    continuation.finish()
+                    return
+                }
 
+                var stored_ancestry: [CatalogID: LibraryAncestry] = [:]
+                for row in stored where !row.ancestry.isEmpty { stored_ancestry[row.id] = row.ancestry }
+
+                var latest = LibraryResults.empty
+                for await snapshot in judged(stored) {
+                    latest = snapshot
+                    continuation.yield(
+                        assemble(judged: snapshot, indexed: indexed, ancestry: stored_ancestry)
+                    )
+                }
+
+                // Once, at the end. A page-by-page top-up would ask for the same
+                // artist's name as many times as they have songs in the library.
+                let ancestry = await toppedUpAncestry(for: stored, judged: latest)
+                continuation.yield(assemble(judged: latest, indexed: indexed, ancestry: ancestry))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The browser's value, built from one judgement and one lineage table.
+    ///
+    /// Split out of ``contents()`` when the read became progressive: it runs
+    /// once per page rather than once per read, so it must stay free of I/O.
+    /// Everything it needs is already in hand.
+    private func assemble(
+        judged: LibraryResults,
+        indexed: [LibraryIndexRow],
+        ancestry: [CatalogID: LibraryAncestry]
+    ) -> LibraryContents {
         var songs: [LibrarySong] = []
         var favoritedAlbums: [CatalogItem] = []
         var favoritedArtists: [CatalogItem] = []
@@ -714,28 +811,139 @@ public final class MergedLibrary {
     /// immediately before playback, which is what makes that safe rather than
     /// merely convenient.
     private func judge(_ stored: [Stored]) async -> LibraryResults {
-        guard !stored.isEmpty else { return .empty }
+        // The last snapshot of the paged read, so the batched answer and the
+        // progressive one cannot drift — the same trick ``FilteredCatalog``
+        // plays with its two searches, and for the same reason.
+        var latest = LibraryResults.empty
+        for await snapshot in judged(stored) { latest = snapshot }
+        return latest
+    }
 
-        var resolved: [CatalogID: CatalogItem] = [:]
-        var isResolved = true
-        do {
-            let items = try await catalog.items(for: stored.map(\.id))
-            // Lineage before judgement, in one batch, as everywhere else: a song
-            // cannot be judged against a denied artist without knowing who its
-            // artist is.
-            for item in try await catalog.resolveAncestry(for: items) {
-                resolved[item.id] = item
+    /// The same judgement, delivered a page at a time, top first.
+    ///
+    /// **Three hundred identifiers in one request is a screen that shows nothing
+    /// until all of them are back.** The kid is looking at the first ten. So the
+    /// rows are split into pages of ``CatalogFetchLimit/pageSize``, and a
+    /// snapshot goes out every time one lands.
+    ///
+    /// Every element is a **complete answer over a prefix**, not a delta: the
+    /// rows settled so far, in the caller's order, with
+    /// ``LibraryResults/pending`` counting the tail still out. A caller replaces
+    /// its state with each element and never accumulates.
+    ///
+    /// **Only ever a prefix, which is the whole point of the ordering.** Pages
+    /// are started in order and ``CatalogFetchLimit/inFlight`` of them run at
+    /// once, so they can land out of order — page three before page two happens
+    /// routinely. Publishing a snapshot with the gap filled in from below would
+    /// make a list a reader is looking at reorder under them. So a page that
+    /// arrives early waits, and the visible list only ever grows downward.
+    ///
+    /// A page whose request fails is judged on bare identifiers exactly as the
+    /// whole read used to be, and drops `isResolved` for every snapshot after
+    /// it. One page failing does not abandon the others: the tail of a long
+    /// playlist going missing should not empty the top of it.
+    ///
+    /// Cancellation propagates — dropping the stream cancels the requests still
+    /// out, which matters because a kid leaves a screen while it is filling.
+    private func judged(_ stored: [Stored]) -> AsyncStream<LibraryResults> {
+        AsyncStream { continuation in
+            guard !stored.isEmpty else {
+                continuation.yield(.empty)
+                continuation.finish()
+                return
             }
-        } catch {
-            isResolved = false
-        }
 
+            let task = Task { @MainActor in
+                let pages = CatalogFetchLimit.batches(stored, of: CatalogFetchLimit.pageSize)
+                var arrived = [Bool](repeating: false, count: pages.count)
+                var resolved: [CatalogID: CatalogItem] = [:]
+                var isResolved = true
+                var settled = 0
+                var judgedRows = 0
+
+                await withTaskGroup(of: (Int, [CatalogItem]?).self) { group in
+                    var next = 0
+                    func start() {
+                        guard next < pages.count else { return }
+                        let index = next
+                        let page = pages[index]
+                        next += 1
+                        group.addTask { (index, await self.resolvePage(page)) }
+                    }
+                    for _ in 0..<min(CatalogFetchLimit.inFlight, pages.count) { start() }
+
+                    while let (index, items) = await group.next() {
+                        arrived[index] = true
+                        if let items {
+                            for item in items { resolved[item.id] = item }
+                        } else {
+                            isResolved = false
+                        }
+                        start()
+
+                        // Advance the settled prefix as far as it will go, which
+                        // may be nowhere: a page that landed early sits until the
+                        // ones above it have.
+                        var grew = false
+                        while settled < pages.count, arrived[settled] {
+                            judgedRows += pages[settled].count
+                            settled += 1
+                            grew = true
+                        }
+                        guard grew else { continue }
+
+                        continuation.yield(
+                            Self.verdicts(
+                                over: Array(stored.prefix(judgedRows)),
+                                resolved: resolved,
+                                engine: engine,
+                                isResolved: isResolved,
+                                pending: stored.count - judgedRows
+                            )
+                        )
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// One page: the lookup, then the lineage it did not already carry.
+    ///
+    /// `nil` rather than a throw, because a failed page is survivable and the
+    /// caller has to keep going for the others. Lineage before judgement, as
+    /// everywhere else — a song cannot be judged against a denied artist without
+    /// knowing who its artist is. In practice the second call is free: the song
+    /// lookup already asks for `.albums` and `.artists`, and `resolveAncestry`
+    /// skips anything that arrived with ancestry attached.
+    private func resolvePage(_ page: [Stored]) async -> [CatalogItem]? {
+        do {
+            let items = try await catalog.items(for: page.map(\.id))
+            return try await catalog.resolveAncestry(for: items)
+        } catch {
+            return nil
+        }
+    }
+
+    /// The engine's answer for every row, in the caller's order.
+    ///
+    /// Static and pure so the paging above it has nothing to get wrong: given
+    /// the same rows and the same resolutions it is the same answer, whether it
+    /// was reached in one request or eleven.
+    private static func verdicts(
+        over stored: [Stored],
+        resolved: [CatalogID: CatalogItem],
+        engine: PolicyEngine,
+        isResolved: Bool,
+        pending: Int
+    ) -> LibraryResults {
         var allowed: [CatalogItem] = []
         var blocked: [BlockedItem] = []
         for row in stored {
             // A resolved item that came back is judged on everything it knows.
-            // One that did not — delisted, or the whole request failed — is
-            // judged on its identifier alone.
+            // One that did not — delisted, or its page failed — is judged on its
+            // identifier alone.
             let item = resolved[row.id] ?? row.fallback
             switch engine.evaluate(item.policyItem) {
             case .allowed:
@@ -744,8 +952,9 @@ public final class MergedLibrary {
                 blocked.append(BlockedItem(item: item, reason: reason))
             }
         }
-
-        return LibraryResults(items: allowed, blocked: blocked, isResolved: isResolved)
+        return LibraryResults(
+            items: allowed, blocked: blocked, isResolved: isResolved, pending: pending
+        )
     }
 
     /// Everything in this batch the kid may currently play, lineage named.

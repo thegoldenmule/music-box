@@ -2056,6 +2056,15 @@ final class Session {
         try await library.songs(in: handle)
     }
 
+    /// The same playlist, arriving a page at a time with the top first.
+    ///
+    /// What ``PlaylistView`` reads. A three-hundred-song playlist asked for in
+    /// one request shows nothing until every row is back, and the kid is looking
+    /// at the first ten of them.
+    func playlistSongsIncrementally(_ handle: PlaylistHandle) -> AsyncStream<LibraryResults> {
+        library.songsIncrementally(in: handle)
+    }
+
     /// A local predicate over the kid's own rows. Never a catalog search, and
     /// never `MusicLibrarySearchRequest`.
     func searchLibrary(_ term: String) async throws -> [CatalogItem] {
@@ -2080,7 +2089,18 @@ final class Session {
 
     /// Reads the library for the browser. Safe to call again; it replaces.
     func loadLibrary() async {
-        libraryContents = await library.contents()
+        // Assigned per page rather than once at the end. Every column and every
+        // drill-in reads this one value, so replacing it as each page lands is
+        // the whole of the progressive render — the views are already observing
+        // it and need to know nothing about how it arrives.
+        //
+        // `hasLoadedLibrary` moves on the *first* snapshot, not the last: it
+        // exists to tell an empty library from one not read yet, and by the first
+        // page that question is answered.
+        for await snapshot in library.contentsIncrementally() {
+            libraryContents = snapshot
+            hasLoadedLibrary = true
+        }
         hasLoadedLibrary = true
     }
 

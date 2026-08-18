@@ -54,6 +54,28 @@ enum Fix {
         song(encore, "Applause", rating: .clean, track: 2, on: sophomore, by: duo, named: "The Duo"),
     ]
 
+    /// An identifier for one of arbitrarily many interchangeable clean songs.
+    ///
+    /// **A three-hundred-entry playlist cannot be written out by hand**, and it
+    /// is exactly the length the paging exists for — the bug it was written
+    /// after needed 316 rows to appear at all. What these tests assert is sizes
+    /// and ordering, not anything about a particular song, so the rows are
+    /// generated and numbered: `bulk(7)` is the eighth of them and stays the
+    /// eighth, which is what makes "the top arrived first" a testable claim.
+    static func bulk(_ index: Int) -> CatalogID { CatalogID(.song, "song-bulk-\(index)") }
+
+    /// The item behind ``bulk(_:)``, minted on demand rather than listed.
+    static func bulkItem(_ id: CatalogID) -> CatalogItem? {
+        guard id.kind == .song, id.rawValue.hasPrefix("song-bulk-") else { return nil }
+        return CatalogItem(
+            id: id,
+            title: id.rawValue,
+            subtitle: "Café Band",
+            rating: .clean,
+            ancestors: [Ancestor(id: record), Ancestor(id: band)]
+        )
+    }
+
     static func song(
         _ id: CatalogID,
         _ title: String,
@@ -123,14 +145,34 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
     func item(for id: CatalogID) async throws -> CatalogItem? {
         try check()
         guard !lock.withLock({ missing.contains(id) }) else { return nil }
-        return Fix.catalog.first { $0.id == id }
+        return Fix.catalog.first { $0.id == id } ?? Fix.bulkItem(id)
+    }
+
+    /// The size of every batch lookup, in the order the requests were made.
+    ///
+    /// **The one thing no double in this repo could see, and the bug rode in on
+    /// it.** A three-hundred-song playlist was sent as one request, one over
+    /// Apple's cap, and nothing in any test could tell that from three hundred
+    /// requests or from eleven. Recorded as sizes rather than counts because the
+    /// question is now "how big was each one", not "how many were there".
+    private var itemRequests: [Int] = []
+    var itemRequestSizes: [Int] { lock.withLock { itemRequests } }
+
+    /// Identifiers whose *page* fails — one batch of a long read going down
+    /// while the rest of it lands.
+    private var failingIDs: Set<CatalogID> = []
+
+    func failLookup(of id: CatalogID) {
+        lock.withLock { _ = failingIDs.insert(id) }
     }
 
     func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
         try check()
+        lock.withLock { itemRequests.append(ids.count) }
+        if lock.withLock({ !failingIDs.isDisjoint(with: ids) }) { throw Down() }
         let gone = lock.withLock { missing }
         return ids.compactMap { id in
-            gone.contains(id) ? nil : Fix.catalog.first { $0.id == id }
+            gone.contains(id) ? nil : (Fix.catalog.first { $0.id == id } ?? Fix.bulkItem(id))
         }
     }
 
@@ -168,7 +210,7 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
         try check()
         return items.map { item in
             guard item.ancestors.isEmpty else { return item }
-            return Fix.catalog.first { $0.id == item.id } ?? item
+            return Fix.catalog.first { $0.id == item.id } ?? Fix.bulkItem(item.id) ?? item
         }
     }
 
