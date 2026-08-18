@@ -93,6 +93,28 @@ public enum Enrollment {
             role: role, boundKidID: boundKidID, kids: kids,
             hasLocalPasscode: hasLocalPasscode, isRevoked: isRevoked) == nil
     }
+
+    /// Whether saving this would land straight back on the setup screen.
+    ///
+    /// **Legal and finished are different questions, and the gap between them was
+    /// a loop.** ``refusal(role:boundKidID:kids:hasLocalPasscode:isRevoked:)``
+    /// answers the first: a player device with no child named is a legal record,
+    /// deliberately, because a shared iPad may be enrolled before anybody decides
+    /// whose it is. But ``BindingResolver`` turns exactly that state into
+    /// `.locked(.notBound)`, and the root view sends `.notBound` back to setup —
+    /// so the save succeeded, the row was written, and the same screen came back
+    /// with nothing on it to say why.
+    ///
+    /// Found on a real store: the button wrote `ZDEVICERECORD` with a null
+    /// `ZBOUNDKIDID` and looked completely dead. The two facts that made it
+    /// invisible are that the screen is its own "fix this" destination, and that
+    /// SwiftUI kept the view's state across the change, so not one pixel moved.
+    ///
+    /// Here rather than in the view for the reason this whole type is here: a
+    /// rule in a `.disabled(…)` modifier is a rule nothing off-device can test.
+    public static func isUnfinished(role: EnrollmentRole, boundKidID: UUID?) -> Bool {
+        role.isPlayer && boundKidID == nil
+    }
 }
 
 // MARK: -

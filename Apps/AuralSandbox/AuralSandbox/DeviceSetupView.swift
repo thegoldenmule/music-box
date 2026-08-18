@@ -43,7 +43,18 @@ struct DeviceSetupView: View {
             if role.isPlayer {
                 Section {
                     Picker("Opens into", selection: $boundKidID) {
-                        Text("Ask each time").tag(UUID?.none)
+                        // **Not "Ask each time".** That is what this row said,
+                        // and there is no such behaviour: a player device with
+                        // no child resolves to `.locked(.notBound)`, which the
+                        // root view sends straight back here. The label promised
+                        // a feature that does not exist and the promise was the
+                        // whole bug — pressing Done wrote the row, came back to
+                        // this screen unchanged, and read as a dead button.
+                        //
+                        // Kept as a row rather than removed so the picker has a
+                        // state to start in. Nothing defaults to a child: this
+                        // screen exists because the wrong child is invisible.
+                        Text("Not chosen yet").tag(UUID?.none)
                         ForEach(session.kids, id: \.id) { kid in
                             Text(kid.name).tag(UUID?.some(kid.id))
                         }
@@ -71,12 +82,17 @@ struct DeviceSetupView: View {
 
             Section {
                 Button("Done") { save() }
-                    .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(unmet != nil)
             } footer: {
                 // The refusal's own words, which say what to do rather than what
                 // is wrong — see `EnrollmentRefusal.explanation`.
                 if let refusal {
                     Text(refusal.explanation).foregroundStyle(.red)
+                } else if let unmet {
+                    // Not red. Nothing has gone wrong — the form is not finished,
+                    // and a parent halfway through filling it in is not being
+                    // told off.
+                    Text(unmet).foregroundStyle(.secondary)
                 }
             }
         }
@@ -117,6 +133,29 @@ struct DeviceSetupView: View {
                 "A child's device needs one before it can open into their music. It is what keeps the settings — and everything this app records about them — out of reach of whoever is holding it."
             )
         }
+    }
+
+    /// What is still missing, in the words to put under the button.
+    ///
+    /// **Done used to be disabled on the name alone**, and that was the visible
+    /// half of a loop. The other condition — a player device with nobody chosen —
+    /// was not a refusal, so the save went through, wrote the row, resolved to
+    /// `.locked(.notBound)`, and came back to this same screen with SwiftUI
+    /// holding every field where it was. Nothing moved, so the button read as
+    /// broken rather than as a question not yet answered.
+    ///
+    /// The rule itself is ``Enrollment/isUnfinished(role:boundKidID:)`` rather
+    /// than a condition written here: it has to mean exactly what
+    /// `BindingResolver` locks on, and a copy of it in a view is a copy that can
+    /// drift. There is a test tying the two together.
+    private var unmet: String? {
+        if label.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "Give this device a name so you can tell it apart later."
+        }
+        if Enrollment.isUnfinished(role: role, boundKidID: boundKidID) {
+            return "Choose whose music this device opens into."
+        }
+        return nil
     }
 
     private var explanation: String {

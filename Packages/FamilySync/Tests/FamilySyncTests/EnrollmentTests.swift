@@ -113,6 +113,74 @@ struct EnrollmentRules {
 
 // MARK: -
 
+/// **Legal and finished are different questions**, and the gap between them was
+/// a loop with nothing on screen: the record saved, `BindingResolver` returned
+/// `.locked(.notBound)`, the root view sent that back to the setup screen, and
+/// SwiftUI kept the view's state — so the button looked dead while writing a row
+/// every time it was pressed.
+@Suite("Whether a setup is finished, not merely allowed")
+struct EnrollmentCompleteness {
+    @Test("A player device with no child named is legal but not finished")
+    func playerWithoutKidIsUnfinished() {
+        for role in [EnrollmentRole.kidOnly, .both] {
+            // Legal: `refusal` lets it through on purpose.
+            #expect(
+                Enrollment.refusal(
+                    role: role, boundKidID: nil, kids: kids, hasLocalPasscode: false) == nil
+            )
+            // And unfinished: this is the state that comes straight back.
+            #expect(Enrollment.isUnfinished(role: role, boundKidID: nil))
+        }
+    }
+
+    @Test("Naming a child finishes it")
+    func namingAKidFinishesIt() {
+        for role in [EnrollmentRole.kidOnly, .both] {
+            #expect(Enrollment.isUnfinished(role: role, boundKidID: ada) == false)
+        }
+    }
+
+    /// A grown-up's phone opens no player, so having no child is its finished
+    /// state rather than a gap. Reporting one would put an unanswerable
+    /// requirement on the one device that must never meet it — `refusal` already
+    /// turns a bound parent-only device down as a contradiction.
+    @Test("A grown-up's device is finished with no child, and cannot have one")
+    func parentOnlyIsFinishedWithoutAKid() {
+        #expect(Enrollment.isUnfinished(role: .parentOnly, boundKidID: nil) == false)
+        #expect(
+            Enrollment.refusal(
+                role: .parentOnly, boundKidID: ada, kids: kids, hasLocalPasscode: true)
+                == .parentOnlyCannotBind
+        )
+    }
+
+    /// The claim the whole thing rests on: "unfinished" has to mean exactly the
+    /// state `BindingResolver` locks on, or the screen guards against the wrong
+    /// thing. Asserted against the resolver rather than restated, so the two
+    /// cannot drift apart.
+    @Test("Unfinished is exactly what the resolver calls notBound")
+    func unfinishedMatchesTheResolver() {
+        let device = DeviceBinding(
+            id: UUID(),
+            role: EnrollmentRole.both.rawValue,
+            boundKidID: nil,
+            enrolledAccountRecordName: nil,
+            isRevoked: false
+        )
+        let outcome = BindingResolver.resolve(
+            device: device,
+            account: .noOpinion,
+            kids: [KidBinding(id: ada)],
+            hasLocalPasscode: true
+        )
+
+        #expect(outcome == .locked(.notBound))
+        #expect(Enrollment.isUnfinished(role: .both, boundKidID: device.boundKidID))
+    }
+}
+
+// MARK: -
+
 @Suite("The role strings on both sides of the boundary")
 struct RoleStrings {
     /// `EnrollmentRole` and `DeviceRole` are the same strings written twice, so
