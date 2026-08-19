@@ -45,8 +45,7 @@ struct Sessions {
     func touchCannotResurrect() {
         var gate = AdminGate()
         gate.succeeded(at: t0)
-        // One second past the timeout: the session is gone, and nudging it must
-        // not bring it back without anyone entering anything.
+        // One second past timeout — nudging must not resurrect it unasked.
         gate.touch(at: at(AdminGate.idleTimeout + 1))
 
         #expect(gate.isOpen(at: at(AdminGate.idleTimeout + 2)) == false)
@@ -108,8 +107,7 @@ struct Backoff {
             delay = gate.failed(at: t0)
         }
 
-        // Unbounded doubling bricks the app for a parent long before it deters
-        // a kid, who has all afternoon regardless.
+        // Unbounded doubling bricks the app before it deters a kid with all afternoon.
         #expect(delay == AdminGate.maxDelay)
     }
 

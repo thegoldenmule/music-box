@@ -38,14 +38,7 @@ import Foundation
 /// If it ever *does* need to resist someone holding the verifier, the answer is
 /// more digits rather than more iterations. That is a product decision.
 public struct PasscodeVerifier: Sendable, Equatable {
-    /// OWASP's 2023 floor for PBKDF2-HMAC-SHA256. High enough to be felt by an
-    /// attacker and unnoticeable once, on the one screen that uses it.
-    ///
-    /// **Stored nowhere and therefore not tunable per record**, which is a
-    /// deliberate limitation rather than an oversight: raising it later means
-    /// every existing verifier stops matching, so it can only be raised by
-    /// re-deriving from a passcode somebody has just typed. Written down here so
-    /// whoever raises it knows that before they do.
+    /// OWASP's 2023 floor. Not tunable per record — raising it breaks old verifiers.
     public static let iterations = 210_000
 
     public static let saltByteCount = 16
@@ -59,10 +52,7 @@ public struct PasscodeVerifier: Sendable, Equatable {
         self.verifier = verifier
     }
 
-    /// Derives from a passcode and a caller-supplied salt.
-    ///
-    /// The salt is a parameter for the reason ``PasscodeRecord/make(_:salt:)``'s is:
-    /// so a test is deterministic. ``make(_:)`` reaches for randomness.
+    /// Salt is a parameter for test determinism, like `PasscodeRecord.make(_:salt:)`.
     public static func make(_ passcode: String, salt: Data) -> PasscodeVerifier {
         PasscodeVerifier(salt: salt, verifier: derive(passcode, salt: salt))
     }
@@ -71,8 +61,7 @@ public struct PasscodeVerifier: Sendable, Equatable {
         make(passcode, salt: PasscodeRecord.randomSalt(byteCount: saltByteCount))
     }
 
-    /// Constant-time comparison, so a timing difference cannot leak how much of a
-    /// guess was right — the same reason ``PasscodeRecord/matches(_:)`` does it.
+    /// Constant-time, like `PasscodeRecord.matches`, so timing can't leak progress.
     public func matches(_ passcode: String) -> Bool {
         let candidate = Self.derive(passcode, salt: salt)
         guard candidate.count == verifier.count, !verifier.isEmpty else { return false }
@@ -81,11 +70,7 @@ public struct PasscodeVerifier: Sendable, Equatable {
         return difference == 0
     }
 
-    /// Returns empty on failure rather than trapping.
-    ///
-    /// A derivation that fails must not match anything, and ``matches(_:)`` refuses
-    /// an empty verifier explicitly — the failure mode to avoid is an all-zero
-    /// derivation on both sides comparing equal and opening the gate.
+    /// Empty on failure, not a trap — `matches` refuses empty so failures can't match.
     static func derive(_ passcode: String, salt: Data) -> Data {
         let passwordBytes = Array(passcode.utf8)
         var derived = [UInt8](repeating: 0, count: verifierByteCount)

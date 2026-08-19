@@ -1,25 +1,13 @@
 import Foundation
 import Security
 
-/// The admin passcode, in the Keychain.
-///
-/// **Deliberately not in the app's own store.** The passcode has to survive a
-/// reinstall: a kid who works out that deleting and reinstalling the app clears
-/// the gate has beaten it, and nothing else in the design would stop them.
-/// SwiftData does not survive that. The Keychain does.
-///
-/// Accessibility is `AfterFirstUnlockThisDeviceOnly`: readable in the
-/// background once the device has been unlocked since boot, and never synced to
-/// another device or restored onto one. A family's second parent gets their own
-/// passcode rather than inheriting this one.
+/// Keychain, not SwiftData: must survive a reinstall, or that clears the gate.
 public struct KeychainPasscodeStore: PasscodeStore {
     public enum Failure: Error, Equatable {
-        /// The Keychain refused, carrying its own status code — which is the
-        /// only useful thing to report, since the causes are all environmental.
+        /// The status code is the only useful thing to report — causes are environmental.
         case keychain(OSStatus)
 
-        /// Stored bytes that are not a record. Treated as no passcode set,
-        /// never as a passcode that matches nothing.
+        /// Unparseable bytes read as no passcode set, never as one that matches nothing.
         case corrupt
     }
 
@@ -65,9 +53,7 @@ public struct KeychainPasscodeStore: PasscodeStore {
     public func save(_ record: PasscodeRecord) throws {
         let data = encode(record)
 
-        // Update first, then add. Add-then-handle-duplicate would leave the old
-        // passcode in place on the duplicate path, which is the one case where
-        // failing quietly means the gate still opens to the previous code.
+        // Try update first — adding to a duplicate key would leave the old code active.
         let updateStatus = SecItemUpdate(
             baseQuery as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
@@ -91,23 +77,9 @@ public struct KeychainPasscodeStore: PasscodeStore {
     }
 
     // MARK: - Bytes
-    //
-    // salt ‖ hash ‖ epoch, fixed widths, no container format. There is exactly one
-    // producer and one consumer, and a plist or JSON here would be a schema to
-    // migrate for no benefit.
-    //
-    // **The epoch is appended, and its absence is the migration.** Items written
-    // before epochs existed are salt ‖ hash and nothing else, and there are real
-    // installs holding one. A shorter blob reads back at epoch 0, which sorts below
-    // `PasscodeEpoch.first` and therefore reads as stale rather than as current —
-    // the fail-closed direction. Length is the discriminator rather than a version
-    // byte because adding a version byte to a format with no version byte has the
-    // same problem one level up.
+    // salt‖hash‖epoch: pre-epoch items decode at epoch 0, failing closed as stale.
 
-    // Reachable from tests because the length discrimination below is the part with
-    // a real failure behind it, and it cannot be exercised through the Keychain —
-    // that needs a device and an entitlement, which is the whole reason
-    // `PasscodeStore` is a protocol.
+    // Exposed to tests: decode's length switch needs no device, unlike the Keychain.
     func encodeForTests(_ record: PasscodeRecord) -> Data { encode(record) }
     func decodeForTests(_ data: Data) throws -> PasscodeRecord { try decode(data) }
 
@@ -124,13 +96,7 @@ public struct KeychainPasscodeStore: PasscodeStore {
         return data
     }
 
-    /// **Discriminated on exact length, not on "is there more".** The first attempt
-    /// at this asked whether anything followed the salt by more than four bytes,
-    /// which is true of a 48-byte pre-epoch item — so it read the last four bytes of
-    /// the *hash* as an epoch and every existing install would have stopped
-    /// recognising its own passcode. Both widths are fixed, which is exactly what
-    /// makes the length a safe discriminator, and it is the reason this format has
-    /// no version byte to begin with.
+    /// Exact-length match, not "more follows the salt" — that misread hash as epoch.
     private func decode(_ data: Data) throws -> PasscodeRecord {
         switch data.count {
         case legacyLength:

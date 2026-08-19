@@ -37,8 +37,7 @@ struct TheVerifier {
                 != PasscodeVerifier.make("1234", salt: other).verifier)
     }
 
-    /// **The failure mode to avoid**: a derivation that failed on both sides
-    /// producing all-zero bytes that compare equal and open the gate.
+    /// The failure to avoid: two failed derivations both zero, comparing equal.
     @Test("An empty verifier matches nothing")
     func emptyMatchesNothing() {
         let empty = PasscodeVerifier(salt: Fix.salt, verifier: Data())
@@ -70,8 +69,7 @@ struct TheChallenge {
                 == .enterLocal)
     }
 
-    /// The ordinary case has to work with no network at all, which is why equal
-    /// epochs never consult the household.
+    /// Must work with no network — equal epochs never consult the household.
     @Test("A household nobody has told us about leaves the local item governing")
     func noRecordYet() {
         #expect(
@@ -79,9 +77,7 @@ struct TheChallenge {
                 == .enterLocal)
     }
 
-    /// **The bypass this closes.** Joining a family and then setting your own admin
-    /// code would be a way through the gate, and the device that would do it is the
-    /// child's own iPad.
+    /// The bypass this closes: join, then set your own code on the child's device.
     @Test("A device with no code in a household that has one must enter, never choose")
     func joinedDeviceMustEnter() {
         #expect(
@@ -96,8 +92,7 @@ struct TheChallenge {
                 == .enterHousehold(epoch: 2))
     }
 
-    /// An install predating epochs carries 0, which sorts below the first epoch — so
-    /// it reads as stale rather than current the moment a household epoch appears.
+    /// A pre-epoch install carries 0, sorting stale once a household epoch appears.
     @Test("A pre-epoch local item is stale once the household has an epoch")
     func preEpochIsStale() {
         #expect(
@@ -106,8 +101,7 @@ struct TheChallenge {
                 == .enterHousehold(epoch: PasscodeEpoch.first))
     }
 
-    /// A device ahead of the household is not made to re-enter: its own item is
-    /// current by construction, and the household record simply has not caught up.
+    /// A device ahead never re-enters: its item is current, the record just lags.
     @Test("A device ahead of the household still checks locally")
     func aheadIsFine() {
         #expect(
@@ -115,9 +109,7 @@ struct TheChallenge {
                 == .enterLocal)
     }
 
-    /// **Unreadable is never absent**, and never anything that offers to choose. A
-    /// transient Keychain failure on a device holding a family's whole policy set
-    /// must not offer to replace the passcode protecting it.
+    /// Unreadable is never absent — must never offer to replace the code.
     @Test("An unreadable Keychain offers nothing at all")
     func unreadableOffersNothing() {
         for household in [nil, Fix.gate(1)] {
@@ -142,9 +134,7 @@ struct TheNextEpoch {
         #expect(PasscodeEpoch.next(after: Fix.gate(4)) == 5)
     }
 
-    /// Two parents rotating at once produce the same number and therefore one
-    /// record, which the merge settles — rather than two whose order depends on a
-    /// clock.
+    /// Concurrent rotations agree on one number, so the merge settles it, not a clock.
     @Test("Two rotations from the same knowledge agree on the number")
     func concurrentAgree() {
         #expect(PasscodeEpoch.next(after: Fix.gate(4)) == PasscodeEpoch.next(after: Fix.gate(4)))
@@ -155,10 +145,7 @@ struct TheNextEpoch {
 
 @Suite("The local item's bytes")
 struct LocalEncoding {
-    /// **The bug this exists for.** The first version of `decode` asked whether more
-    /// than four bytes followed the salt, which is true of a 48-byte pre-epoch item —
-    /// so it read the tail of the hash as an epoch, and every existing install would
-    /// have stopped recognising its own passcode.
+    /// The bug this guards: `decode` once read a 48-byte item's hash tail as an epoch.
     @Test("An item written before epochs existed still reads, at epoch zero")
     func legacyStillReads() throws {
         let original = PasscodeRecord.make("1234", salt: Fix.salt)
