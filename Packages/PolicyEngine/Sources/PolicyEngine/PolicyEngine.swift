@@ -1,13 +1,7 @@
-/// Decides what one kid may see or play.
-///
-/// Every surface asks this. No other part of the app decides. The player calls
-/// ``evaluate(_:)`` again immediately before playback starts rather than
-/// trusting that the UI only offered allowed things — if the UI shows something
-/// the player then refuses, that is a UI bug, not a safety failure.
-///
-/// Build one per kid and reuse it across a result page; the constructor does the
-/// list indexing once so evaluating 25 search results does not rebuild it 25
-/// times.
+/// Decides what one kid may see or play. Every surface asks this; nothing else
+/// decides, and the player asks again immediately before playback rather than
+/// trusting the UI — shown but then refused is a UI bug, not a safety failure.
+/// Build one per kid and reuse it: the constructor indexes the lists once.
 public struct PolicyEngine: Sendable {
     public let policy: Policy
 
@@ -49,11 +43,9 @@ public struct PolicyEngine: Sendable {
             return isListedAllowed(item) ? .allowed : .blocked(.notOnAllowList)
 
         case .denyPlusAuto:
-            // Rule 4.
-            //
-            // An allow entry on the item *itself* overrides the rating check —
-            // that is the per-item override. An allow on a container does not,
-            // so "allow this artist" cannot silently permit their next explicit
+            // Rule 4. An allow on the item *itself* overrides the rating check
+            // — the per-item override. An allow on a container does not, so
+            // "allow this artist" cannot silently permit their next explicit
             // release.
             if allowed.contains(item.id) {
                 return .allowed
@@ -80,11 +72,10 @@ public struct PolicyEngine: Sendable {
     }
 
     private func ratingVerdict(for item: Item) -> Verdict {
-        // Artists and playlists carry no rating in the catalog — MusicKit's
-        // `Playlist` has no `contentRating` property at all. They are
-        // containers: they may appear, and what is inside them is judged track
-        // by track as it comes up. Without this, `UnratedBehavior.block` would
-        // hide every artist and playlist in the catalog.
+        // Artists and playlists are containers and carry no rating — MusicKit's
+        // `Playlist` has no `contentRating` at all. They may appear; what is
+        // inside is judged track by track as it comes up. Without this,
+        // `UnratedBehavior.block` would hide every artist and playlist.
         switch item.id.kind {
         case .artist, .playlist:
             return .allowed
