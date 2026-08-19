@@ -2,8 +2,6 @@
   "version": 1,
   "findings": {
     "Sources/PolicyEngine/CatalogID.swift|comment.long|/// A reference to one item in the Apple Music catalog. /// ": 1,
-    "Sources/PolicyEngine/ContentRating.swift|comment.long|/// What to do in ``SandboxMode/denyPlusAuto`` when an item ": 1,
-    "Sources/PolicyEngine/ContentRating.swift|comment.long|/// Whether a catalog item is marked explicit. /// /// Mirro": 1,
     "Sources/PolicyEngine/Policy.swift|comment.long|/// Everything the engine needs to know about one kid's conf": 1,
     "Sources/PolicyEngine/Verdict.swift|comment.long|/// Level 2: the catalog marks this explicit. /// /// The ca": 1
   }
