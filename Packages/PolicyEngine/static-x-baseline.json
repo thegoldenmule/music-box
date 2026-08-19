@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "findings": {
+    "Sources/PolicyEngine/CatalogID.swift|comment.long|/// A reference to one item in the Apple Music catalog. /// ": 1,
+    "Sources/PolicyEngine/CatalogID.swift|comment.stale-ref|MusicKit": 2,
+    "Sources/PolicyEngine/ContentRating.swift|comment.long|/// What to do in ``SandboxMode/denyPlusAuto`` when an item ": 1,
+    "Sources/PolicyEngine/ContentRating.swift|comment.long|/// Whether a catalog item is marked explicit. /// /// Mirro": 1,
+    "Sources/PolicyEngine/ContentRating.swift|comment.stale-ref|MusicKit": 3,
+    "Sources/PolicyEngine/Item.swift|comment.long|/// A container an item sits inside, and its rating if it ha": 1,
+    "Sources/PolicyEngine/Item.swift|comment.long|/// Containers this item belongs to, **nearest first**: a so": 1,
+    "Sources/PolicyEngine/Item.swift|comment.long|/// One catalog item being judged, together with the contain": 1,
+    "Sources/PolicyEngine/Policy.swift|comment.long|/// Everything the engine needs to know about one kid's conf": 1,
+    "Sources/PolicyEngine/PolicyEngine.swift|comment.long|// Artists and playlists carry no rating in the catalog — Mu": 1,
+    "Sources/PolicyEngine/PolicyEngine.swift|comment.long|// Rule 4. // // An allow entry on the item *itself* overrid": 1,
+    "Sources/PolicyEngine/PolicyEngine.swift|comment.long|/// Decides what one kid may see or play. /// /// Every surf": 1,
+    "Sources/PolicyEngine/PolicyEngine.swift|comment.stale-ref|MusicKit": 1,
+    "Sources/PolicyEngine/PolicyEngine.swift|comment.stale-ref|Playlist": 1,
+    "Sources/PolicyEngine/PolicyEngine.swift|comment.stale-ref|contentRating": 1,
+    "Sources/PolicyEngine/Verdict.swift|comment.long|/// Level 2: the catalog marks this explicit. /// /// The ca": 1
+  }
+}
