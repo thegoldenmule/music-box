@@ -28,12 +28,10 @@ public enum Reason: Hashable, Sendable {
     /// entry matched, so the report can say *which* deny did it.
     case deniedByParent(CatalogID)
 
-    /// Level 2: the catalog marks this explicit.
-    ///
-    /// The catalog often carries both an explicit and a clean cut of the same
-    /// song. Callers seeing this reason should look for the clean one rather
-    /// than pretending the song does not exist — that lookup belongs in the
-    /// catalog layer, not here.
+    /// Level 2: the catalog marks this explicit. It often carries both an
+    /// explicit and a clean cut of the same song, so callers should look for
+    /// the clean one rather than pretending the song does not exist — a lookup
+    /// that belongs in the catalog layer, not here.
     case explicitContent
 
     /// Level 2: no rating available, and ``UnratedBehavior`` says to block.

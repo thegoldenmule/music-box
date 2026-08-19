@@ -1,6 +1,0 @@
-{
-  "version": 1,
-  "findings": {
-    "Sources/PolicyEngine/Verdict.swift|comment.long|/// Level 2: the catalog marks this explicit. /// /// The ca": 1
-  }
-}
