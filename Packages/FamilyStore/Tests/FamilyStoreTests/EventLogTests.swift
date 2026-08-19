@@ -70,9 +70,7 @@ struct Writing {
         #expect(event.term == "dinosaurs")
         #expect(event.resultCount == 4)
         #expect(event.blockedCount == 2)
-        // Zero results with this set would mean "we stopped looking", not
-        // "nothing matched". The column has to survive the round trip for that
-        // distinction to reach a report at all.
+        // Distinct from "nothing matched"; the column must survive the round trip.
         #expect(event.gaveUpEarly)
     }
 
@@ -109,13 +107,7 @@ struct Writing {
         let log = EventLog(modelContainer: container)
         try await log.record(play(seconds: 60), for: kidID)
 
-        // This is the query a recents screen runs, and both halves of it have
-        // bitten already. Reading `kid.plays` off a long-lived context misses
-        // these rows entirely — EventLog is a ModelActor with its own context,
-        // which is the point of it — so the read has to be a fetch on a fresh
-        // context. And the predicate reaches through an *optional*
-        // relationship, which is the part most likely to stop compiling or
-        // quietly match nothing.
+        // A stale-context `kid.plays` and a silently-empty predicate both bit before.
         let found = try await MainActor.run {
             var descriptor = FetchDescriptor<PlayEventRecord>(
                 predicate: #Predicate { $0.kid?.id == kidID },
@@ -215,10 +207,7 @@ struct MinimumPlay {
 }
 
 // MARK: - Column round trips
-//
-// These columns are the ones that cannot be added later: a fact nobody wrote
-// down at v1 is absent from that period forever. Each case has to survive
-// storage, or the column may as well not exist.
+// A fact nobody wrote at v1 is absent forever; each case must survive storage.
 
 @Suite("Origins survive storage", .tags(.roundTrip))
 struct Origins {
@@ -238,8 +227,7 @@ struct Origins {
 
     @Test("An origin naming a kind we do not know reads back as nothing")
     func unknownKind() {
-        // Not `.home`: a report that silently claims an orphaned row came from
-        // the home screen is worse than one that admits it does not know.
+        // Not `.home` — claiming home is worse than admitting an unknown origin.
         let stored = StoredOrigin(name: "browse", kind: "station", id: "station-A")
         #expect(PlaybackOrigin(stored: stored) == nil)
     }
@@ -283,9 +271,7 @@ struct Reasons {
         Reason.unrated,
     ])
     func fromEngine(reason: Reason) {
-        // `restrictedOutsideApp` has no engine counterpart on purpose: it comes
-        // from Screen Time or Apple Music, and attributing it to a parent's own
-        // rule would show them blocking something they never denied.
+        // No engine counterpart on purpose — not a parent's own rule to attribute.
         #expect(BlockReason(reason) != .restrictedOutsideApp)
     }
 

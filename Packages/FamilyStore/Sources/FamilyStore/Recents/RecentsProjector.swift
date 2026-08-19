@@ -2,59 +2,20 @@ import Foundation
 import PolicyEngine
 import SwiftData
 
-/// Writes visits and maintains the shelf they produce, in one save.
-///
-/// **Not ``EventLog``, and the difference is the contract rather than the
-/// mechanics.** That actor exists to be dumb: a dropped log line costs a report
-/// a line, so it swallows failures and returns before the write lands, and
-/// nothing that a kid can see ever reads from it. Every clause of that becomes
-/// false for a projection. A failed projection write inside `EventLog` would be
-/// eaten by its `try?` — losing the event *and* the shelf update, silently —
-/// and what it feeds is a screen the kid is looking at with their finger still
-/// on the tile. A dropped row there is the home screen not moving when they
-/// pressed play, which reads as the tap having done nothing.
-///
-/// So this one is awaited, its failures reach the caller, and **there is
-/// deliberately no fire-and-forget overload.** Two detached writes have no
-/// ordering guarantee between them, and the order visits arrive in is the entire
-/// content of a trail.
-///
-/// The event row and the trail land in one ``ModelContext`` save, so there is no
-/// state in which the log and its read model disagree.
+/// Unlike `EventLog`, this is awaited — a dropped row here freezes a live screen.
 @ModelActor
 public actor RecentsProjector {
-    /// How far back a rebuild replays.
-    ///
-    /// Bounded so a long history cannot make an upgrade hang. A kid whose last
-    /// few hundred visits hold fewer than ``RecentTrail/cap`` distinct entries
-    /// gets a **shorter** trail, never a wrong one — the same one-way error
-    /// ``ReviewReader/previouslyHeard(for:before:limit:)`` accepts, for the same
-    /// reason.
+    /// Bounded so an upgrade can't hang — a short trail is fine, a wrong one isn't.
     public static let rebuildLimit = RecentTrail.cap * 8
 
-    /// Below this, a repeat visit is the same arrival and writes no event row.
-    ///
-    /// The trail is idempotent either way — the walk collapses duplicates — so
-    /// this is about the *log*, which a parent reads and which should not claim
-    /// a kid opened one album eleven times in four seconds. `.task` fires twice
-    /// on some navigation transitions, and a screen reappearing under a
-    /// dismissed sheet is not a second visit.
-    ///
-    /// Compared between two supplied timestamps, never against a hidden clock.
+    /// About the log, not the trail — `.task` can fire twice on some transitions.
     public static let coalescingWindow: TimeInterval = 2
 
     public enum Failure: Error, Equatable {
         case unknownKid(UUID)
     }
 
-    /// Appends the visit, folds it into the trail, and **returns the trail it
-    /// produced** — newest first.
-    ///
-    /// Returning the read is the whole reason this is awaited. A caller that
-    /// writes and then fetches is racing its own write, which is precisely the
-    /// bug the Recent shelf has today: the home screen reloads microseconds
-    /// after the write is handed to a detached task, so the fetch usually runs
-    /// before the row commits. Here there is no second read to lose the race.
+    /// Returns the trail itself, so no caller can race its own write with a fetch.
     @discardableResult
     public func record(_ visit: VisitEvent, for kidID: UUID) throws -> [RecentEntry] {
         let kid = try kid(kidID)
@@ -63,9 +24,7 @@ public actor RecentsProjector {
             try RecentTrailProjection.rebuild(for: kid, in: modelContext)
         }
 
-        // The event row is skipped for a repeat inside the window; the recompute
-        // still runs, so this method is total — every caller gets the current
-        // shelf back, always.
+        // Event row skipped on repeat; recompute still runs, so this is total.
         if !isRepeat(visit, for: kid) {
             let record = VisitEventRecord(event: visit)
             modelContext.insert(record)
@@ -77,25 +36,7 @@ public actor RecentsProjector {
         return RecentTrailProjection.trail(of: kid)
     }
 
-    /// The shelf, newest first. **Always recomputed, never merely read.**
-    ///
-    /// What a session reads at launch and on a kid switch, and the reason the
-    /// projection is self-healing rather than merely usually-right.
-    ///
-    /// Trusting the stored rows here was a real hole, and a device found it: a
-    /// shelf can only be as good as the last write that landed, ``record`` is
-    /// called with `try?` from the kid's session, and a write that failed left
-    /// rows that were wrong in a way nothing would ever notice. Staleness was
-    /// detected by *version*, which catches a change of rules and cannot catch a
-    /// missed update — so one dropped write meant a wrong shelf until the next
-    /// arrival, and a write that failed reproducibly meant a wrong shelf
-    /// forever.
-    ///
-    /// Recomputing costs a bounded fetch and a fold over at most
-    /// ``RecentTrail/window`` values, once per launch. That is nothing next to
-    /// the round trip that resolves the tiles, and it is the property derived
-    /// data should have: if it can be rebuilt cheaply, rebuild it rather than
-    /// believe it.
+    /// Recomputed always — a device found that trusted rows can silently go stale.
     public func trail(for kidID: UUID) throws -> [RecentEntry] {
         let kid = try kid(kidID)
         try RecentTrailProjection.recompute(for: kid, in: modelContext)
@@ -112,34 +53,14 @@ public actor RecentsProjector {
         return RecentTrailProjection.trail(of: kid)
     }
 
-    /// The oldest visit the live trail still depends on.
-    ///
-    /// **The retention sweep's floor.** A sweep that deletes below this stays
-    /// rebuildable; one that does not silently shortens every kid's shelf the
-    /// next time ``RecentTrail/version`` moves — months later, on an upgrade,
-    /// with nothing on screen to explain it. Costs at most ``RecentTrail/cap``
-    /// rows per kid past the window, which is nothing, and it is what makes
-    /// "a projection is rebuildable by replaying its events" true rather than
-    /// aspirational.
-    ///
-    /// `nil` when the trail is empty and the sweep may take everything.
+    /// The retention sweep's floor — sweeping past it silently breaks the shelf.
     public func retentionFloor(for kidID: UUID) throws -> Date? {
         try RecentTrailProjection.trail(of: kid(kidID)).map(\.at).min()
     }
 
     // MARK: -
 
-    /// Whether this is the same arrival as the newest visit already recorded.
-    ///
-    /// **The window is a range, not a ceiling.** A bare `< coalescingWindow`
-    /// also swallows every *negative* interval, so a visit that arrives looking
-    /// older than the newest one on file is silently discarded as a duplicate.
-    /// The device clock is the one input this store already declares it does not
-    /// trust — a kid can move it, and two devices will not agree — so "earlier
-    /// than what we have" is a state to expect rather than one to treat as
-    /// impossible. Discarding it loses a genuine visit off the shelf and out of
-    /// the report; keeping it costs at worst one duplicate row, which is the
-    /// direction this rule should fail in.
+    /// A range, not a ceiling — an untrusted clock must never cost a lost visit.
     private func isRepeat(_ visit: VisitEvent, for kid: Kid) -> Bool {
         guard
             let newest = kid.visits.compactMap(\.event).max(by: { $0.at < $1.at }),

@@ -1,16 +1,7 @@
 import Foundation
 import SwiftData
 
-/// How far each kid's history has been cleared **on this device**.
-///
-/// **Device-local and never synced**, on the same shelf as `DeviceLibraryState`
-/// and `ActingGrownUp`: it says what this device has already acted on, which is a
-/// different fact on every device and would be actively wrong if handed to
-/// another one. The instruction is what syncs — see ``HistoryClearRecord``.
-///
-/// Losing it is survivable in the direction that matters: an empty watermark makes
-/// every clear look unapplied, so they are applied again, and applying a clear
-/// twice deletes nothing the first pass left behind.
+/// Device-local, never synced — losing it just re-applies clears, idempotently.
 public protocol HistoryClearWatermarkStore: Sendable {
     func watermark(for kidID: UUID) -> Date?
     func setWatermark(_ date: Date, for kidID: UUID)
@@ -54,22 +45,9 @@ public final class InMemoryHistoryClearWatermark: HistoryClearWatermarkStore, @u
 
 // MARK: -
 
-/// What a set of clear instructions adds up to.
-///
-/// **Pure, because the arithmetic is the whole design.** A ``HistoryClearRecord``
-/// is a statement about a *range* rather than about rows — everything at or before
-/// `clearedThrough` goes, whenever it turns up — and that is what makes it
-/// idempotent, independent of arrival order, and effective against rows that had
-/// not been written yet when it was issued. All three of those are properties of
-/// taking a maximum, so taking the maximum is the part worth testing.
+/// Pure — taking the max gives idempotency and order-independence for free.
 public enum HistoryClears {
-    /// The furthest any instruction reaches for this kid, ignoring what has
-    /// already been done.
-    ///
-    /// The maximum rather than the newest-issued: two parents clearing at once
-    /// produce two rows, and the one that reaches further is the one that has to
-    /// win. Picking by `issuedAt` would let a clock skew of a second undo a
-    /// deliberate deletion.
+    /// Max, not newest-issued, so a clock skew can't undo a deliberate clear.
     public static func boundary(for kidID: UUID, in records: [HistoryClearRecord]) -> Date? {
         records
             .filter { $0.kidID == kidID }
@@ -77,12 +55,7 @@ public enum HistoryClears {
             .max()
     }
 
-    /// How far this device still has to clear, or `nil` when it is up to date.
-    ///
-    /// **Strictly greater, so a re-run is free.** This is called on every launch
-    /// and every sync pass, and a boundary equal to the watermark means the work
-    /// was done — returning it anyway would delete nothing and write a row's worth
-    /// of churn every time.
+    /// `nil` when caught up — strictly greater, so a re-run costs nothing.
     public static func outstanding(
         for kidID: UUID,
         in records: [HistoryClearRecord],
@@ -96,23 +69,9 @@ public enum HistoryClears {
 
 // MARK: -
 
-/// Carries out what ``HistoryClears`` decided.
-///
-/// **Separate from the decision for the usual reason**, and separate from
-/// ``Kid/deleteHistory(at:)`` because that one is unbounded: a parent tapping
-/// "clear the logs" means everything, while an instruction arriving from another
-/// device means everything *up to an instant* and must leave the rows written since
-/// alone. Conflating them would have a clear issued last Tuesday, arriving today,
-/// delete a week of a child's listening nobody asked about.
+/// Bounded to an instant, unlike ``Kid/deleteHistory`` — conflating over-deletes.
 public enum HistoryClearApplier {
-    /// Applies every outstanding instruction and advances the watermark.
-    ///
-    /// Returns the kids whose rows actually changed, which is what a caller needs
-    /// in order to know whether anything on screen is now stale.
-    ///
-    /// **The watermark advances only after the deletions are saved.** A crash
-    /// between the two has to leave the clear looking unapplied, because the
-    /// direction that fails safely is doing it twice.
+    /// Advances only after deletions save — a crash re-applies, never skips.
     @MainActor
     @discardableResult
     public static func apply(
@@ -138,40 +97,26 @@ public enum HistoryClearApplier {
         return touched
     }
 
-    /// Deletes one kid's rows at or before `boundary`.
-    ///
-    /// `at <= boundary`, inclusive, matching `clearedThrough`'s own wording:
-    /// *everything at or before this instant is to be destroyed*.
+    /// Inclusive at `boundary`, matching `clearedThrough`: at or before it goes.
     @MainActor
     private static func clear(kidID: UUID, through boundary: Date, in context: ModelContext)
         -> Bool
     {
         var changed = false
 
-        // The four event tables, once, through the protocol that exists so this is
-        // not written four times — and so that a fifth event table fails to
-        // conform rather than being silently left behind by a deletion a parent
-        // asked for.
+        // Through the protocol, so a fifth event table can't be silently skipped.
         changed = purge(VisitEventRecord.self, kidID, boundary, context) || changed
         changed = purge(SearchEventRecord.self, kidID, boundary, context) || changed
         changed = purge(PlayEventRecord.self, kidID, boundary, context) || changed
         changed = purge(BlockEventRecord.self, kidID, boundary, context) || changed
 
-        // **A summary containing any cleared data goes**, judged on the start of
-        // the period rather than its end. One outliving the events it was derived
-        // from is a record the parent asked us to destroy, and a summary that
-        // straddles the boundary is partly made of them — so the direction that
-        // errs toward destruction is the one the instruction asked for.
+        // Judged by period start — a straddling summary errs toward destruction.
         let summaries = fetch(WeeklySummaryRecord.self, kidID, context)
             .filter { $0.weekStart <= boundary }
         for row in summaries { context.delete(row) }
         changed = changed || !summaries.isEmpty
 
-        // **The shelf goes wholesale rather than by date, and that is correct
-        // rather than lazy.** It is a projection over the visits just deleted;
-        // `RecentsProjector` recomputes it unconditionally and will rebuild it from
-        // whatever survived. Deleting entries by their own timestamps would leave a
-        // trail that disagrees with the visits it is supposed to be derived from.
+        // Deleted wholesale — a projection ``RecentsProjector`` rebuilds anyway.
         let trail = fetch(RecentTrailRecord.self, kidID, context)
         for row in trail { context.delete(row) }
         changed = changed || !trail.isEmpty
@@ -188,13 +133,7 @@ public enum HistoryClearApplier {
         return !doomed.isEmpty
     }
 
-    /// Every row of a kid-scoped type belonging to this kid.
-    ///
-    /// Fetched unfiltered and narrowed in Swift rather than by `#Predicate`,
-    /// because the relationship to `Kid` is what carries the ownership and a
-    /// predicate across it is the shape SwiftData is least reliable about. These
-    /// tables are large; this runs at most once per kid per clear, which is the
-    /// trade being made knowingly.
+    /// Filtered in Swift — a `#Predicate` across `Kid` is SwiftData's weak spot.
     @MainActor
     private static func fetch<T: PersistentModel>(
         _ type: T.Type, _ kidID: UUID, _ context: ModelContext
@@ -206,11 +145,7 @@ public enum HistoryClearApplier {
     }
 }
 
-/// Rows that belong to one child.
-///
-/// Exists so ``HistoryClearApplier`` can ask "whose is this" without a switch over
-/// six classes. Deliberately not `ExportableEvent`: the summary and the trail are
-/// not events and are cleared for different reasons.
+/// Lets ``HistoryClearApplier`` ask "whose is this" without a six-way switch.
 protocol KidScoped: AnyObject {
     var kid: Kid? { get }
 }

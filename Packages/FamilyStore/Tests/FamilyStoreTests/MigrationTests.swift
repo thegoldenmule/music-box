@@ -6,20 +6,14 @@ import PolicyEngine
 
 @testable import FamilyStore
 
-/// The household in `Fixtures/v1-store.sqlite`, so an assertion names a value
-/// rather than whatever happens to come back.
+/// The household in `Fixtures/v1-store.sqlite`, so assertions name a value.
 private enum V1 {
     static let family = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
     static let kid = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     static let dad = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
 }
 
-/// A writable copy of a checked-in store file, thrown away with the test.
-///
-/// Copied rather than opened in place for two reasons: opening a SwiftData store
-/// **migrates it**, so a test that used the bundle's copy would rewrite the
-/// fixture and every run after the first would be testing V2 against V2; and the
-/// bundle directory is not reliably writable anyway.
+/// A writable copy of the fixture — opening a store migrates it in place.
 private final class FixtureStore {
     let url: URL
 
@@ -41,23 +35,7 @@ private final class FixtureStore {
 
 // MARK: -
 
-/// **The fixture is a store an older build actually wrote**, generated from a
-/// git worktree at the commit that introduced versioning and checked in as a
-/// binary.
-///
-/// That is the whole point of it, and the first attempt at these tests got it
-/// wrong in a way worth recording. A fixture built by constructing a `Schema`
-/// from a model-type array uses the *current* `@Model` classes, so it has the
-/// current columns no matter which version identifier it is nominally written
-/// under. It passes, it looks like it proves the migration works, and it proves
-/// only that V2 opens V2. Verified against this file: `ZKID` genuinely has no
-/// `ZBOUNDACCOUNTRECORDNAME` column.
-///
-/// **When a stage is added, add a fixture with it.** The same trick works every
-/// time — worktree at the last commit before the change, write a store, check it
-/// in — and each one keeps testing every later migration in the chain. What none
-/// of this covers is a store carrying a real family's months of history, which
-/// is the maintainer's to try on a device.
+/// A store an older build wrote — today's classes only prove V2 opens V2.
 @Suite("Opening a store an older build wrote")
 @MainActor
 struct Migration {
@@ -84,15 +62,7 @@ struct Migration {
         #expect(kid.id == V1.kid)
         #expect(kid.name == "Ada")
 
-        // The two fields that decide what a child can reach. Asserted by value,
-        // not by presence: a migration that quietly defaults these widens a
-        // sandbox with nothing on screen to say so.
-        //
-        // They have since moved onto `SandboxSettingRecord`, and this store has
-        // no decision rows because the table did not exist when it was written
-        // — so the columns are the answer, and `effectiveMode` has to agree with
-        // them. That agreement is exactly what let the move be additive instead
-        // of a custom stage over a family's live curation.
+        // Asserted by value: a quiet default here would widen a sandbox unseen.
         #expect(kid.mode == .allowOnly)
         #expect(kid.unratedBehavior == .block)
         #expect(kid.sandboxSettings.isEmpty)
@@ -120,11 +90,7 @@ struct Migration {
         #expect(try context.fetch(FetchDescriptor<SearchEventRecord>()).count == 1)
     }
 
-    /// The line V2 is drawn on: every column it adds has a default that is the
-    /// *truthful* value for a row written before it existed. That is what makes
-    /// the whole version a lightweight stage with no backfill, and it is worth
-    /// asserting rather than assuming — the moment one of these should have been
-    /// something else, this version was the wrong place for it.
+    /// Every V2 column defaults to the truthful value for a pre-existing row.
     @Test("The new columns arrive holding the truth, not a placeholder")
     func newColumnsAreHonest() throws {
         let fixture = try FixtureStore("v1-store")
@@ -136,8 +102,7 @@ struct Migration {
         let visit = try #require(try context.fetch(FetchDescriptor<VisitEventRecord>()).first)
         let entry = try #require(kid.entries.first)
 
-        // No child had their own Apple Account, and no adult had accepted a
-        // share, because neither thing existed.
+        // Neither had happened yet, so neither is claimed.
         #expect(kid.boundAccountRecordName == nil)
         #expect(grownUp.accountRecordName == nil)
 
@@ -148,24 +113,18 @@ struct Migration {
         // Nothing has carried them off the device, which is true.
         #expect(visit.exportedAt == nil)
 
-        // Nothing was ever withdrawn, because nothing could be — so both policy
-        // entries are live. Getting this backwards would retract a family's
-        // entire allow list in one upgrade, which is why the defaults read
-        // through to `addedAt` rather than standing on their own.
+        // Getting this backwards would retract a family's entire list in one upgrade.
         #expect(entry.retractedAt == nil)
         let allLive = kid.entries.allSatisfy(\.isLive)
         #expect(allLive)
         #expect(kid.liveEntries.count == 2)
 
-        // Nobody has captured a roster order yet. That is the state the capture
-        // exists to fix, and it must not be mistaken for "index zero".
+        // Uncaptured, not "index zero" — the state the capture exists to fix.
         #expect(kid.sortIndex == nil)
         #expect(grownUp.sortIndex == nil)
     }
 
-    /// **The capture, against real old data.** The order a parent typed their
-    /// children and grown-ups in was never stored — it is the insertion order of
-    /// a to-many relationship, readable now and gone the moment anything syncs.
+    /// Roster order was never stored; it's relationship insertion order, lost on sync.
     @Test("The roster order is captured from a store that never recorded one")
     func rosterOrderIsCaptured() throws {
         let fixture = try FixtureStore("v1-store")
@@ -184,13 +143,11 @@ struct Migration {
         #expect(kidsCaptured)
         #expect(adultsCaptured)
 
-        // And running it again on the migrated store finds nothing to do, so a
-        // second device joining later cannot reshuffle it.
+        // Idempotent, so a second device joining later can't reshuffle it.
         #expect(FamilyResolution.captureRosterOrder(of: family) == 0)
     }
 
-    /// A playlist written with contiguous positions still reads in its original
-    /// order under the sparse scheme, and appending to it does not disturb it.
+    /// A contiguous-position playlist still reads in order under the sparse scheme.
     @Test("An older playlist keeps its order, and still takes an append")
     func olderPlaylistOrderSurvives() throws {
         let fixture = try FixtureStore("v1-store")
@@ -220,8 +177,7 @@ struct Migration {
         #expect(try context.fetch(FetchDescriptor<ActivitySegmentRecord>()).isEmpty)
     }
 
-    /// A migration that runs twice is a migration that ran once and lied about
-    /// it. The second open finds a V2 store and must do nothing at all.
+    /// A migration that runs twice and changes anything the second time lied.
     @Test("Opening it again changes nothing")
     func reopeningIsIdempotent() throws {
         let fixture = try FixtureStore("v1-store")
@@ -236,9 +192,7 @@ struct Migration {
         }
     }
 
-    /// Writing still works after the store has come through a migration —
-    /// separately worth asserting, because a store that opens read-only and
-    /// fails on save is a shape SwiftData can leave behind.
+    /// A migrated store can leave itself read-only; asserted separately.
     @Test("A migrated store still takes writes")
     func migratedStoreIsWritable() throws {
         let fixture = try FixtureStore("v1-store")
@@ -264,16 +218,7 @@ struct SchemaVersionShape {
         #expect(FamilyStore.schema.entities.count == FamilySchemaV2.models.count)
     }
 
-    /// There is deliberately no `FamilySchemaV1`, and no migration plan. A
-    /// `VersionedSchema` can only name live types, so an "old" version written
-    /// that way re-describes itself the moment one of those classes changes —
-    /// and a plan built on it made a real store fail to open outright:
-    /// `NSCocoaErrorDomain 134504, "Cannot use staged migration with an unknown
-    /// model version."` Freezing a version means duplicating its `@Model`
-    /// classes, which is the bill the first custom stage has to pay.
-    ///
-    /// This test has nothing to assert against, so it documents the absence
-    /// where someone about to re-add a plan will be reading.
+    /// No `FamilySchemaV1`: a `VersionedSchema` of live types re-describes itself.
     @Test("No plan is wired up, and the migration suite is what proves that is safe")
     func noPlanIsDeliberate() {
         #expect(FamilyStore.schema.entities.isEmpty == false)
@@ -288,10 +233,7 @@ struct SyncCoverageTests {
         Set((SyncCoverage.syncedModels + SyncCoverage.neverSyncs).map { String(describing: $0) })
     }
 
-    /// Under a hand-rolled mapper, *"this model does not sync"* and *"somebody
-    /// forgot to write a mapper"* are the same observable state. This is what
-    /// turns the second into a build failure instead of something a second
-    /// parent notices months later when one kind of row never arrives.
+    /// A forgotten mapper looks like "doesn't sync"; this fails the build instead.
     @Test("Every model is declared either synced or never-syncs")
     func coverageIsExhaustive() {
         let all = Set(FamilySchemaV2.models.map { String(describing: $0) })
@@ -299,12 +241,7 @@ struct SyncCoverageTests {
         #expect(all.subtracting(declared).isEmpty, "undeclared: \(all.subtracting(declared))")
     }
 
-    /// **Both existing checks compare `Set`s, so neither can see a repeat.**
-    /// `SyncMarkRecord` was listed twice in `neverSyncs` and every assertion
-    /// still passed. Harmless there — nothing consumes these as arrays — but the
-    /// same slip in `syncedModels` is a mapper written twice or a model quietly
-    /// counted against the wrong half, and a list nobody can miscount is cheaper
-    /// than deciding each time whether this one mattered.
+    /// `Set` checks can't see a repeat — `SyncMarkRecord` was listed twice and passed.
     @Test("Neither list repeats itself")
     func listsHaveNoDuplicates() {
         for (name, models) in [
@@ -325,9 +262,7 @@ struct SyncCoverageTests {
         #expect(synced.count + never.count == declared.count)
     }
 
-    /// The four event tables travel as `ActivitySegmentRecord` batches, not as
-    /// rows — a parent's deny must never queue behind a backlog of a child's
-    /// blocked search results, and there is no API to reorder a pending queue.
+    /// Event tables travel as segment batches so a deny can't queue behind them.
     @Test("The event tables are not sent as rows")
     func eventsDoNotSyncDirectly() {
         let never = Set(SyncCoverage.neverSyncs.map { String(describing: $0) })
@@ -336,10 +271,7 @@ struct SyncCoverageTests {
         }
     }
 
-    /// The exception among the projections, and it is deliberate:
-    /// `WeeklySummaryRecord` is what *survives* the retention sweep, so keeping
-    /// it device-local means a co-parent permanently loses every swept period
-    /// with nothing replacing it.
+    /// `WeeklySummaryRecord` syncs because it outlives the sweep that took its source.
     @Test("Projections stay local, except the one that outlives its source")
     func projectionsStayLocal() {
         let never = Set(SyncCoverage.neverSyncs.map { String(describing: $0) })

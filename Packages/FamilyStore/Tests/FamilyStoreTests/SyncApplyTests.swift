@@ -35,8 +35,7 @@ private func seedFamily(_ context: ModelContext, kid name: String = "Ada") -> (F
 @Suite("Absorbing a record another device wrote")
 @MainActor
 struct Applying {
-    /// The whole point, end to end: a household created on one device turns up
-    /// on the other with its child, their sandbox level and their curation.
+    /// End to end: a household created on one device turns up whole on the other.
     @Test("A household, a child and a deny cross to a second device")
     func fullRoundTrip() throws {
         let (a, b) = try twoDevices()
@@ -63,11 +62,7 @@ struct Applying {
         #expect(arrived.buildPolicy().policy.entries == [.deny(deny.entry!.id)])
     }
 
-    /// **Out-of-order arrival is normal, not exceptional.** Two zones have no
-    /// arrival ordering between them, so "the household is here, the children
-    /// are not yet" is a state every joining device passes through. A record
-    /// naming a parent that has not landed is kept and retried, never dropped —
-    /// the same rule a migration follows.
+    /// Out-of-order arrival is normal — a record kept and retried, never dropped.
     @Test("A record whose parent has not arrived is deferred, not dropped")
     func missingParentDefers() throws {
         let (a, b) = try twoDevices()
@@ -101,10 +96,7 @@ struct Applying {
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
     }
 
-    /// Applying the same record twice must not make a second row. The name is
-    /// derived from the natural key, so the receiving side has to match on the
-    /// same key rather than on `id` — two devices that both minted a row for one
-    /// deny have different ids and the same key.
+    /// Matches on the natural key, not `id` — two devices mint different ids.
     @Test("Applying twice inserts once")
     func applyIsIdempotent() throws {
         let (a, b) = try twoDevices()
@@ -123,8 +115,7 @@ struct Applying {
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
     }
 
-    /// A row the other device minted independently for the same deny — different
-    /// `id`, same natural key. It must land on the row already here.
+    /// A different `id`, same natural key — must land on the row already here.
     @Test("A twin minted elsewhere lands on the row already here")
     func twinCollapsesOntoOneRow() throws {
         let (a, b) = try twoDevices()
@@ -150,8 +141,7 @@ struct Applying {
         #expect(try b.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
     }
 
-    /// **A withdrawal has to survive the trip**, or the retraction mechanism is
-    /// decorative.
+    /// A withdrawal has to survive the trip, or retraction is decorative.
     @Test("A retraction crosses and takes the entry off the policy")
     func retractionCrosses() throws {
         let (a, b) = try twoDevices()
@@ -175,10 +165,7 @@ struct Applying {
         #expect(arrived.entries.count == 1)  // the tombstone stays
     }
 
-    /// **Absence is never a vote.** A device that has not seen the retraction
-    /// carries no `retractedAt` at all, and applying its copy must not put the
-    /// entry back. The mutators advance a value or leave it — a second safety net
-    /// under the merge rather than a duplicate of it.
+    /// Absence is never a vote — a copy with no `retractedAt` can't undo one.
     @Test("A stale copy cannot undo a retraction")
     func staleCopyCannotResurrect() throws {
         let context = try newStore()
@@ -194,9 +181,7 @@ struct Applying {
         #expect(allow.isLive == false)
     }
 
-    /// Importing must not look like editing. Stamping the local clock would make
-    /// the next export send the row straight back, and two devices would
-    /// ping-pong a record neither one changed.
+    /// Importing must not look like editing, or the next export ping-pongs it back.
     @Test("An import carries the record's own timestamp, not now")
     func importDoesNotStampNow() throws {
         let (a, b) = try twoDevices()
@@ -212,9 +197,7 @@ struct Applying {
         #expect(arrived.modifiedAt == at(600))
     }
 
-    /// An arriving decision is a fact about a moment somebody else had. Writing
-    /// it through `setMode` would record a *new* decision, on a device that was
-    /// not there, at the wrong time.
+    /// Not through `setMode` — that would record a new decision, at the wrong time.
     @Test("An arriving decision is not re-decided locally")
     func decisionsAreNotReDecided() throws {
         let (a, b) = try twoDevices()
@@ -236,8 +219,7 @@ struct Applying {
         #expect(arrived.effectiveMode == .allowOnly)
     }
 
-    /// A value from a newer build. The most restrictive fallback is the right
-    /// one for the two fields that decide what a child can reach.
+    /// A value from a newer build falls back to the most restrictive, not a crash.
     @Test("An unreadable sandbox level fails closed")
     func unreadableModeFailsClosed() throws {
         let context = try newStore()
@@ -264,13 +246,7 @@ struct Applying {
 @Suite("What this device still owes the server")
 @MainActor
 struct OutboxTests {
-    /// **No enqueue at any call site, and that is the design.** A pending-changes
-    /// table that every mutation appends to has two failure modes this store
-    /// cannot afford: a call site that forgets is a change that silently never
-    /// syncs, and a crash between the mutation's `save()` and the enqueue loses
-    /// it with nothing able to detect it. Both disappear if the outbox is
-    /// *derived* — and `modifiedAt` on every record is enforced structurally, so
-    /// the store can already answer the question.
+    /// No enqueue at any call site — derived from `modifiedAt`, so none can forget.
     @Test("Everything the server has not agreed to is pending")
     func changesAreDerived() throws {
         let context = try newStore()
@@ -296,8 +272,7 @@ struct OutboxTests {
         #expect(pending.first?.recordName == kid.syncRecordName)
     }
 
-    /// The one gap a `modifiedAt` scan cannot cover, because a deleted row has no
-    /// `modifiedAt` left to report.
+    /// The one gap a `modifiedAt` scan can't cover — a deleted row reports nothing.
     @Test("A delete is owed even though the row is gone")
     func deletionsAreOwed() throws {
         let context = try newStore()
@@ -314,9 +289,7 @@ struct OutboxTests {
         #expect(pending.contains(.delete(name: name, type: "PlaylistRecord")))
     }
 
-    /// The tombstone captures the name while the row is still there to be asked.
-    /// A record name is derived from content, so there is no recovering it after
-    /// the delete.
+    /// Captured while the row still exists — no recovering a derived name after.
     @Test("The tombstone carries the name the record had")
     func tombstoneCarriesTheName() throws {
         let context = try newStore()
@@ -349,10 +322,7 @@ struct OutboxTests {
         #expect(pending.contains { if case .delete = $0 { true } else { false } } == false)
     }
 
-    /// Tombstones are swept only once exported and only past a window, because a
-    /// device offline longer than the window will re-upload the row it still
-    /// holds. That is a real limit of the design and the window is where it is
-    /// paid.
+    /// A device offline past the window just re-uploads — the cost is paid here.
     @Test("The sweep takes only exported tombstones past the window")
     func sweepIsConservative() throws {
         let context = try newStore()
@@ -380,8 +350,7 @@ struct OutboxTests {
         #expect(left.contains { $0.exportedAt == nil })
     }
 
-    /// Bookkeeping about what this device owes describes the device, not the
-    /// household — so it must not travel.
+    /// Describes this device's own exchange, not the household — must not travel.
     @Test("The outbox itself does not sync")
     func outboxIsLocal() {
         let never = Set(SyncCoverage.neverSyncs.map { String(describing: $0) })
@@ -394,17 +363,13 @@ struct OutboxTests {
 @Suite("Everything that can be sent can be received")
 @MainActor
 struct ApplyCoverage {
-    /// A model that encodes and does not apply is a kind of row that silently
-    /// never arrives — and the failure is invisible from the sending device,
-    /// which sees its own copy and no error. This is what makes it a build
-    /// failure instead.
+    /// Encodes-but-doesn't-apply is a row that silently never arrives — no error.
     @Test("The apply list and the encode list agree exactly")
     func coverageMatches() {
         #expect(SyncApply.applicableTypes == RecordMapper.encodableTypes)
     }
 
-    /// Every declared type actually dispatches. A name in the set with no `case`
-    /// behind it would pass the test above and still never arrive.
+    /// A name with no `case` behind it would pass the test above and still fail.
     @Test("Every declared type dispatches to something")
     func everyTypeDispatches() throws {
         let context = try newStore()
@@ -413,9 +378,7 @@ struct ApplyCoverage {
         for type in SyncApply.applicableTypes {
             let empty = SyncedRecord(name: "x", type: type, fields: [:])
             let outcome = SyncApply.apply(empty, in: target)
-            // An empty record cannot be placed, but it must fail as *deferred*
-            // rather than as an unknown type — which is what proves the case
-            // exists.
+            // Must fail as deferred, not unknownType — proving the case exists.
             #expect(outcome != .unknownType(type), "no case for \(type)")
         }
     }
@@ -426,9 +389,7 @@ struct ApplyCoverage {
 @Suite("The kid's own work crosses intact")
 @MainActor
 struct LibraryRoundTrip {
-    /// A playlist's natural key *is* its id, so an apply that minted a fresh one
-    /// would give the same playlist a second record name and put a duplicate on
-    /// the server. The songs land under it in order.
+    /// A playlist's natural key *is* its id — minting a fresh one would duplicate it.
     @Test("A playlist and its songs cross with their identity intact")
     func playlistCrosses() throws {
         let (a, b) = try twoDevices()
@@ -454,9 +415,7 @@ struct LibraryRoundTrip {
         #expect(try b.fetch(FetchDescriptor<Family>()).first?.id == family.id)
     }
 
-    /// The precedence rule lives in one place, and an arriving row must not be
-    /// where a second copy of it appears: a row the child chose never degrades
-    /// to one the account adopted.
+    /// A row the child chose must never degrade to one the account adopted.
     @Test("An adopted favorite arriving cannot demote one the kid chose")
     func kidOriginNeverDegrades() throws {
         let context = try newStore()
@@ -473,8 +432,7 @@ struct LibraryRoundTrip {
         #expect(mine.libraryOrigin == .kid)
     }
 
-    /// A dismissal withdraws an allow, so a device that has not seen the restore
-    /// must not be able to put the tile back by carrying no `restoredAt`.
+    /// A device with no `restoredAt` must not be able to put the tile back.
     @Test("A suggestion crosses with both halves of its dismissal")
     func suggestionDismissalCrosses() throws {
         let (a, b) = try twoDevices()
@@ -505,8 +463,7 @@ struct LibraryRoundTrip {
         #expect(arrived.isDismissed == false)
     }
 
-    /// Revocation is a tombstone. A device that has not heard about it carries
-    /// no `revokedAt`, and that absence must never un-revoke.
+    /// A device with no `revokedAt` yet — that absence must never un-revoke.
     @Test("A revocation crosses and cannot be undone by a stale copy")
     func revocationCrosses() throws {
         let context = try newStore()

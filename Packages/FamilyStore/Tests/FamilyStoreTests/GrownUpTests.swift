@@ -360,9 +360,7 @@ struct ClaimingAnAccount {
         #expect(dad.modifiedAt == Fix.t1)
     }
 
-    /// The shared-iPad case, and the reason this is not `GrownUp.claim` at the
-    /// call site: the roster's participant lookup is `first { $0.accountRecordName
-    /// == id }`, so two holders makes it depend on roster order.
+    /// The shared-iPad case: two holders would make roster lookup order-dependent.
     @Test("One account is held by exactly one adult, and a claim moves")
     func onlyOneHolder() throws {
         let (context, family, _) = try newFamily()
@@ -390,8 +388,7 @@ struct ClaimingAnAccount {
         #expect(dad.accountRecordName == "_acct-dad")
     }
 
-    /// This runs on every launch that resolves an acting grown-up. A stamp per
-    /// launch would put the whole roster in the outbox once per launch per device.
+    /// Runs every launch — a stamp each time would outbox the whole roster.
     @Test("Re-claiming the same account writes nothing")
     func idempotent() throws {
         let (context, family, _) = try newFamily()
@@ -417,8 +414,7 @@ struct ClaimingAnAccount {
         #expect(mum.accountRecordName == "_acct-mum")
     }
 
-    /// The roster's whole purpose for this column: turning an opaque participant
-    /// identifier into a name a parent recognises.
+    /// The column's whole purpose: an opaque participant id becomes a readable name.
     @Test("A participant identifier resolves to exactly one name")
     func namesAParticipant() throws {
         let (context, family, _) = try newFamily()

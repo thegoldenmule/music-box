@@ -7,20 +7,7 @@ import Testing
 
 private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
 
-/// Agreeing on a batch, at a size where the difference is the difference.
-///
-/// **A timing assertion, which this suite otherwise has none of, and the
-/// justification is that the bug was only ever visible as time.** Both halves
-/// of accepting a batch used to rescan a whole table per record: a mark per
-/// upsert, the tombstone table per deletion. Every answer was correct. The cost
-/// grew with the square of the store, so it was invisible on a fixture, mild on
-/// a real family's first sync, and unusable a year later — measured at 6.5
-/// seconds on the maintainer's own store and projected to minutes on one only a
-/// few times larger.
-///
-/// The bound is loose on purpose. It is not a benchmark and machines differ; it
-/// is a hundredfold margin over what the linear version does, and nothing but a
-/// return to quadratic will cross it.
+/// A timing test — batch marking was quadratic, 6.5s on the maintainer's store.
 @Suite("Agreeing on a batch stays linear")
 @MainActor
 struct OutboxScale {
@@ -61,10 +48,7 @@ struct OutboxScale {
         #expect(try Outbox.pending(in: context).isEmpty)
     }
 
-    /// Favorites rather than playlist songs, and fixed identifiers, so that two
-    /// separately-built stores produce the *same* record names — a favorite is
-    /// content-addressed on `(kid, itemKind, catalogID)` while a playlist mints
-    /// a UUID nothing can predict.
+    /// Favorites, not playlist songs — content-addressed names match across stores.
     private func storeWithFavorites(_ count: Int) throws -> ModelContext {
         let context = ModelContext(try FamilyStore.inMemoryContainer())
         let family = Family(id: Self.familyID, at: t0)
@@ -83,8 +67,7 @@ struct OutboxScale {
     private static let familyID = UUID(uuidString: "F0000000-0000-0000-0000-00000000000F")!
     private static let kidID = UUID(uuidString: "A0000000-0000-0000-0000-00000000000A")!
 
-    /// The batch has to reach the same state as marking one at a time, or it is
-    /// a faster answer to a different question.
+    /// Must match looped single marks — else it's a faster answer to a different one.
     @Test("A batch mark and a loop of single marks agree")
     func batchMatchesSingles() throws {
         let batchContext = try storeWithFavorites(50)
@@ -112,10 +95,7 @@ struct OutboxScale {
         #expect(try Outbox.pending(in: loopContext).isEmpty)
     }
 
-    /// **One name twice in a batch must not become two rows.** The single-record
-    /// version cannot hit this — it re-reads before each write — so it is the
-    /// one thing the batch version can get wrong that the loop cannot, and a
-    /// duplicate mark is a row the outbox would then disagree with itself about.
+    /// One name twice must collapse — the single-record path re-reads and can't.
     @Test("A repeated name in one batch stays one mark")
     func duplicatesInABatchCollapse() throws {
         let context = ModelContext(try FamilyStore.inMemoryContainer())

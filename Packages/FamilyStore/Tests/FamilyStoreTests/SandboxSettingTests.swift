@@ -36,10 +36,7 @@ private func insertKid(
 @Suite("Which sandbox setting is in force")
 @MainActor
 struct SandboxSettings {
-    /// The state every existing store is in: no decisions, because the table did
-    /// not exist. The column is not a *default* here — it is the value a parent
-    /// actually set — so the spec's rule that no default is substituted at
-    /// evaluation time still holds.
+    /// No decisions is the column's own set value, not a substituted default.
     @Test("With no decisions the stored column is the answer")
     func fallsBackToTheColumn() throws {
         let context = try newStore()
@@ -59,8 +56,7 @@ struct SandboxSettings {
         kid.setMode(.allowOnly, at: Fix.t0 + Fix.beyond)
 
         #expect(kid.effectiveMode == .allowOnly)
-        // The cache is refreshed too, so an older build reading the column
-        // directly sees the same answer rather than a stale one.
+        // Cache refreshed too — an older build reading the column agrees.
         #expect(kid.mode == .allowOnly)
         #expect(kid.sandboxSettings.count == 1)
     }
@@ -74,17 +70,11 @@ struct SandboxSettings {
         kid.setMode(.denyPlusAuto, at: Fix.t0 + Fix.beyond * 2)
 
         #expect(kid.effectiveMode == .denyPlusAuto)
-        // Append-only: changing your mind writes another row, so the admin can
-        // show who set what and when.
+        // Append-only — a rewrite would erase who set what, and when.
         #expect(kid.sandboxSettings.count == 2)
     }
 
-    /// **The failure this whole record exists to prevent.** Two parents deciding
-    /// within the skew window is two clocks that do not agree what "after"
-    /// means, so taking the later timestamp is taking whichever device ran fast.
-    /// Getting it wrong toward narrow shows a stricter sandbox than someone
-    /// picked — visible, one tap to fix. Getting it wrong toward wide hands a
-    /// child reach nobody agreed to, silently.
+    /// Wrong toward narrow is visible and fixable; wrong toward wide is silent.
     @Test("Concurrent decisions resolve to the narrower one")
     func concurrentResolvesNarrower() throws {
         let context = try newStore()
@@ -98,8 +88,7 @@ struct SandboxSettings {
         #expect(kid.effectiveMode == .allowOnly)
     }
 
-    /// And the same the other way round: the tightening does not have to be the
-    /// later of the two to survive.
+    /// The tightening need not be the later of the two to survive.
     @Test("Narrower wins whichever order it arrived in")
     func narrowerWinsEitherOrder() throws {
         let context = try newStore()
@@ -136,9 +125,7 @@ struct SandboxSettings {
         #expect(kid.effectiveUnratedBehavior == .block)
     }
 
-    /// A value written by a newer build. Guessing what it meant is how a newer
-    /// build's tightening becomes an older build's default, so it is skipped
-    /// rather than counted — and if it is the only decision, the column answers.
+    /// Unreadable is skipped, not counted — guessing would fake a default.
     @Test("A decision this build cannot read is not a vote")
     func unreadableIsSkipped() throws {
         let context = try newStore()
@@ -172,9 +159,7 @@ struct SandboxSettings {
         #expect(kid.effectiveMode == .allowOnly)
     }
 
-    /// The reason these two fields left `Kid` at all: on one record with `name`,
-    /// a whole-record merge puts a rename and a tightening in contention, and
-    /// roughly half the time the tightening is the one that disappears.
+    /// A whole-record merge on `Kid` drops the tightening about half the time.
     @Test("A rename cannot contend with a sandbox decision")
     func renameCannotSwallowATightening() throws {
         let context = try newStore()
@@ -183,8 +168,7 @@ struct SandboxSettings {
         kid.setMode(.allowOnly, at: Fix.t0 + Fix.beyond)
         kid.rename(to: "Ada B", at: Fix.t0 + Fix.beyond * 2)
 
-        // The rename is the later write to `Kid`, and it changes nothing about
-        // what she can reach, because the decision does not live there.
+        // The rename changes nothing reachable — the decision lives elsewhere.
         #expect(kid.name == "Ada B")
         #expect(kid.effectiveMode == .allowOnly)
     }

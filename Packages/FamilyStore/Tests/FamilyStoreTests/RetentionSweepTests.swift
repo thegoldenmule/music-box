@@ -10,8 +10,7 @@ private enum Fix {
     static let song = CatalogID(.song, "song-A")
     static let artist = CatalogID(.artist, "artist-A")
 
-    /// Wednesday 2024-01-10T00:00:00Z. Chosen so the week start is a Monday two days
-    /// earlier and the arithmetic is checkable by eye.
+    /// Wednesday 2024-01-10, chosen so the Monday week start is checkable by eye.
     static let now = Date(timeIntervalSince1970: 1_704_844_800)
 
     static func daysAgo(_ days: Int) -> Date {
@@ -93,9 +92,7 @@ struct Cutoff {
         #expect(boundary < Fix.daysAgo(RetentionCutoff.days - 1))
     }
 
-    /// Sweeping through the oldest visit the live shelf references leaves a trail that
-    /// cannot be rebuilt, so the next bump of `RecentTrail.version` empties every
-    /// kid's shelf months later on an upgrade.
+    /// Sweeping past the floor leaves a trail a version bump would empty.
     @Test("A trail reaching further back than the window pulls the boundary with it")
     func clampedToTrailFloor() {
         let floor = Fix.daysAgo(200)
@@ -141,8 +138,7 @@ struct Sweeping {
         #expect(try context.fetch(FetchDescriptor<WeeklySummaryRecord>()).count == 1)
     }
 
-    /// **The decision this whole window rests on.** Counts and top-N were the
-    /// alternative; raw terms survive.
+    /// The decision the window rests on: raw terms survive, not counts or top-N.
     @Test("The summary keeps the raw search terms")
     func keepsTerms() throws {
         let (context, kid) = try store()
@@ -157,8 +153,7 @@ struct Sweeping {
         #expect(summary.searchCount == 1)
     }
 
-    /// A row that has not been carried anywhere would be lost for every other device
-    /// permanently — the summary survives here and the co-parent's copy never existed.
+    /// An unexported row's only copy would be lost for every other device permanently.
     @Test("A row that has never been exported is not swept")
     func unexportedSurvives() throws {
         let (context, kid) = try store()
@@ -198,8 +193,7 @@ struct Sweeping {
         #expect(try context.fetch(FetchDescriptor<SearchEventRecord>()).count == 1)
     }
 
-    /// It runs on every sync pass, so a second pass has to cost nothing — and must not
-        /// re-stamp the summary and put the table back in the outbox.
+    /// Runs every sync pass, so a second pass must re-stamp nothing and cost zero.
     @Test("Sweeping twice deletes nothing more and does not re-stamp the summary")
     func idempotent() throws {
         let (context, kid) = try store()
@@ -216,9 +210,7 @@ struct Sweeping {
         #expect(try context.fetch(FetchDescriptor<WeeklySummaryRecord>()).first?.modifiedAt == stamp)
     }
 
-    /// **What replaces the owner and the lease.** Two devices summarising one week must
-    /// write the same bytes under the same key, or last-write-wins picks between two
-    /// versions of the truth.
+    /// Replaces owner/lease: two devices on one week must write identical bytes.
     @Test("The same events give byte-identical payloads")
     func deterministic() throws {
         func payload() throws -> Data {
@@ -240,8 +232,7 @@ struct Sweeping {
         #expect(first == second)
     }
 
-    /// Exempt from the sweep and not from `deleteHistory`. The floor is what keeps it
-    /// rebuildable; deleting it here would empty a shelf nobody asked to clear.
+    /// Exempt from the sweep, not `deleteHistory` — the floor keeps it rebuildable
     @Test("The Recent shelf and a kid's own work are never swept")
     func exemptions() throws {
         let (context, kid) = try store()
@@ -282,8 +273,7 @@ struct Sweeping {
         #expect(left.first?.event.term == "sam's")
     }
 
-    /// The read side was built for this before anything filled it: an empty list must
-    /// not be able to say "nothing happened" about a week that was swept.
+    /// An empty list must not claim "nothing happened" about a swept week.
     @Test("A reader can tell a swept week from an empty one")
     func coverageIsReported() async throws {
         let container = try FamilyStore.inMemoryContainer()

@@ -111,9 +111,7 @@ struct Favorites {
     @Test("Removing takes every row for the item, not just the first")
     func removesEveryRow() throws {
         let (context, kid) = try newKid()
-        // Two rows for one item is not reachable through `addFavorite`, but the
-        // schema permits it — CloudKit rejects unique constraints — so a sync
-        // merge could produce one.
+        // Not reachable through `addFavorite`, but a sync merge could produce it.
         for _ in 0..<2 {
             let record = FavoriteRecord(catalogID: Fix.song, displayName: "A Song", at: Fix.t0)
             context.insert(record)
@@ -186,8 +184,7 @@ struct Playlists {
         let row = playlist.row
         #expect(row.name == "Bangers")
         #expect(row.entries.map(\.catalogID) == [Fix.song, Fix.song2])
-        // The *order*, not the numbers. Positions are sparse now so that
-        // appending never rewrites a neighbour — see `PlaylistRecord.positionGap`.
+        // The order, not the numbers — positions are sparse on purpose.
         #expect(row.entries.map(\.position) == row.entries.map(\.position).sorted())
         #expect(row.handle.local == playlist.id)
         #expect(row.handle.appleLibraryID == nil)
@@ -214,11 +211,7 @@ struct Playlists {
         #expect(playlist.entries.count == 1)
     }
 
-    /// Was "positions stay contiguous". They do not any more, and that is the
-    /// fix rather than a regression: renumbering ran only on the editing device,
-    /// so after a merge the list held two entries in one slot and a hole nothing
-    /// repaired — and it rewrote `modifiedAt` on every row on every edit, on the
-    /// records with the most of a child's own work in them.
+    /// A fix, not a regression — renumbering broke under two offline devices.
     @Test("A removal from the middle leaves the rest in order")
     func removalKeepsOrder() throws {
         let (_, kid) = try newKid()
@@ -245,8 +238,7 @@ struct Playlists {
         playlist.reorder(to: [Fix.song3, Fix.song, Fix.song2], at: Fix.t1)
 
         #expect(playlist.row.entries.map(\.catalogID) == [Fix.song3, Fix.song, Fix.song2])
-        // Redistributed from zero in gaps, so something can be dropped between
-        // any two of them later without touching either.
+        // Gapped from zero so a later insert never touches a neighbour.
         let gap = PlaylistRecord.positionGap
         #expect(playlist.row.entries.map(\.position) == [0, gap, gap * 2])
     }
@@ -364,8 +356,7 @@ struct StoredLineage {
 
     @Test("An identifier alone does not count as recorded")
     func idWithoutNameIsEmpty() {
-        // What the top-up looks for. A row holding identifiers it cannot name
-        // draws nothing, so it has to stay a candidate.
+        // A row holding ids it can't name draws nothing, so stays a candidate.
         #expect(LibraryAncestry(albumName: "The Record").isEmpty)
         #expect(LibraryAncestry(albumID: "album-A").isEmpty == false)
     }
@@ -395,8 +386,7 @@ struct StoredLineage {
         record.record(ancestry: lineage, at: Fix.t1)
 
         #expect(record.ancestry == lineage)
-        // The name on the row is what the kid saw when they kept it, and a
-        // top-up is not a second tap.
+        // The name is what the kid saw — a top-up is not a second tap.
         #expect(record.displayName == "Sunshine")
         #expect(record.favoritedAt == Fix.t0)
         #expect(record.modifiedAt == Fix.t1)

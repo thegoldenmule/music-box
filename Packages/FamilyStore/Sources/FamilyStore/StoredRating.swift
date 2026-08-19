@@ -1,30 +1,14 @@
 import PolicyEngine
 
-/// A rating as an event row keeps it.
-///
-/// `ContentRating?` is already a three-state problem — `.clean`, `.explicit`, or
-/// no rating available — and writing one down turns it into a four-state one.
-/// A column that is empty can mean the catalog had nothing to say, or that
-/// whatever wrote the row had no rating to hand. Those are different facts and
-/// only one of them is about the item.
-///
-/// Collapsing them would break the annotation the parent's report is built on:
-/// under ``UnratedBehavior/block`` an item the catalog rated nothing is blocked
-/// today and will be blocked tomorrow, which is worth telling a parent, while an
-/// item nobody recorded a rating for is simply a row we cannot judge. Reporting
-/// the second as the first would show a parent a wall of things their kid can
-/// supposedly no longer play.
+/// Distinguishes the catalog saying "no rating" from nobody ever recording one.
 public enum StoredRating: Sendable, Hashable, Codable, CaseIterable {
     case clean
     case explicit
 
-    /// The catalog answered and carried no rating. A recorded fact about the
-    /// item; ``UnratedBehavior`` decides what to do with it.
+    /// The catalog answered with no rating — a fact; ``UnratedBehavior`` decides.
     case unrated
 
-    /// Nothing wrote a rating down. **Not** a fact about the item — the row was
-    /// made somewhere that had no catalog item in hand, such as a block on a
-    /// stored library row that never resolved.
+    /// No rating was ever recorded — not a fact about the item itself.
     case unknown
 
     public init(_ rating: ContentRating?) {
@@ -35,10 +19,7 @@ public enum StoredRating: Sendable, Hashable, Codable, CaseIterable {
         }
     }
 
-    /// What the engine should be told. `nil` for both empty cases — the engine
-    /// has one way to say "no rating" and it is the right answer for each. The
-    /// difference between them survives in ``isRecorded``, which is what decides
-    /// whether the verdict is worth showing.
+    /// `nil` for both empty cases; ``isRecorded`` keeps them distinguishable.
     public var rating: ContentRating? {
         switch self {
         case .clean: .clean
@@ -54,8 +35,7 @@ public enum StoredRating: Sendable, Hashable, Codable, CaseIterable {
 // MARK: - Storage form
 
 extension StoredRating {
-    /// As stored. Frozen: these are read back out of a parent's history months
-    /// later, and a renamed case silently reinterprets it.
+    /// Stored names are frozen — renaming a case would reinterpret old rows.
     enum Name {
         static let clean = "clean"
         static let explicit = "explicit"
@@ -72,14 +52,7 @@ extension StoredRating {
         }
     }
 
-    /// Reads a rating back.
-    ///
-    /// An unreadable string becomes ``unknown`` rather than `nil`, which is the
-    /// one place in this file that does not follow the codebase's usual
-    /// "unreadable is `nil`" rule — and deliberately. `unknown` already *is* the
-    /// "we do not know" case, so there is nothing a `nil` would add beyond
-    /// discarding an otherwise perfectly readable row over a field that is
-    /// advisory.
+    /// An unreadable row becomes ``unknown``, not `nil`, which already means unsure.
     init(stored: String) {
         switch stored {
         case Name.clean: self = .clean

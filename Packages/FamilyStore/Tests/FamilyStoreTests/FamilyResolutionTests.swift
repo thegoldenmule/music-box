@@ -10,8 +10,7 @@ private enum Fix {
     static let t0 = Date(timeIntervalSince1970: 1_700_000_000)
     static let artist = CatalogID(.artist, "artist-A")
 
-    /// Two identifiers whose string order is known, so "lowest wins" is a fact
-    /// the test asserts rather than one it discovers.
+    /// Known string order, so "lowest wins" is asserted, not discovered.
     static let low = UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!
     static let high = UUID(uuidString: "FFFFFFFF-0000-0000-0000-0000000000FF")!
 }
@@ -55,9 +54,7 @@ struct ResolvingTheHousehold {
 
         #expect(try FamilyResolution.resolve(in: context) == nil)
 
-        // The old code created a Family *and* a kid named "Kid" as a side effect
-        // of the fetch missing. Bootstrapping is the caller's call, and a device
-        // that cannot reach the zone is not entitled to make it.
+        // Old code bootstrapped a Family and Kid on a fetch miss; now it's the caller's.
         #expect(try context.fetch(FetchDescriptor<Family>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<Kid>()).isEmpty)
     }
@@ -72,9 +69,7 @@ struct ResolvingTheHousehold {
         #expect(resolved.resolution.mergedAway == 0)
     }
 
-    /// The failure this exists for: two devices that first-launch before the
-    /// first import each bootstrap a household, and afterwards an unsorted fetch
-    /// returns an arbitrary one — potentially a different one per launch.
+    /// Two devices first-launching before import each bootstrap a household.
     @Test("Two households converge on the lowest identifier, from either order")
     func duplicatesConverge() throws {
         for order in [[Fix.low, Fix.high], [Fix.high, Fix.low]] {
@@ -88,9 +83,7 @@ struct ResolvingTheHousehold {
         }
     }
 
-    /// The half that matters: the loser's household is deleted under a cascade
-    /// rule, so anything still parented to it goes with it. A child's playlists
-    /// hang off `Kid`.
+    /// The loser's household cascade-deletes anything still parented to it.
     @Test("The loser's kids and grown-ups are reparented, not cascaded away")
     func losersChildrenSurvive() throws {
         let context = try newStore()
@@ -103,9 +96,7 @@ struct ResolvingTheHousehold {
         #expect(Set(resolved.family.kids.map(\.name)) == ["Ada", "Sam"])
         #expect(Set(resolved.family.grownUps.map(\.name)) == ["Dad", "Mum"])
 
-        // Fetched fresh rather than read off the relationship: a row can be
-        // present in an array and gone from the store, which is the whole
-        // family of bugs this stage is about.
+        // Fetched fresh: a row can look present in the array yet be gone from the store.
         #expect(try context.fetch(FetchDescriptor<Kid>()).count == 2)
         #expect(try context.fetch(FetchDescriptor<GrownUp>()).count == 2)
         for kid in try context.fetch(FetchDescriptor<Kid>()) {
@@ -128,11 +119,7 @@ struct ChoosingTheActiveKid {
         #expect(FamilyResolution.activeKid(of: family, preferring: sam.id)?.id == sam.id)
     }
 
-    /// `kids` is a to-many relationship and CloudKit does not preserve to-many
-    /// ordering, so `first` on it is not a choice anybody made. What replaces it
-    /// is the order a parent actually put their children in, captured into
-    /// `sortIndex` — so the answer is the *first* child added, whatever their
-    /// identifier sorts like.
+    /// CloudKit drops to-many order; `sortIndex` captures it — answer: first added.
     @Test("With no preference the first child added is the answer")
     func fallbackFollowsTheTypedOrder() throws {
         let context = try newStore()
@@ -149,23 +136,18 @@ struct ChoosingTheActiveKid {
             family.addKid(kid, at: Fix.t0)
         }
 
-        // `high` was added first, and sorts *last* by identifier — so this
-        // asserts the roster order beat the tiebreak rather than coinciding
-        // with it.
+        // `high` sorts last by id but was added first — roster order beat the tiebreak.
         #expect(family.kids.compactMap(\.sortIndex).sorted() == [0, 1])
         #expect(FamilyResolution.activeKid(of: family)?.id == Fix.high)
     }
 
-    /// The tiebreak underneath, for rows nothing has captured an order for. It
-    /// has to be identical on every device and every launch; the identifier is
-    /// arbitrary and does that.
+    /// Tiebreak for uncaptured rows: identical everywhere, so an arbitrary id works.
     @Test("Uncaptured rows fall back to a stable tiebreak, and sort last")
     func uncapturedRowsSortLastAndStably() throws {
         let context = try newStore()
         let family = insertFamily(context)
 
-        // Attached directly, so nothing assigns an index — the state every row
-        // written before the column existed is in.
+        // Attached directly: nothing assigns an index, as for any pre-column row.
         for id in [Fix.high, Fix.low] {
             let kid = Kid(
                 id: id, name: id.uuidString, mode: .allowOnly, unratedBehavior: .block, at: Fix.t0)
@@ -181,8 +163,7 @@ struct ChoosingTheActiveKid {
         #expect(captured?.sortIndex == 0)
     }
 
-    /// The capture is the whole point: run it late and the order it was meant to
-    /// preserve has already been through a sync that does not preserve it.
+    /// Run late and the order it was meant to preserve is already sync-scrambled.
     @Test("Capturing the roster order is idempotent and never renumbers")
     func captureIsIdempotent() throws {
         let context = try newStore()
@@ -196,9 +177,7 @@ struct ChoosingTheActiveKid {
         #expect(FamilyResolution.captureRosterOrder(of: family, at: Fix.t0) == 3)
         let first = family.orderedKids.map(\.name)
 
-        // A second run finds nothing to do, and cannot reshuffle what the first
-        // one decided — which is what stops a co-parent's device joining later
-        // from reordering a roster that has already been captured.
+        // A second run does nothing — stops a later co-parent device from reordering it.
         #expect(FamilyResolution.captureRosterOrder(of: family, at: Fix.t0) == 0)
         #expect(family.orderedKids.map(\.name) == first)
     }
@@ -237,18 +216,7 @@ struct ChoosingTheActiveKid {
 @Suite("Removing a policy entry")
 @MainActor
 struct RemovingAPolicyEntry {
-    /// This one moved twice and both moves are worth keeping.
-    ///
-    /// It began as `removeAll()` on the relationship alone, which nulls the
-    /// inverse and leaves the row where no query can reach it — every query here
-    /// is `kid?.id == kidID` — so a parent watched the deny disappear while it
-    /// went on being a deny for nobody. That was fixed by deleting through the
-    /// context, which is right for one writer and wrong for two: **a deleted row
-    /// leaves nothing to enumerate**, so the removal can never be exported and a
-    /// co-parent's device keeps the entry forever.
-    ///
-    /// So it is a retraction. The row stays, reachable by every query, and it is
-    /// `buildPolicy()` that leaves it out.
+    /// A tombstone, not a delete — a deleted row can't be enumerated to export.
     @Test("The row stays as a tombstone and leaves the policy")
     func removalRetracts() throws {
         let context = try newStore()
@@ -262,8 +230,7 @@ struct RemovingAPolicyEntry {
         kid.removeEntry(record, at: Fix.t0 + PolicyEntryRecord.clockSkewWindow * 2)
         try context.save()
 
-        // Still on disk and still attached — that is the tombstone, and it is
-        // the only thing that can carry the withdrawal to another device.
+        // Still on disk and attached — the only thing that can carry the withdrawal along.
         #expect(kid.entries.count == 1)
         #expect(try context.fetch(FetchDescriptor<PolicyEntryRecord>()).count == 1)
 

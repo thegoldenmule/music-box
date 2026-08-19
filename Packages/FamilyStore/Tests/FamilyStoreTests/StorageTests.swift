@@ -158,9 +158,7 @@ struct Entries {
         #expect(kid.modifiedAt == Fix.t1)
     }
 
-    /// Removal is a **retraction**, not a delete: the row stays as the tombstone
-    /// that lets the withdrawal reach another device, and `buildPolicy()` is
-    /// what leaves it out of the policy. See `PolicyEntryRecord.retractedAt`.
+    /// A retraction, not a delete — the row stays as the tombstone that syncs.
     @Test("Removing an entry takes it off the policy and leaves the tombstone")
     func removing() throws {
         let context = try newStore()
@@ -175,9 +173,7 @@ struct Entries {
         #expect(kid.modifiedAt == Fix.t1)
     }
 
-    /// Re-adding what was withdrawn lands on the same row rather than a second
-    /// one. Two rows sharing a natural key is how a retraction gets lost: the
-    /// screen shows one entry either way, and withdrawing it leaves the twin.
+    /// Lands on the same row — two rows sharing a key is how a retraction gets lost.
     @Test("Re-adding a withdrawn entry revives the row it withdrew")
     func reAddingRevives() throws {
         let context = try newStore()
@@ -201,14 +197,7 @@ struct Entries {
 @Suite("A withdrawal and an assertion on one device")
 @MainActor
 struct RetractionOrdering {
-    /// **A plain comparison, and the skew rule is deliberately not here.** On
-    /// one device there is one clock and the order of two actions is not in
-    /// doubt: a parent who removes an allow and puts it back a moment later has
-    /// unambiguously done the second thing second. Failing closed on that made
-    /// their own edit appear not to work for two minutes.
-    ///
-    /// The ambiguity a window exists for only arises between two devices, and
-    /// `Merge` in FamilySync is where those meet — see the skew tests there.
+    /// One device, one clock: no skew window needed, order is unambiguous.
     @Test("A withdrawal a moment after an add takes effect at once")
     func immediateWithdrawalWorks() throws {
         let context = try newStore()
@@ -234,9 +223,7 @@ struct RetractionOrdering {
         #expect(kid.buildPolicy().policy.entries.count == 1)
     }
 
-    /// A device that has not seen the retraction cannot resurrect the row just
-    /// by holding an older copy — `reassert` leaves `retractedAt` in place so
-    /// the comparison, not the absence, decides.
+    /// `reassert` leaves `retractedAt` in place — comparison decides, not absence.
     @Test("Re-asserting keeps the retraction on the record")
     func reassertKeepsTheRetraction() throws {
         let context = try newStore()
@@ -250,8 +237,7 @@ struct RetractionOrdering {
         #expect(record.isLive)
     }
 
-    /// The default for a row written before the column existed. `nil` means
-    /// nothing was ever withdrawn, which is true of every one of them.
+    /// The default for a row predating the column — true of every one of them.
     @Test("A row that was never withdrawn is live")
     func neverWithdrawnIsLive() throws {
         let context = try newStore()
@@ -268,17 +254,12 @@ struct RetractionOrdering {
 @Suite("Two parents, one list, both offline")
 @MainActor
 struct OfflineListMerge {
-    /// **The exit test the spec names**, at the level this store can express it:
-    /// two parents edit the same list while offline, both reconnect, and neither
-    /// one's work is lost. There is no list-shaped value anywhere — only
-    /// independent rows carrying independent timestamps — so the result is the
-    /// same whichever order the changes arrive in, and nothing has to arbitrate.
+    /// No list-shaped value, only independent rows — order of arrival can't matter.
     @Test("Independent edits all survive, from either arrival order")
     func bothParentsEditsSurvive() throws {
         let beyond = PolicyEntryRecord.clockSkewWindow * 2
 
-        // Parent A denies artist X and withdraws the allow on album Y.
-        // Parent B allows album Z and withdraws the same allow on album Y.
+        // A denies X and withdraws Y's allow; B allows Z and withdraws Y too.
         func applyA(_ kid: Kid, y: PolicyEntryRecord) {
             kid.addEntry(kind: .deny, id: Fix.artist, displayName: "X", at: Fix.t0 + beyond)
             kid.removeEntry(y, at: Fix.t0 + beyond)
@@ -362,10 +343,7 @@ struct ModifiedAt {
         #expect(kid.modifiedAt == Fix.t0)
     }
 
-    /// The loudest writer in the store, on the record sync most needs quiet.
-    /// Hearting a twenty-five-album artist ran this once per album, and every
-    /// one of those stamps made a child listening to music look like a parent
-    /// editing settings. It stamped before the fix.
+    /// Used to be the loudest writer — once per album, on the record sync needs quiet.
     @Test("Filling the library index does not stamp the kid")
     func libraryIndexDoesNotStamp() throws {
         let context = try newStore()
@@ -450,16 +428,11 @@ struct Deletion {
         #expect(kid.searches.isEmpty)
         #expect(kid.plays.isEmpty)
         #expect(kid.blocks.isEmpty)
-        // A summary outliving its events is a record the parent asked us to
-        // destroy.
+        // A summary outliving its events is what the parent asked to destroy.
         #expect(kid.summaries.isEmpty)
     }
 
-    /// The assertion above passes on a `removeAll()` that only detaches, which
-    /// is what this used to do: the rows stayed on disk with a null kid, and
-    /// because every query is `kid?.id == kidID` they were invisible to the
-    /// report. A parent would have seen exactly what they expected while the
-    /// data sat there. Check the store, not the relationship.
+    /// The assertion above also passes on `removeAll()`, which only detaches.
     @Test("Deleting history takes the rows off disk, not just off the kid")
     func historyLeavesNoOrphans() throws {
         let context = try newStore()
@@ -510,13 +483,7 @@ struct Deletion {
 @Suite("Relaunch")
 @MainActor
 struct Relaunch {
-    /// The Stage 1 exit test: a kid, a list and a session's events are still
-    /// there after the store is closed and reopened.
-    ///
-    /// The other half of that exit test — that records sit in a custom zone
-    /// rather than the default one — cannot be checked here. There is no
-    /// CloudKit container attached in v1, so there is no zone to inspect. See
-    /// `FamilyStore.zoneNote`.
+    /// The zone half of this exit test can't be checked — no CloudKit in v1.
     @Test("A kid, a list and events survive closing and reopening the store")
     func survivesRelaunch() throws {
         let url = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).store")

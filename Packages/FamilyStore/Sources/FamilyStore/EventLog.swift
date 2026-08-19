@@ -1,25 +1,13 @@
 import Foundation
 import SwiftData
 
-/// Writes activity events off the caller's thread.
-///
-/// **A dropped log line is acceptable; a stalled player is not.** The intended
-/// entry points are the ``log(_:for:)`` overloads, which return immediately and
-/// swallow failures. Nothing that decides what a kid may see or play ever reads
-/// from here, so losing a row costs a report a line and costs safety nothing.
-///
-/// The awaited ``record(_:for:)`` overloads exist for tests and for any surface
-/// that genuinely needs to know the write landed. Do not call them from the
-/// playback path.
-///
-/// This is the one writer in v1: the active kid's session. The admin writes
-/// policy entries on the main context, and those writes are awaited with their
+/// A dropped log line is acceptable; a stalled player is not — ``log(_:for:)``
+/// swallows failures. ``record(_:for:)`` is awaited, for tests only; never
+/// call it from the playback path. Contrast policy writes: always awaited,
 /// failures surfaced — the opposite contract, for the opposite reason.
 @ModelActor
 public actor EventLog {
-    /// Below this, a play is a mis-tap rather than a listen and is never
-    /// written. Applied here rather than at the call site so no caller can
-    /// forget it.
+    /// A mis-tap, not a listen — applied here so no caller can forget it.
     public static let minimumPlaySeconds = 5
 
     public enum Failure: Error, Equatable {
@@ -51,8 +39,7 @@ public actor EventLog {
         try modelContext.save()
     }
 
-    /// Discards a play shorter than ``minimumPlaySeconds`` without complaint —
-    /// that is a filter, not a failure.
+    /// Discards a short play silently — a filter, not a failure.
     public func record(_ event: PlayEvent, for kidID: UUID) throws {
         guard event.secondsPlayed >= Self.minimumPlaySeconds else { return }
         let kid = try kid(kidID)

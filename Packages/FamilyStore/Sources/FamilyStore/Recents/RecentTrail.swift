@@ -1,29 +1,15 @@
 import Foundation
 import PolicyEngine
 
-/// One tile on the kid's Recent shelf.
-///
-/// A **projection**, not a record of a child's activity. That distinction is
-/// load-bearing rather than pedantic: the retention sweep is written against
-/// event tables, so a shelf built directly out of events would empty itself the
-/// day the window passed. This is derived state, recomputed from
-/// ``VisitEvent``s, and nothing sweeps it.
+/// A projection, not a record — nothing sweeps it, so it outlives the events.
 public struct RecentEntry: Hashable, Sendable, Identifiable {
     public let catalogID: CatalogID
 
-    /// Copied from the visit that produced this, when there was one.
-    ///
-    /// **Empty for an album the kid never opened** — one inferred from a run of
-    /// tracks played out of it. Nothing records an album's title at play time
-    /// (a song's ancestors carry identifiers, not names), so there is nothing
-    /// honest to put here. The shelf resolves every tile through the catalog
-    /// anyway; this is the offline fallback, and offline that tile is one of the
-    /// ones that cannot draw a name.
+    /// Empty for an album inferred from a run, never opened — nothing to put here.
     public let displayName: String
     public let artworkURL: URL?
 
-    /// Carried so the rules below can compare entries without going back to the
-    /// events.
+    /// Carried so the rules below compare entries without revisiting events.
     public let albumID: CatalogID?
     public let artistID: CatalogID?
 
@@ -60,60 +46,28 @@ public struct RecentEntry: Hashable, Sendable, Identifiable {
     }
 }
 
-/// Turns a stream of arrivals into a shelf.
+/// **Recomputed, not folded** — a fold can't un-decide, and two of the three
+/// rules below look across the whole shelf: a new arrival can retract a tile
+/// already on it (playing a track takes away that artist's own tile).
 ///
-/// **Pure, and recomputed rather than folded.** An earlier version applied one
-/// visit at a time to the trail it already had, which is cheaper and wrong here:
-/// two of the three rules below look *across* the whole shelf, so a single new
-/// arrival can retract a tile that was already on it — playing a track by an
-/// artist takes that artist's own tile away. A fold cannot un-decide, so this
-/// recomputes from a window of recent visits, which also makes the live path and
-/// the rebuild path literally the same call.
-///
-/// Three rules, and each exists because of how a shelf reads rather than how the
-/// data is shaped:
-///
-/// 1. **A contiguous run through one album collapses to that album.** A kid who
-///    played four tracks off a record was listening to the record, and four
-///    tiles for it says something the kid did not do.
-/// 2. **An artist tile survives only if nothing else on the shelf is theirs.**
-///    Opening an artist and stopping there is the only thing an artist tile is
-///    for; if a record or a track of theirs made it on, that is the more useful
-///    way back in.
-/// 3. **A song tile survives only if its album is not already shown.** The album
-///    is the way back to the song, and both is a duplicate.
+/// 1. A contiguous run through one album collapses to that album.
+/// 2. An artist tile survives only if nothing else on the shelf is theirs.
+/// 3. A song tile survives only if its album is not already shown.
 public enum RecentTrail {
-    /// How many tiles a shelf keeps.
-    ///
-    /// Generous next to the two dozen drawn, because the shelf filters at render
-    /// time and a kid whose parent has denied half of last week should still get
-    /// a full row.
+    /// Generous next to the two dozen drawn — filtering at render time costs tiles.
     public static let cap = 50
 
-    /// How many arrivals the shelf is computed from.
-    ///
-    /// Bounded so the recompute stays trivial. Beyond this the oldest arrivals
-    /// cannot reach the front of a fifty-tile shelf anyway, and a kid who
-    /// replayed one album two hundred times gets a **shorter** shelf rather than
-    /// a wrong one.
+    /// Bounded so a replayed album yields a shorter shelf, never a wrong one.
     public static let window = 200
 
-    /// Which build of the rules produced a stored shelf.
-    ///
-    /// Bumping it is how corrected rules reach kids who already have one: the
-    /// projector notices the mismatch and recomputes. Nothing else reads it.
+    /// Bumping it is how corrected rules reach a kid who already has a shelf.
     public static let version = 2
 
-    /// Builds the shelf, newest tile first.
-    ///
-    /// - Parameter visits: arrivals **oldest first**. The order is the input to
-    ///   rule 1 — "contiguous" means contiguous in time, and a reversed stream
-    ///   would find different runs.
+    /// - Parameter visits: oldest first — rule 1's "contiguous" means in time.
     public static func shelf(from visits: [VisitEvent]) -> [RecentEntry] {
         var entries = collapseRuns(in: visits)
 
-        // Newest wins, and a tile keeps the latest time it stood for. Done
-        // before the cross-shelf rules so those see one entry per item.
+        // Newest wins; done before the cross-shelf rules see one entry per item.
         entries = deduplicate(entries)
 
         let shownAlbums = Set(
@@ -125,9 +79,7 @@ public enum RecentTrail {
             entry.catalogID.kind == .song && entry.albumID.map(shownAlbums.contains) == true
         }
 
-        // Rule 2: an artist whose work is on the shelf does not need a tile of
-        // their own. Computed after rule 3 so a song dropped in favour of its
-        // album still counts as that artist's work being present.
+        // Rule 2, after rule 3 so a song dropped for its album still counts.
         let representedArtists = Set(
             entries.filter { $0.catalogID.kind != .artist }.compactMap(\.artistID)
         )
@@ -140,12 +92,7 @@ public enum RecentTrail {
 
     // MARK: -
 
-    /// Rule 1. Consecutive arrivals sharing an album become that album.
-    ///
-    /// A run of one is left as whatever it was: a single track played out of a
-    /// record is a track, and calling it the record would claim more than
-    /// happened. A run of one that *is* an album — the kid opened it and left —
-    /// is likewise itself.
+    /// Rule 1. A run of one stays itself — one track isn't "listened to the record".
     private static func collapseRuns(in visits: [VisitEvent]) -> [RecentEntry] {
         var entries: [RecentEntry] = []
         var run: [VisitEvent] = []
@@ -161,8 +108,7 @@ public enum RecentTrail {
             entries.append(
                 RecentEntry(
                     catalogID: albumID,
-                    // The name only when the album itself was one of the
-                    // arrivals; a run of tracks never carries it.
+                    // Name only if the album itself was an arrival.
                     displayName: run.first { $0.itemID == albumID }?.displayName ?? "",
                     artworkURL: run.first { $0.itemID == albumID }?.artworkURL,
                     artistID: run.compactMap(\.artistID).first,
@@ -183,12 +129,7 @@ public enum RecentTrail {
         return entries
     }
 
-    /// The album an arrival belongs to, if any.
-    ///
-    /// An album is its own key, so opening a record and then playing from it is
-    /// one run rather than two. An artist or a playlist has none and therefore
-    /// never joins a run — which is what stops a kid's whole evening collapsing
-    /// into one tile.
+    /// `nil` for artist/playlist, so a whole evening can't collapse into one tile.
     private static func albumKey(of visit: VisitEvent) -> CatalogID? {
         switch visit.itemID.kind {
         case .album: visit.itemID
@@ -206,9 +147,7 @@ public enum RecentTrail {
                 continue
             }
             if entry.at > existing.at {
-                // Keep whichever copy actually has a name: a run of tracks
-                // produces a nameless album entry, and an earlier visit to that
-                // album has the name we would otherwise throw away.
+                // Keep whichever copy has a name — a run's album entry may lack one.
                 newest[entry.catalogID] = RecentEntry(
                     catalogID: entry.catalogID,
                     displayName: entry.displayName.isEmpty

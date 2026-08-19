@@ -2,73 +2,21 @@ import Foundation
 import PolicyEngine
 import SwiftData
 
-/// One kid, their walls, and their history.
-///
-/// Sandbox level is here rather than on ``Family`` because it is set per kid.
-/// A seven-year-old and a twelve-year-old in the same house do not get the same
-/// catalog.
+/// Sandbox level lives here, not on ``Family``: siblings can differ.
 @Model
 public final class Kid {
     public private(set) var id: UUID = UUID()
     public private(set) var modifiedAt: Date = Date.distantPast
     public private(set) var name: String = ""
 
-    /// Stored explicitly. **Never read from a global default at evaluation
-    /// time** — if a constant were consulted instead, changing a recommended
-    /// default in a later release would silently change what every existing kid
-    /// can reach.
-    ///
-    /// The schema defaults below exist only because CloudKit requires every
-    /// attribute to have one; the initializer always supplies both, so no real
-    /// row ever falls back to them. They are the *most restrictive* values
-    /// rather than the recommended ones, so that if one ever were consulted it
-    /// would fail closed.
-    /// **A cache, and never the authority. Do not read these.**
-    ///
-    /// ``effectiveMode`` and ``effectiveUnratedBehavior`` are the answer;
-    /// `SandboxSettingRecord` is where the decision lives. These two columns
-    /// remain for exactly two reasons, and neither is "convenience":
-    ///
-    /// 1. They are the answer for a store written before decisions existed,
-    ///    where the column *was* the decision. That is what let those fields
-    ///    move without a custom migration over a family's live curation.
-    /// 2. A build that predates the decision table still reads them, so
-    ///    refreshing them on every write keeps two versions in one household
-    ///    agreeing rather than diverging.
-    ///
-    /// Reading them directly is a bug that will not show up on one device: a
-    /// decision arriving from another device writes a row, and this copy goes
-    /// stale until something happens to touch it.
-    ///
-    /// They cannot be renamed to something that says so — a column rename is a
-    /// migration, and these carry every existing family's sandbox level.
+    /// Per kid, never a global default — schema defaults are most-restrictive.
     public private(set) var mode: SandboxMode = SandboxMode.allowOnly
     public private(set) var unratedBehavior: UnratedBehavior = UnratedBehavior.block
 
-    /// The Apple Account that *is* this child, when they have one of their own
-    /// under Family Sharing. `nil` for every kid on a parent's account, which is
-    /// the commoner shape and the one the device binding covers alone.
-    ///
-    /// A column on the existing `Kid` rather than a second kid record per
-    /// account, and that is the whole point of it: a child who gets their own
-    /// Apple Account at nine becomes a one-field write instead of a data
-    /// migration, and every favorite, playlist and week of history stays exactly
-    /// where it is.
-    ///
-    /// **This is the half of "tied to Apple IDs" that may never fire.** Whether
-    /// an under-13 account can participate in a CloudKit share at all is
-    /// unverified, and `CKAccountStatus.restricted` — documented as what
-    /// parental controls produce — is a plausible steady state on precisely the
-    /// device this is for. If the probe comes back negative, every kid device
-    /// runs under a parent's account, the device binding is the only key, and
-    /// this stays nil forever. It is one column either way.
+    /// A column, not a second record — gaining an account is a one-field write.
     public private(set) var boundAccountRecordName: String?
 
-    /// Where this child sits in the admin's list of kids.
-    ///
-    /// `nil` means nobody has captured it yet, which is every row written before
-    /// the column existed — see ``FamilyResolution/captureRosterOrder(of:at:)``
-    /// for why that capture has a deadline attached.
+    /// `nil` before capture. See ``FamilyResolution/captureRosterOrder(of:at:)``.
     public private(set) var sortIndex: Int?
 
     public var family: Family?
@@ -76,20 +24,11 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \PolicyEntryRecord.kid)
     public private(set) var entries: [PolicyEntryRecord] = []
 
-    /// Every decision anyone has made about how wide this child's sandbox is.
-    ///
-    /// Append-only, and the authority for ``effectiveMode`` and
-    /// ``effectiveUnratedBehavior``. Empty on every store that predates the
-    /// table, which is what makes the cached columns the answer there.
+    /// Append-only; authority for ``effectiveMode``/``effectiveUnratedBehavior``.
     @Relationship(deleteRule: .cascade, inverse: \SandboxSettingRecord.kid)
     public private(set) var sandboxSettings: [SandboxSettingRecord] = []
 
-    /// What a parent has put in front of this kid.
-    ///
-    /// Grouped with ``entries`` rather than with the library below, because a
-    /// live suggestion is folded into the policy as an allow by
-    /// ``buildPolicy()`` — it is a thing that changes what the kid can reach,
-    /// which is what the lists are and what the library deliberately is not.
+    /// Grouped with ``entries``: ``buildPolicy()`` folds a live one in as allow.
     @Relationship(deleteRule: .cascade, inverse: \SuggestionRecord.kid)
     public private(set) var suggestions: [SuggestionRecord] = []
 
@@ -108,16 +47,11 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \WeeklySummaryRecord.kid)
     public private(set) var summaries: [WeeklySummaryRecord] = []
 
-    /// The Recent shelf, derived from ``visits``.
-    ///
-    /// A projection rather than a record of anything — see ``RecentTrailRecord``
-    /// — which is why it sits apart from the event relationships above and is
-    /// listed separately everywhere they are handled together.
+    /// A projection of ``visits``, not a record — see ``RecentTrailRecord``.
     @Relationship(deleteRule: .cascade, inverse: \RecentTrailRecord.kid)
     public private(set) var recentTrail: [RecentTrailRecord] = []
 
-    // The kid's own library. Not events, and deliberately not touched by
-    // ``deleteHistory()`` — see the note there.
+    // The kid's own library — not events, not touched by ``deleteHistory()``.
 
     @Relationship(deleteRule: .cascade, inverse: \FavoriteRecord.kid)
     public private(set) var favorites: [FavoriteRecord] = []
@@ -125,12 +59,7 @@ public final class Kid {
     @Relationship(deleteRule: .cascade, inverse: \PlaylistRecord.kid)
     public private(set) var playlists: [PlaylistRecord] = []
 
-    /// What the library contains because of what is in ``favorites`` — see
-    /// ``LibraryIndexRecord``.
-    ///
-    /// A projection, like ``recentTrail``, but one that follows the library
-    /// rather than the event log: it survives ``deleteHistory(at:)`` and goes
-    /// with ``deleteEverything(at:)``, because its source does.
+    /// Like ``recentTrail``, but survives ``deleteHistory(at:)``.
     @Relationship(deleteRule: .cascade, inverse: \LibraryIndexRecord.kid)
     public private(set) var libraryIndex: [LibraryIndexRecord] = []
 
@@ -149,11 +78,8 @@ public final class Kid {
     }
 
     // MARK: - Mutation
-    //
-    // Every stored property is `private(set)` and changed only through these,
-    // which stamp `modifiedAt`. The invariant is that every record carries the
-    // time it last changed; leaving the properties writable would make that a
-    // thing each caller had to remember, and sync merging later depends on it.
+
+    // `private(set)`, changed only here — every write stamps `modifiedAt`.
 
     public func rename(to newName: String, at: Date = .now) {
         name = newName
@@ -166,12 +92,7 @@ public final class Kid {
         modifiedAt = at
     }
 
-    /// Records a decision about the sandbox level, **and** refreshes the cache.
-    ///
-    /// Both halves matter. The decision row is the authority and is what stops a
-    /// concurrent rename from swallowing a tightening; the column keeps every
-    /// existing reader working and is what a store with no decision rows falls
-    /// back to. Nothing may read `mode` directly — use ``effectiveMode``.
+    /// Both halves matter: the row is the authority, the column is the fallback.
     public func setMode(
         _ newMode: SandboxMode,
         decidedByGrownUpID: UUID? = nil,
@@ -230,13 +151,7 @@ public final class Kid {
         )
     }
 
-    /// Attaches a decision built elsewhere.
-    ///
-    /// Internal because the supported way to make one is ``setMode(_:decidedByGrownUpID:decidedByAccountRecordName:originatingDeviceID:at:)``,
-    /// which also refreshes the cache. The caller that needs this is a test
-    /// writing a raw value *this build cannot read* — which is the case the
-    /// resolution rule has to be right about and which no public API can
-    /// produce.
+    /// Internal — tests writing a raw value; ``setMode`` is the public path.
     func attach(_ record: SandboxSettingRecord) {
         sandboxSettings.append(record)
         record.kid = self
@@ -244,16 +159,7 @@ public final class Kid {
 
     // MARK: - What is actually in force
 
-    /// The sandbox level in force, resolved from the decisions.
-    ///
-    /// **The only thing that may decide what a child can reach.** Falls back to
-    /// the cached ``mode`` column when there are no readable decisions — which
-    /// is every store written before decisions existed, and is the right answer
-    /// for one: the column *was* the decision there.
-    ///
-    /// That fallback is also why this change needed no migration. The old column
-    /// is still the source of truth for old data, so nothing had to be rewritten
-    /// and no schema version had to be frozen.
+    /// The only thing that may decide what a child can reach.
     public var effectiveMode: SandboxMode {
         SandboxSettingResolution.resolve(
             sandboxSettings,
@@ -263,8 +169,7 @@ public final class Kid {
         ) ?? mode
     }
 
-    /// What an unrated item is treated as, resolved from the decisions.
-    /// See ``effectiveMode``.
+    /// What an unrated item is treated as. See ``effectiveMode``.
     public var effectiveUnratedBehavior: UnratedBehavior {
         SandboxSettingResolution.resolve(
             sandboxSettings,
@@ -275,10 +180,8 @@ public final class Kid {
     }
 
     // MARK: - Lists
-    //
-    // Callers must `save()` and surface a failure. A parent who taps deny and
-    // gets silence must not be left believing the deny landed. This is the
-    // opposite of event logging, which is fire-and-forget.
+
+    // Callers must `save()` and surface failure, unlike fire-and-forget logging.
 
     @discardableResult
     public func addEntry(
@@ -290,12 +193,7 @@ public final class Kid {
         addedByName: String? = nil,
         at: Date = .now
     ) -> PolicyEntryRecord {
-        // **Re-asserts rather than duplicating.** (kind, itemKind, catalogID) is
-        // this row's natural key, and adding the same thing twice — a parent
-        // re-denying an artist they denied and then withdrew, or two parents
-        // denying the same one — has to land on one row. Two rows with one key
-        // is how a retraction gets lost: withdrawing "the" deny leaves its twin
-        // standing, and the screen shows one entry either way.
+        // Re-asserts on (kind, itemKind, catalogID): a withdrawn twin sticks.
         if let existing = entries.first(where: {
             $0.kind == kind.rawValue
                 && $0.itemKind == catalogID.kind.rawValue
@@ -325,24 +223,7 @@ public final class Kid {
         modifiedAt = at
     }
 
-    /// Takes a row off the list by **retracting** it, not by deleting it.
-    ///
-    /// This replaces a delete, and the reasoning is worth keeping because it
-    /// moved twice. Originally this was `entries.removeAll { }` alone, which
-    /// nulls the inverse and leaves the row where no query can reach it — every
-    /// query here is `kid?.id == kidID` — so a parent who removed a deny watched
-    /// it vanish from the screen while it went on being a deny for nobody. The
-    /// fix for that was to delete through the context, and that was right for a
-    /// store with one writer.
-    ///
-    /// It is wrong for a store with two. **A deleted row leaves nothing to
-    /// enumerate**, so the removal can never be exported, and a co-parent's
-    /// device keeps the entry forever. The retraction *is* the tombstone, and it
-    /// is what makes two parents editing one list offline resolve without
-    /// arbitration — see ``PolicyEntryRecord/retractedAt``.
-    ///
-    /// The row stays attached to the kid, so it is visible to every query and to
-    /// the admin; ``buildPolicy()`` is what filters it out of the policy.
+    /// Retracts, never deletes — the retraction is the tombstone a co-parent syncs.
     public func removeEntry(_ record: PolicyEntryRecord, at: Date = .now) {
         record.retract(at: at)
         modifiedAt = at
@@ -352,26 +233,10 @@ public final class Kid {
     public var liveEntries: [PolicyEntryRecord] { entries.filter(\.isLive) }
 
     // MARK: - Suggestions
-    //
-    // Awaited and surfaced like the lists above, and for a stronger version of
-    // the same reason: these grant reach. A parent who suggests an album and
-    // gets silence must not be left believing their kid can now play it.
-    //
-    // They stamp `modifiedAt` — a parent curating is exactly what that field is
-    // for — and so does dismissal, which is the one kid-side write in this store
-    // that does. See ``SuggestionRecord/dismiss(at:)``.
 
-    /// Suggests something, or refreshes what is already there.
-    ///
-    /// An upsert, like ``addFavorite(id:displayName:artworkURL:origin:ancestry:at:)``:
-    /// the same album suggested twice is one shelf tile, not two.
-    ///
-    /// The two collision cases are deliberately different. A **live** row is
-    /// refreshed in place and keeps its position — suggesting something already
-    /// on the shelf is usually a parent forgetting they did, and reshuffling a
-    /// kid's screen for that helps nobody. A **dismissed** row is restored to the
-    /// front, because offering something again after a kid passed on it is a
-    /// second act and is worth nothing if they never see it.
+    // Awaited like the lists: these grant reach, silence must not imply success.
+
+    /// Upsert: refreshes a live row in place; restores a dismissed one.
     @discardableResult
     public func addSuggestion(
         target: SuggestionTarget,
@@ -415,12 +280,7 @@ public final class Kid {
         return record
     }
 
-    /// Rewrites the copied name on everything this grown-up added.
-    ///
-    /// Driven by ``Family/renameGrownUp(_:to:at:)``, which is where the reasoning
-    /// for correcting a write-time copy lives. Matches on the attribution and
-    /// never on the name — two grown-ups may share one, and a rename must not
-    /// reach the other's rows.
+    /// Matches on attribution, never on name — two grown-ups may share one.
     func rewriteAttribution(of attribution: String, to newName: String, at: Date = .now) {
         for record in suggestions where record.addedBy == attribution {
             record.rewriteAddedByName(to: newName, at: at)
@@ -441,11 +301,7 @@ public final class Kid {
         (suggestions.map(\.position).max() ?? -1) + 1
     }
 
-    /// The parent withdrew it. Gone, along with the reach it granted.
-    ///
-    /// Deletes through the context rather than only detaching — `removeAll()` on
-    /// a relationship leaves the row on disk where no query can see it. See
-    /// ``delete(_:)``.
+    /// Deletes through the context — `removeAll()` alone orphans the row.
     public func removeSuggestion(_ record: SuggestionRecord, at: Date = .now) {
         delete([record])
         suggestions.removeAll { $0.id == record.id }
@@ -475,9 +331,7 @@ public final class Kid {
         }
     }
 
-    /// Live suggestions, newest first. What the shelf draws.
-    ///
-    /// Unreadable rows are dropped rather than denied — see ``SuggestionRecord``.
+    /// What the shelf draws. Unreadable rows drop rather than deny.
     public var liveSuggestions: [SuggestionRow] {
         suggestions
             .filter { !$0.isDismissed }
@@ -485,8 +339,7 @@ public final class Kid {
             .compactMap(\.row)
     }
 
-    /// What the kid passed on, most recently suggested first. The parent's side
-    /// of the shelf, and the only place a dismissal is visible.
+    /// The parent's side of the shelf — the only place a dismissal is visible.
     public var dismissedSuggestions: [SuggestionRow] {
         suggestions
             .filter(\.isDismissed)
@@ -495,13 +348,8 @@ public final class Kid {
     }
 
     // MARK: - Events
-    //
-    // Attaching an event deliberately does **not** stamp `modifiedAt`. That
-    // field describes the kid record itself — their name, mode, unrated
-    // behavior — and is what an entry-level merge will compare when two
-    // parents' devices reconcile. Bumping it on every play would make a child
-    // listening to music look like a parent editing settings, and would churn
-    // the one record sync most needs to be quiet.
+
+    // Attaching never stamps `modifiedAt` — a play is not a parent's edit.
 
     func attach(_ record: SearchEventRecord) {
         searches.append(record)
@@ -542,24 +390,10 @@ public final class Kid {
     }
 
     // MARK: - The kid's library
-    //
-    // Awaited and surfaced by the caller, like the lists above and unlike the
-    // events below: a heart that fills over a write that did not land is a lie.
-    //
-    // These deliberately do **not** stamp `modifiedAt`. That field describes the
-    // kid record itself — their name, mode, unrated behavior — and is what an
-    // entry-level sync merge compares. A kid favoriting forty songs is not a
-    // parent editing settings, and should not churn the one record sync most
-    // needs to be quiet.
 
-    /// Adds a favorite, or refreshes the one already there.
-    ///
-    /// An upsert rather than an insert, because the same favorite can arrive
-    /// twice — tapped twice, or adopted from the Apple Music library while being
-    /// tapped. Two rows for one heart would show the same tile twice and take
-    /// two taps to undo.
-    ///
-    /// Refuses a playlist: a playlist is not favorited, it is owned.
+    // Awaited like the lists, but never stamps `modifiedAt`, unlike them.
+
+    /// Upsert refuses a playlist — owned, not favorited — not two rows.
     @discardableResult
     public func addFavorite(
         id catalogID: CatalogID,
@@ -599,31 +433,7 @@ public final class Kid {
         record.kid = self
     }
 
-    /// Removes every row for this item.
-    ///
-    /// Every, not the first: nothing in the schema stops two rows existing —
-    /// CloudKit rejects unique constraints — and leaving one behind would look
-    /// like the heart refused to empty.
-    /// Removes every row for this item, and everything it brought in with it.
-    ///
-    /// The index goes too, and has to go here rather than in a caller: a favorite
-    /// removed without it leaves an artist's thousand tracks in the library with
-    /// nothing left that names them, unreachable from any screen that could
-    /// clear them and invisible to a parent looking at what is kept.
-    /// Takes a favorite off the shelf, **off the disk, and off the co-parent's
-    /// device**.
-    ///
-    /// The same shape as ``removeEntry(_:at:)``, and the last two of the three
-    /// removals that only detached. `removeAll` nulls the inverse and leaves the
-    /// row where no query can reach it — every query here is `kid?.id == kidID`
-    /// — so the child watched it disappear while it went on existing. Worse than
-    /// wasted space once sync arrived: an orphan cannot derive its natural key,
-    /// and the outbox re-sent it under a new name on every pass forever.
-    ///
-    /// The tombstone is the other half, and it is what makes this reach a second
-    /// device at all. Without it a favourite the child un-hearted stays on a
-    /// co-parent's phone permanently — which is what ``PendingDeletionRecord``
-    /// says it exists to prevent, and did not, because nothing constructed one.
+    /// Removes every row and its index; tombstones like ``removeEntry(_:at:)``.
     public func removeFavorite(_ catalogID: CatalogID, at: Date = .now) {
         let doomed = favorites.filter {
             $0.catalogID == catalogID.rawValue && $0.itemKind == catalogID.kind.rawValue
@@ -643,29 +453,7 @@ public final class Kid {
 
     // MARK: - The library index
 
-    /// Adds to what a source has already written, without disturbing it.
-    ///
-    /// **Append and not replace**, which is what makes an interrupted walk worth
-    /// keeping. Hearting an artist can mean fifty round trips, and writing only
-    /// at the end would mean an app closed halfway through kept nothing — so each
-    /// record's tracks land as they arrive, and a walk run again adds what is
-    /// missing rather than starting over.
-    ///
-    /// Rows from *other* sources are untouched, and duplicates within one source
-    /// are dropped. Two hearted artists sharing a collaboration record each keep
-    /// their own row for it, and losing one does not take the other's.
-    ///
-    /// What this cannot do is notice that something has *left* an artist's
-    /// catalog. Nothing needs it to yet: the walk has one version and no reason
-    /// to re-run. When ``LibraryIndex/version`` first moves, a rebuild will want
-    /// ``removeIndex(from:)`` in front of this, which is why that is separate.
-    ///
-    /// **Does not stamp `modifiedAt`**, under the rule stated above the library
-    /// writes. It used to, which made this the loudest writer in the store on
-    /// the one record that most needs to be quiet: hearting a twenty-five-album
-    /// artist dirties the kid twenty-six times in a minute, and every one of
-    /// those is a child listening to music wearing a parent's edit as a
-    /// disguise.
+    /// Append, not replace — a closed-halfway walk keeps its progress.
     public func appendIndex(from source: CatalogID, with rows: [LibraryIndexRow], at: Date = .now) {
         guard !rows.isEmpty else { return }
         var known = Set(
@@ -691,11 +479,7 @@ public final class Kid {
         }
     }
 
-    /// Whether a source has been walked by the current version of the walk.
-    ///
-    /// An empty answer is not "walked and found nothing" — there is no way to
-    /// tell those apart from the rows alone, and the cost of being wrong is one
-    /// repeated walk rather than a library that is quietly missing an artist.
+    /// Empty is not "walked and found nothing" — indistinguishable either way.
     public func isIndexed(_ source: CatalogID) -> Bool {
         libraryIndex.contains {
             $0.sourceID == source.rawValue
@@ -720,12 +504,7 @@ public final class Kid {
         record.kid = self
     }
 
-    /// Throws a playlist away, with its songs.
-    ///
-    /// The entries go first and explicitly: cascade fires when the *kid* goes,
-    /// not when a playlist leaves the array, so deleting only the playlist would
-    /// leave every song in it orphaned — the exact rows that used to be re-sent
-    /// forever under a new name each time.
+    /// Entries go first — cascade fires on the kid, not the leaving array.
     public func removePlaylist(_ record: PlaylistRecord, at: Date = .now) {
         tombstone(record.entries, at: at)
         tombstone([record], at: at)
@@ -738,36 +517,7 @@ public final class Kid {
 
     // MARK: - History
 
-    /// Deletes this kid's history and nothing else.
-    ///
-    /// Summaries go too: one outliving the events it was derived from is a
-    /// record the parent asked us to destroy. Lists, mode and unrated behavior
-    /// stay — curation is not history, and a parent deleting a month of logs is
-    /// not asking to rebuild their allow list.
-    ///
-    /// **Favorites and playlists stay for the same reason and then some.** They
-    /// are not events: they are the records in this store with the most of a
-    /// child's own work in them, and nothing about "delete my history" asks for
-    /// a playlist to disappear. Whatever retention window is eventually chosen
-    /// for event data must exempt them too.
-    /// **The Recent shelf goes too**, even though it is a projection rather than
-    /// history. It is derived from the visits being deleted here, and a parent
-    /// who clears the logs and then finds their child's home screen still
-    /// listing what they were doing would rightly conclude the delete did not
-    /// work. Derived state is not a loophole.
-    /// **It also writes down that it happened**, which is the half that reaches
-    /// the other devices.
-    ///
-    /// Deleting rows here removes them from *this* device. The four event tables
-    /// and the shelf are in `neverSyncs`, so they never travelled as rows and no
-    /// tombstone would reach anybody — meaning a parent clearing the logs on their
-    /// phone left the child's iPad holding its own copy and its own home screen
-    /// still listing what they had been doing. The instruction is what syncs. See
-    /// ``HistoryClearRecord``.
-    ///
-    /// Written inside this method rather than by the caller because a clear that
-    /// does not record itself is the bug, and there is no call site for which that
-    /// is the right behaviour.
+    /// Records itself — the event tables never sync, so this reaches a co-parent.
     public func deleteHistory(at: Date = .now, issuedBy grownUpID: UUID? = nil) {
         delete(searches)
         delete(plays)
@@ -782,10 +532,7 @@ public final class Kid {
         recentTrail.removeAll()
         summaries.removeAll()
 
-        // `clearedThrough: at` and not `.distantFuture`. This says "everything up
-        // to now", so a play the child starts a minute later survives — a clear is
-        // a statement about the past, and one that reached into the future would
-        // keep deleting a child's listening until somebody noticed.
+        // `at`, not `.distantFuture`: a clear must not delete future listening.
         modelContext?.insert(
             HistoryClearRecord(
                 kidID: id, clearedThrough: at, issuedByGrownUpID: grownUpID, at: at))
@@ -793,54 +540,19 @@ public final class Kid {
         modifiedAt = at
     }
 
-    /// Deletes the rows, rather than only detaching them.
-    ///
-    /// **`removeAll()` on a relationship is not a delete.** It nulls the inverse
-    /// and leaves the row on disk, orphaned — and because every query here is
-    /// `kid?.id == kidID`, an orphan is invisible to the report, so a parent
-    /// tapping "clear the logs" would see exactly what they expected while the
-    /// rows sat there. The cascade rule does not help: it fires when the *kid*
-    /// is deleted, not when a child leaves the array.
-    ///
-    /// Delete has to mean delete. That is the sentence the whole retention
-    /// section rests on, and it was not true.
+    /// `removeAll()` on a relationship is not a delete — it orphans the row.
     private func delete(_ records: [some PersistentModel]) {
         guard let modelContext else { return }
         for record in records { modelContext.delete(record) }
     }
 
-    /// Deletes rows **and records that they went**, so a second device removes
-    /// them too.
-    ///
-    /// Order is the whole of it: `Outbox.delete` reads the record's name while
-    /// the row is still attached to ask, then deletes. Detaching first — which
-    /// is what `removeAll` does — leaves nothing to name, and the deletion
-    /// reaches nobody.
+    /// Order is the whole of it: `Outbox.delete` needs the row still attached.
     private func tombstone(_ records: [some PersistentModel & SyncEncodable], at: Date) {
         guard let modelContext else { return }
         for record in records { Outbox.delete(record, in: modelContext, at: at) }
     }
 
-    /// Everything this kid did: their history **and** their library.
-    ///
-    /// The deliberate ask, offered from the screen that shows a parent what we
-    /// hold — because the honest place to offer removing it is the place that
-    /// shows it. Distinct from ``deleteHistory(at:)`` precisely so that a
-    /// playlist a child made is never taken by a sweep, a retention window, or a
-    /// parent who meant "clear the logs".
-    ///
-    /// Lists, mode and unrated behavior stay. A parent erasing what their child
-    /// did is not asking to rebuild their allow list.
-    ///
-    /// **Suggestions stay too, dismissals included**, and the second half of that
-    /// is the part worth arguing with. A suggestion is curation — the parent
-    /// built that list, and this screen promises to erase the *child's* data, not
-    /// to make an adult redo their work. The dismissal stamped on one is the
-    /// child's, so clearing it here has a certain logic to it; what stops that is
-    /// that a dismissal withdraws an allow, so wiping the flags would silently
-    /// widen what the kid can reach. A delete must never do that. If a parent
-    /// wants a passed-on suggestion back, the admin screen offers it in one tap
-    /// and says so out loud.
+    /// Suggestions stay too: wiping a dismissal would silently widen reach.
     public func deleteEverything(at: Date = .now, issuedBy grownUpID: UUID? = nil) {
         deleteHistory(at: at, issuedBy: grownUpID)
         delete(favorites)
@@ -853,25 +565,11 @@ public final class Kid {
 }
 
 // MARK: - Absorbing a record another device wrote
-//
-// Internal, so only this module can call them, and in this file so
-// `private(set)` stays exactly as strict as it was. Each one is **monotonic**:
-// it advances a value or leaves it, and never clears one. That is a second
-// safety net under the merge rather than a duplicate of it — `apply` is supposed
-// to be handed a merged record, but a caller that hands it a raw remote copy
-// still cannot use an *absence* to undo a retraction or a claim.
-//
-// Nothing here stamps the local clock. Every one takes the incoming
-// `modifiedAt`, because stamping now would make an import look like an edit and
-// the next export would send it straight back.
+
+// Monotonic: advances a value or leaves it, never clears one on absence.
 
 extension Kid {
-    /// Refreshes the cached sandbox columns without inventing a decision.
-    ///
-    /// Deliberately not ``setMode(_:decidedByGrownUpID:decidedByAccountRecordName:originatingDeviceID:at:)``
-    /// — that writes a `SandboxSettingRecord`, and importing one would record a
-    /// decision nobody made, on a device that was not there. Decisions arrive as
-    /// their own records.
+    /// Not ``setMode`` — that writes a decision record nobody actually made.
     func applyCachedSandbox(mode: SandboxMode, unratedBehavior: UnratedBehavior, at: Date) {
         self.mode = mode
         self.unratedBehavior = unratedBehavior

@@ -1,12 +1,6 @@
 import Foundation
 
-/// One field's worth of value on the wire.
-///
-/// A closed set, deliberately small, and it is what keeps CloudKit out of this
-/// package. `CKRecord` accepts a wider range than this store needs; narrowing it
-/// here means the adapter that eventually writes a `CKRecord` has a total
-/// function to write rather than a set of guesses, and it means every merge rule
-/// below can be exhaustive.
+/// Closed and small — the adapter to `CKRecord` gets a total function to write.
 public enum SyncValue: Sendable, Equatable, Hashable {
     case string(String)
     case int(Int)
@@ -18,18 +12,9 @@ public enum SyncValue: Sendable, Equatable, Hashable {
     case uuids([UUID])
 }
 
-/// A record as it travels: a name, a type, and flat fields.
-///
-/// **Nothing here is a CloudKit type**, and that is the point rather than a
-/// convenience. This package holds the two decisions that are worth testing
-/// exhaustively — what a record is *called* and how two versions of it are
-/// reconciled — and both are pure functions of values. Keeping them clear of
-/// `CKRecord` is the same seam `CatalogKit` puts around MusicKit, for the same
-/// reason: the parts that decide something are testable with no network, no
-/// entitlement and no device, and the part that cannot be tested here is a thin
-/// mechanical adapter with no decisions in it.
+/// No CloudKit type here — naming and merging stay pure and testable.
 public struct SyncedRecord: Sendable, Equatable {
-    /// Derived from the natural key, never generated. See ``RecordName``.
+    /// Derived from the natural key, never generated.
     public let name: String
 
     /// The model's type name — `"PolicyEntryRecord"` and so on.
@@ -49,12 +34,8 @@ public struct SyncedRecord: Sendable, Equatable {
     }
 
     // MARK: - Typed reads
-    //
-    // `nil` rather than a default on a mismatch. A field that is the wrong shape
-    // is a field written by a build that does not agree with this one, and
-    // substituting a zero there is how a newer build's value becomes an older
-    // build's default — the failure `SandboxSettingRecord` already guards
-    // against one layer up.
+
+    // `nil` on mismatch, never a default — a newer value must not become a zero.
 
     public func date(_ field: String) -> Date? {
         if case .date(let value) = fields[field] { return value }
@@ -77,8 +58,7 @@ public struct SyncedRecord: Sendable, Equatable {
     }
 }
 
-/// Field names, in one place, because a typo in one of these is a field that
-/// silently never merges.
+/// One place, because a typo here is a field that silently never merges.
 public enum Field {
     public static let id = "id"
     public static let modifiedAt = "modifiedAt"

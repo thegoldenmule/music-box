@@ -1,19 +1,9 @@
 import Foundation
 import SwiftData
 
-/// A model that can be put on the wire.
-///
-/// Encode only, deliberately — see ``RecordMapper`` for why the inbound half is
-/// a separate decision rather than an omission.
+/// Encode only, deliberately — see ``RecordMapper`` for why inbound is separate.
 public protocol SyncEncodable {
-    /// The record's identity on the server, derived from its natural key.
-    ///
-    /// **`nil` when the key cannot be derived**, which for every type below
-    /// means the relationship it reads through is gone. It used to fall back to
-    /// a fresh `UUID()`, which is not a weaker identity but *no* identity: the
-    /// row got a different name on every export, so the outbox re-sent it
-    /// forever and never drained. A row that cannot name itself is not a record,
-    /// and ``Outbox`` holds it back rather than inventing one.
+    /// `nil` when the key can't derive — never a fresh `UUID()`, which resent forever.
     var syncRecordName: String? { get }
     /// The type name, which is also what picks the merge rules.
     static var syncRecordType: String { get }
@@ -30,35 +20,18 @@ extension SyncEncodable {
     }
 }
 
-/// Turns the store's models into records.
-///
-/// **Outbound only, and that is a scoped decision.** Encoding is a total
-/// function of public getters, so it is written and tested here. Applying a
-/// remote record is not the mirror image of it: every stored property in
-/// `FamilyStore` is `private(set)` and changes only through mutators that stamp
-/// `modifiedAt`, which is the invariant entry-level merge depends on and is
-/// enforced structurally rather than by discipline. Handing this package
-/// unrestricted setters to write through would dismantle that on the way past.
-///
-/// So the inbound half is its own design — a per-model `apply` that goes through
-/// the mutators, with a stated answer for a field it cannot map (**never drop
-/// it**, for the reason a migration may never drop a row). It is the next piece
-/// of work and it is deliberately not improvised here.
-///
-/// Two rules the encoders hold to, both testable:
-///
-/// - **No references anywhere.** Every cross-record link is a plain identifier
-///   string. A record in a kid's zone can then point at the household `Family`
-///   without a cross-zone reference — which is what makes severing `Kid.family`
-///   unnecessary, and it means the local relationship and the wire form agree
-///   instead of drifting.
-/// - **Every record name comes from ``NaturalKey``**, never from a fresh UUID.
-///   Two devices producing the same logical row produce one record.
+/// Outbound only — encoding is a total function of public getters, tested here.
+/// Inbound isn't the mirror image: every property is `private(set)`, mutated
+/// only through `modifiedAt`-stamping mutators, so unrestricted setters here
+/// would break the invariant entry-level merge depends on.
+/// Inbound is deferred, future work: a per-model `apply` through the mutators
+/// that never drops a field it cannot map.
+/// No cross-record references — every link is a plain identifier string, so
+/// local and wire agree instead of drifting.
+/// Every record name comes from ``NaturalKey``, never a fresh UUID, so two
+/// devices producing the same logical row produce one record.
 public enum RecordMapper {
-    /// Every model `SyncCoverage` says travels, by type name.
-    ///
-    /// Compared against `SyncCoverage.syncedModels` by a test, so a model added
-    /// to one and not the other fails rather than quietly never syncing.
+    /// Checked against `SyncCoverage.syncedModels` — a mismatch fails the test.
     public static let encodableTypes: Set<String> = [
         "Family",
         "Kid",
@@ -99,9 +72,7 @@ extension Kid: SyncEncodable {
             Field.id: .uuid(id),
             Field.name: .string(name),
             Field.modifiedAt: .date(modifiedAt),
-            // The cached columns travel too. They are the answer for a household
-            // whose other device predates `SandboxSettingRecord`, and leaving
-            // them behind would hand that device a kid with no sandbox level.
+            // Cached columns travel too, for a device predating `SandboxSettingRecord`.
             "mode": .string(mode.rawValue),
             "unratedBehavior": .string(unratedBehavior.rawValue),
         ]
@@ -134,10 +105,7 @@ extension GrownUp: SyncEncodable {
 extension PolicyEntryRecord: SyncEncodable {
     public static var syncRecordType: String { "PolicyEntryRecord" }
 
-    /// Keyed on `(kid, kind, itemKind, catalogID)` and **not** on `id`. Two
-    /// parents denying the same artist offline both mint a row; content
-    /// addressing makes them one record with a save conflict the merge settles,
-    /// rather than two rows meaning one thing.
+    /// Keyed on content, not `id` — two offline denies merge to one row, not two.
     public var syncRecordName: String? {
         guard let kid else { return nil }
         return NaturalKey.policyEntry(
@@ -190,9 +158,7 @@ extension SandboxSettingRecord: SyncEncodable {
 extension SuggestionRecord: SyncEncodable {
     public static var syncRecordType: String { "SuggestionRecord" }
 
-    /// Keyed on `(kid, target)`. The target string is the catalog identifier, or
-    /// the local playlist UUID for a snapshot — read through `sourcePlaylistID`
-    /// so a row written before that column keys the same way it always did.
+    /// Keyed on `(kid, target)`; pre-`sourcePlaylistID` rows key the same as always.
     public var syncRecordName: String? {
         guard let kid else { return nil }
         let target = catalogID ?? (sourcePlaylistID ?? id).uuidString
@@ -239,11 +205,7 @@ extension SuggestionEntryRecord: SyncEncodable {
             Field.modifiedAt: .date(modifiedAt),
         ]
         fields["suggestionID"] = suggestion.map { .uuid($0.id) }
-        // **The owning kid, carried even though the parent already implies it.**
-        // Zone placement happens before anything is resolved, so a record that
-        // cannot name its kid has nowhere to go — and the sync engine found this
-        // out the hard way, by silently routing playlist songs into a zone
-        // derived from their own identifier.
+        // Carried even though the parent implies it — zone placement needs it first.
         fields[Field.kidID] = suggestion?.kid.map { .uuid($0.id) }
         fields["artworkURL"] = artworkURL.map { .url($0) }
         return fields
@@ -302,9 +264,7 @@ extension PlaylistRecord: SyncEncodable {
 extension PlaylistEntryRecord: SyncEncodable {
     public static var syncRecordType: String { "PlaylistEntryRecord" }
 
-    /// Keyed on `(playlist, catalogID)` and **not on position** — the same song
-    /// at a different position is the same song moved, and keying on position
-    /// would make a reorder look like a bulk delete and re-insert.
+    /// Not keyed on position — else a reorder looks like a bulk delete-and-insert.
     public var syncRecordName: String? {
         guard let playlist else { return nil }
         return NaturalKey.playlistEntry(playlist: playlist.id, catalogID: catalogID)
@@ -320,8 +280,7 @@ extension PlaylistEntryRecord: SyncEncodable {
             Field.modifiedAt: .date(modifiedAt),
         ]
         fields["playlistID"] = playlist.map { .uuid($0.id) }
-        // See ``SuggestionEntryRecord`` — the owning kid decides the zone, and
-        // the zone is chosen before any relationship is walked.
+        // See ``SuggestionEntryRecord`` — the zone is chosen before relationships resolve.
         fields[Field.kidID] = playlist?.kid.map { .uuid($0.id) }
         fields["artworkURL"] = artworkURL.map { .url($0) }
         fields["origin"] = .string(origin)
@@ -415,10 +374,7 @@ extension ConsentRecord: SyncEncodable {
 extension ActivitySegmentRecord: SyncEncodable {
     public static var syncRecordType: String { "ActivitySegmentRecord" }
 
-    /// Keyed by the **writing device**, which is what gives the volume leader in
-    /// this store no conflict surface at all — two devices never write the same
-    /// segment. See ``NaturalKey/activitySegment(kid:device:dayUTC:table:index:)``
-    /// for the limit of that claim.
+    /// Keyed by the writing device — two devices never write the same segment.
     public var syncRecordName: String? {
         guard let kidID, let deviceID else { return nil }
         return NaturalKey.activitySegment(

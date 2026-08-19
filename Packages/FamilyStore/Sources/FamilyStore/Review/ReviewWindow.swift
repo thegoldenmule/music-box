@@ -1,42 +1,24 @@
 import Foundation
 import PolicyEngine
 
-/// Everything the store knows about one kid over one interval, unfiltered.
-///
-/// **Nothing here has been through the policy engine.** Every other read in the
-/// app drops what comes back blocked; this one keeps all of it, because a denied
-/// item is what the parent's screen exists to show. The engine is applied later
-/// and only to annotate — see ``ReviewAnnotator``.
-///
-/// Values, not `@Model` objects. Built inside ``ReviewReader``'s own context and
-/// handed out as `Sendable` structs, which is the same contract ``EventLog``
-/// keeps in the other direction.
+/// Unfiltered — every other read drops blocks; the parent's screen needs them.
 public struct ReviewWindow: Sendable {
     public let kidID: UUID
 
-    /// What this window covers, in device time. Always bounded: an open-ended
-    /// window is a fetch with no limit over the largest table in the store.
+    /// Always bounded — open-ended means an unlimited fetch over the biggest table.
     public let interval: DateInterval
 
     public let plays: [PlayEvent]
     public let searches: [SearchEvent]
     public let blocks: [ReviewedBlock]
 
-    /// Where they went: containers opened, and songs at the moment play
-    /// started. The Recent shelf is a projection over these, but the parent's
-    /// report reads them raw — a shelf is a summary and this is the record.
+    /// Raw visit rows — the Recent shelf is a projection, but the report reads these.
     public let visits: [VisitEvent]
 
-    /// Rows whose stored columns did not read back into a typed event.
-    ///
-    /// A count rather than the rows, because there is nothing to show — but a
-    /// silent zero and a silent forty look identical on screen, and one of them
-    /// is a bug in us. These are also the first exercise ``PlaybackOrigin`` and
-    /// ``BlockReason`` round-tripping has ever had.
+    /// Count, not rows — a silent zero and a silent forty must not look the same.
     public let unreadable: Int
 
-    /// When this was built. The kid may be playing right now, and the song
-    /// playing has no row yet — a play is written on stop.
+    /// A play row is written on stop, so the song playing right now has none yet.
     public let builtAt: Date
 
     public let coverage: Coverage
@@ -70,33 +52,20 @@ public struct ReviewWindow: Sendable {
     public var totalListeningSeconds: Int { plays.reduce(0) { $0 + $1.secondsPlayed } }
 }
 
-/// What a window can and cannot answer, because retention ate part of it.
-///
-/// Exists before the sweep that fills it does, and deliberately. An empty list
-/// means "nothing happened", and a swept week must not be able to say that: a
-/// parent who reads a year of history and later finds it gone has experienced a
-/// deletion, not a policy. Added afterwards, there would be no way to tell which
-/// weeks had been swept.
+/// Exists before the sweep — else a swept week reads the same as an empty one.
 public enum Coverage: Sendable, Hashable {
     /// Raw events cover the whole interval.
     case complete
 
-    /// Raw events exist only at or after this date. Before it there are
-    /// summaries and nothing else.
+    /// Raw events exist only after this date; before it there are summaries only.
     case summarisedBefore(Date)
 }
 
-/// A block with the entry that produced it resolved to something a parent
-/// recognises.
+/// A block with the entry that produced it resolved to a parent-readable name.
 public struct ReviewedBlock: Sendable {
     public let event: BlockEvent
 
-    /// For ``BlockReason/deniedByParent(_:)``: that entry as it stands *today*.
-    ///
-    /// `nil` once the entry has been removed — which is the common case straight
-    /// after approve-from-report. The block still happened and keeps its stored
-    /// reason; the rule no longer exists. Never re-derived from whatever rule
-    /// *would* catch it now, because that invents a fact.
+    /// Never re-derived from today's rules — that would invent a fact, not report one.
     public let deniedBy: PolicyEntrySnapshot?
 
     public init(event: BlockEvent, deniedBy: PolicyEntrySnapshot? = nil) {
@@ -119,23 +88,13 @@ public struct PolicyEntrySnapshot: Sendable, Hashable {
 
 // MARK: - Grouping
 
-/// Blocks collapsed to the unit a parent actually reads.
-///
-/// By artist, because that is the question they are asking — *is my kid into
-/// this band?* — and because the artist is what approve-from-report widens to.
-///
-/// **`Codable` because it is part of ``WeeklySummary``**, which is persisted once
-/// the retention sweep takes the rows. Frozen keys, and ``reasons`` is written as a
-/// *sorted array* rather than as a set — a `Set`'s encoding order is not stable, and
-/// the payload holding it is compared byte for byte between devices.
+/// `Codable`; `reasons` sorts to an array — a `Set`'s byte encoding isn't stable.
 public struct BlockGroup: Sendable, Identifiable, Codable, Equatable {
-    /// `nil` when no row in the group ever resolved an artist. Such a group is
-    /// keyed by name instead and cannot be widened to an artist.
+    /// `nil` when no row resolved an artist — keyed by name, can't widen to one.
     public let artistID: CatalogID?
     public let displayName: String
 
-    /// **Split, never summed.** `unseen` is usually two orders of magnitude
-    /// larger and is a fact about our filter rather than about the child.
+    /// Split, never summed — `unseen` reflects our filter, not the child.
     public let reached: Int
     public let unseen: Int
 
@@ -145,17 +104,14 @@ public struct BlockGroup: Sendable, Identifiable, Codable, Equatable {
     public let firstAt: Date
     public let latestAt: Date
 
-    /// A row the kid reached for when the group has one, otherwise the most
-    /// recent. It carries the origin, which is what turns a group into a
-    /// sentence: *while searching for monster*.
+    /// The reached row if any, else newest — its origin turns a group into a sentence.
     public let sample: BlockEvent
 
     public var id: String { artistID.map(\.rawValue) ?? "name:\(displayName)" }
 
     public var total: Int { reached + unseen }
 
-    /// Spelled out because the custom `init(from:)` below suppresses the memberwise
-    /// one, and `group(_:)` builds these.
+    /// Explicit: the custom `init(from:)` below suppresses the memberwise one.
     public init(
         artistID: CatalogID?,
         displayName: String,
@@ -195,8 +151,7 @@ public struct BlockGroup: Sendable, Identifiable, Codable, Equatable {
         try container.encode(displayName, forKey: .displayName)
         try container.encode(reached, forKey: .reached)
         try container.encode(unseen, forKey: .unseen)
-        // Sorted on the frozen reason names, so the same set always writes the same
-        // bytes. A `Set` would not.
+        // Sorted by frozen name, so the same set always encodes the same bytes.
         try container.encode(
             reasons.sorted { $0.stored.name < $1.stored.name }, forKey: .reasons)
         try container.encode(firstAt, forKey: .firstAt)
@@ -218,17 +173,9 @@ public struct BlockGroup: Sendable, Identifiable, Codable, Equatable {
 }
 
 extension BlockGroup {
-    /// Groups a window's blocks, most-reached-for first.
-    ///
-    /// The ordering is the whole point: what the kid went for sits above what we
-    /// filtered on their behalf. Sorting by volume instead would put whichever
-    /// artist happens to have the most explicit tracks in the catalog at the
-    /// top, which is a fact about that discography and nothing to do with this
-    /// family.
+    /// Reached-first — sorting by volume would rank the catalog, not this family.
     public static func group(_ blocks: [ReviewedBlock]) -> [BlockGroup] {
-        // Keyed by artist where there is one, by display name where there is
-        // not — a row whose lineage never resolved is shown under its own name
-        // rather than dropped.
+        // Keyed by artist, else by name — an unresolved lineage is shown, not dropped.
         var order: [String] = []
         var buckets: [String: [BlockEvent]] = [:]
 
@@ -249,10 +196,7 @@ extension BlockGroup {
 
             return BlockGroup(
                 artistID: events.compactMap(\.artistID).first,
-                // The artist's own name when the artist itself was blocked;
-                // otherwise the newest track's, which is the best label a row
-                // that only stores an artist *identifier* can offer. A screen
-                // with the catalog to hand can do better and is welcome to.
+                // Artist's own name if blocked, else newest track's — best label with no catalog.
                 displayName: name(of: events),
                 reached: reached.count,
                 unseen: events.count - reached.count,
@@ -279,49 +223,30 @@ extension BlockGroup {
 
 // MARK: - Origins
 
-/// Where a play or a block came from, in a parent's words.
-///
-/// Resolved offline from the columns a row already carries. Names are whatever
-/// is already known; a screen never blocks on a catalog fetch to draw a row.
+/// Resolved offline — never blocks a screen on a catalog fetch to draw a row.
 public enum OriginDescription: Sendable, Hashable {
     case home
     case search(term: String)
 
-    /// `name` is `nil` when the catalog has not been asked, or could not
-    /// answer — the row then reads as the kind of thing it was.
+    /// `name` is `nil` when uncataloged — the row still reads as its kind.
     case browse(CatalogID, name: String?)
     case catalogPlaylist(CatalogID, name: String?)
 
-    /// `name` is `nil` when the kid has since deleted the playlist. There is no
-    /// fallback: this is the one identifier in the store that is ours rather
-    /// than Apple's, and nothing else remembers what it was called.
+    /// `name` is `nil` post-delete — our own identifier, so nothing else recalls it.
     case kidPlaylist(UUID, name: String?)
 
-    /// A tile on the shelf the parent filled. The answer to "did they play what
-    /// I suggested?", which is why it is not folded into ``home``.
+    /// Kept separate from `.home` to answer: did they play what I suggested?
     case suggestion
 
-    /// A suggested playlist that only exists here. `name` is `nil` once the
-    /// parent has withdrawn it — same as ``kidPlaylist(_:name:)``, nothing else
-    /// remembers what it was called.
+    /// `name` is `nil` once withdrawn — like `kidPlaylist`, nothing else recalls it.
     case suggestedPlaylist(UUID, name: String?)
 
-    /// The stored columns did not read back. Not a guess at `.home` — a report
-    /// that silently claims every orphaned row came from the home screen is
-    /// worse than one that admits it does not know.
+    /// Never guessed as `.home` — a wrong claim is worse than admitting we don't know.
     case unknown
 }
 
 extension PlaybackOrigin {
-    /// Describes this origin using only what is already in hand.
-    ///
-    /// - Parameters:
-    ///   - kidPlaylistName: names of the kid's playlists, by local identifier.
-    ///   - suggestionName: names of suggested playlists, by local identifier. A
-    ///     separate lookup from `kidPlaylistName` because the two identifiers
-    ///     live in different tables and a row in one is not a row in the other.
-    ///   - catalogName: whatever the caller can supply without waiting — a warm
-    ///     cache, typically. Returning `nil` is always acceptable.
+    /// Resolves names from caller-supplied lookups only — never waits on any of them.
     public func described(
         kidPlaylistName: (UUID) -> String? = { _ in nil },
         suggestionName: (UUID) -> String? = { _ in nil },

@@ -52,8 +52,7 @@ private func window(
 struct Summarising {
     @Test("Artists are ranked by time, songs by how often they were played")
     func rankings() {
-        // A kid who leaves one album on all afternoon was into that album,
-        // however few taps it took — so the two lists rank differently.
+        // An album left on all afternoon still counts — the lists rank differently.
         let summary = WeeklySummary.of(
             window(plays: [
                 play("Long", artist: Fix.quiet, seconds: 600),
@@ -69,8 +68,7 @@ struct Summarising {
         #expect(summary.totalListeningSeconds == 690)
     }
 
-    /// The row still counts toward the total. It simply does not appear in a
-    /// list it has no key for.
+    /// Counts toward the total; just absent from a list it has no key for.
     @Test("A play with no artist counts toward listening time and groups nowhere")
     func missingLineage() {
         let summary = WeeklySummary.of(
@@ -92,9 +90,7 @@ struct Summarising {
         #expect(summary.firstTimeHeard.map(\.name) == ["New"])
     }
 
-    /// Passing `nil` rather than an empty set is how a caller says "I could not
-    /// answer" — and an empty list is the honest result, not a week where every
-    /// song looks new.
+    /// `nil` says "I could not answer" — an honest empty list, not "all new".
     @Test("Without knowing what came before, nothing is claimed as new")
     func firstTimeUnknowable() {
         let summary = WeeklySummary.of(

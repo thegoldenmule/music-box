@@ -6,13 +6,7 @@ import PolicyEngine
 
 @testable import FamilyStore
 
-/// One real session, pulled off a device.
-///
-/// Twenty-three arrivals: an evening on one record by Foehn Trio, then a jump to
-/// The Killers. It is here verbatim because the shelf it produced on the device
-/// disagreed with the shelf ``RecentTrail/shelf(from:)`` computes from the same
-/// rows — the rules were right and the thing maintaining the stored copy was
-/// not, which is a class of bug no amount of testing the rules would have found.
+/// A real session: its device shelf disagreed with what the rules compute.
 private enum Device {
     static let foehn = CatalogID(.artist, "1231820400")
     static let highlines = CatalogID(.album, "1502196500")
@@ -85,20 +79,14 @@ private func storeWithKid() throws -> (ModelContainer, UUID) {
 
 @Suite("A real session off a device")
 struct DeviceSession {
-    /// What the rules say, computed in one go. Both records, and neither artist
-    /// — Foehn Trio is represented by Highlines and The Killers by Hot Fuss.
-    /// Mr. Brightside is dropped because Hot Fuss is the way back to it.
+    /// Both records, neither artist — each artist is represented by a record.
     @Test("The rules produce both records and no artist")
     func rulesAreRight() {
         let shelf = RecentTrail.shelf(from: Device.visits).map(\.catalogID)
         #expect(shelf == [Device.hotFuss, Device.highlines])
     }
 
-    /// **The bug this file exists for.** On the device the stored shelf was
-    /// `[Hot Fuss, The Killers, Highlines]` with Highlines stamped four minutes
-    /// stale — a state no single run of the rules can produce. Feeding the
-    /// arrivals in one at a time, the way they actually happened, has to leave
-    /// exactly what computing them all at once does.
+    /// The bug this file exists for: a state no single run of the rules can produce.
     @Test("Arriving one at a time leaves the same shelf as computing it at once")
     func incrementalMatchesWholesale() async throws {
         let (container, kidID) = try await storeWithKid()
@@ -111,17 +99,12 @@ struct DeviceSession {
 
         #expect(last.map(\.catalogID) == [Device.hotFuss, Device.highlines])
 
-        // And the store agrees with what was handed back, which is the half the
-        // device disproved: the shelf a kid sees comes from memory, and the one
-        // they see after a relaunch comes from here.
+        // The half the device disproved: what a relaunch shows comes from here.
         let stored = try await projector.trail(for: kidID)
         #expect(stored.map(\.catalogID) == [Device.hotFuss, Device.highlines])
     }
 
-    /// The device's shelf was wrong and nothing was ever going to notice: a
-    /// missed write leaves rows that are stale in *content*, and staleness used
-    /// to be judged by version alone. Reading the shelf now recomputes it, so a
-    /// relaunch is enough to heal one.
+    /// A missed write is stale in content, not version — a relaunch now heals it.
     @Test("A wrong shelf heals on the next read")
     func readHeals() async throws {
         let (container, kidID) = try await storeWithKid()
@@ -130,8 +113,7 @@ struct DeviceSession {
             try await projector.record(visit, for: kidID)
         }
 
-        // Exactly what the device had: a row the rules forbid, at the current
-        // version so no version check could catch it.
+        // What the device had: a rules-forbidden row at the current version.
         try await MainActor.run {
             let context = ModelContext(container)
             let kid = try #require(

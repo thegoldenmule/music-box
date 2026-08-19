@@ -25,12 +25,7 @@ private func newKid() throws -> (ModelContext, Kid) {
 @Suite("A suggestion's own identity")
 @MainActor
 struct SuggestionIdentity {
-    /// The row used to take the playlist's UUID *as its own id*, on the
-    /// reasoning that one identifier beats two that can disagree. That holds for
-    /// one writer. For two it means the suggestion's identity is the playlist's,
-    /// so a mapper keyed on `id` overwrites one parent's note, their attribution
-    /// and every resolved entry under it — and CloudKit rejects the unique
-    /// constraint that would have caught it.
+    /// A shared id let a two-parent merge overwrite one parent's note and attribution.
     @Test("A snapshot suggestion has an identity of its own")
     func snapshotKeepsItsOwnID() throws {
         let (_, kid) = try newKid()
@@ -46,16 +41,12 @@ struct SuggestionIdentity {
         #expect(record.target == .snapshotPlaylist(local: Fix.playlist))
     }
 
-    /// A row written before the column existed *is* keyed by the playlist's
-    /// UUID, so `id` is the right answer for it. Reading through means no
-    /// backfill write at all — the same shape as `PolicyEntryRecord.assertion`
-    /// reading through to `addedAt`.
+    /// An old row reads through by id, with no backfill write needed.
     @Test("An older row reads its source through its own id")
     func olderRowReadsThrough() throws {
         let (context, kid) = try newKid()
 
-        // Exactly what the old initializer produced: id == the playlist's UUID,
-        // no catalogID, and nothing in the new column.
+        // Exactly what the old initializer produced: id is the playlist's UUID.
         let legacy = SuggestionRecord(
             id: Fix.playlist,
             rawItemKind: ItemKind.playlist.rawValue,
@@ -70,9 +61,7 @@ struct SuggestionIdentity {
         #expect(legacy.target == .snapshotPlaylist(local: Fix.playlist))
     }
 
-    /// The dedup is by *target*, so an older row and a new suggestion for the
-    /// same playlist still collapse onto one record rather than becoming two
-    /// shelves for the same thing.
+    /// Dedup is by target, so an old row and a new suggestion collapse onto one.
     @Test("An older row is still found by target")
     func olderRowIsStillDeduped() throws {
         let (context, kid) = try newKid()
@@ -96,8 +85,7 @@ struct SuggestionIdentity {
         #expect(kid.suggestions.count == 1)
     }
 
-    /// A suggestion id and a playlist id could previously be the same value in
-    /// two unrelated namespaces.
+    /// A suggestion id and a playlist id could previously collide across namespaces.
     @Test("A suggestion id cannot collide with the playlist it points at")
     func noCrossNamespaceCollision() throws {
         let (_, kid) = try newKid()

@@ -19,8 +19,7 @@ private func agreed(_ scope: ConsentScope, _ kids: UUID...) -> RecordedConsent {
 
 @Suite("What an invitation exposes")
 struct WhatIsExposed {
-    /// There is no per-adult scoping anywhere in this design: a participant holds
-    /// the household zone and both zones of every child.
+    /// No per-adult scoping: a participant holds the household and every child's zone.
     @Test("Sharing the household exposes every child in it")
     func householdIsEverybody() {
         let exposed = Consent.kidsExposed(
@@ -38,8 +37,7 @@ struct WhatIsExposed {
         #expect(exposed == [Who.robin])
     }
 
-    /// `SharePlan.grants` returns nothing for a kid outside the household, so there
-    /// is no invitation to consent to.
+    /// `SharePlan.grants` returns nothing outside the household to consent to.
     @Test("A child who is not in this household is exposed by nothing")
     func strangerIsNothing() {
         let exposed = Consent.kidsExposed(
@@ -79,9 +77,7 @@ struct WhetherCovered {
             ))
     }
 
-    /// **The case this type exists for.** A screen that remembered "they already
-    /// agreed" would hand out a second child's search history on the strength of an
-    /// agreement about their sibling.
+    /// The case this type exists for: "already agreed" would leak a sibling's history.
     @Test("A child added after the agreement is not covered by it")
     func newKidReopensTheQuestion() {
         let recorded = [agreed(.shareHousehold, Who.robin)]
@@ -114,8 +110,7 @@ struct WhetherCovered {
             ))
     }
 
-    /// Two different asks, and the child-account one is the larger — it makes a
-    /// minor's own Apple Account a share participant.
+    /// The child-account ask is larger: it makes a minor's own account a participant.
     @Test("Consent for one scope is never consent for the other")
     func scopesDoNotSubstitute() {
         let household = [agreed(.shareHousehold, Who.robin)]
@@ -133,9 +128,7 @@ struct WhetherCovered {
                 scope: .shareHousehold, householdKids: [Who.robin], recorded: child))
     }
 
-    /// Falls out of the set arithmetic rather than being a special case: no child
-    /// data exists to agree about, and the next invitation after a child is added
-    /// asks.
+    /// Set arithmetic, not a special case — nothing to agree about with no children.
     @Test("A household with no children needs no agreement")
     func noKidsNeedsNothing() {
         #expect(Consent.isGiven(scope: .shareHousehold, householdKids: [], recorded: []))
@@ -167,12 +160,7 @@ struct ReadingARow {
         #expect(row.appVersion == "1.0 (3)")
     }
 
-    /// `ConsentRecord.recorded` also guards an unreadable `scopeRaw`, and there is
-    /// deliberately no test for it: the local writer takes a typed scope and
-    /// `SyncApply.applyConsent` defers an arriving row whose scope does not read
-    /// back rather than storing it, so the state cannot be constructed. Asserting
-    /// it would mean adding a setter to make the assertion possible, which is a
-    /// worse trade than leaving the `guard` unexercised.
+    /// No test for an unreadable `scopeRaw`: only a typed scope can ever be written.
     @Test("Every scope a build knows about reads back")
     func everyScopeRoundTrips() {
         for scope in ConsentScope.allCases {

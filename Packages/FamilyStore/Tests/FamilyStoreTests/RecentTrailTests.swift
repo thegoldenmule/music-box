@@ -16,8 +16,7 @@ private enum Fix {
     static func song(_ n: Int) -> CatalogID { CatalogID(.song, "song-\(n)") }
 }
 
-/// One arrival. `minutes` keeps the ordering readable and is the only thing
-/// "contiguous" is decided from.
+/// One arrival; `minutes` is the only thing "contiguous" is decided from.
 private func visit(
     _ id: CatalogID,
     album: CatalogID? = nil,
@@ -68,8 +67,7 @@ struct Runs {
         #expect(result == [Fix.record])
     }
 
-    /// One track is a track. Calling it the record would claim more than
-    /// happened.
+    /// One track is a track — calling it the record claims more than happened.
     @Test("A single track stays a track")
     func loneTrack() {
         let result = shelf([track(1, on: Fix.record, by: Fix.band, minutes: 1)])
@@ -82,8 +80,7 @@ struct Runs {
         #expect(result == [Fix.record])
     }
 
-    /// Contiguous means contiguous. Hopping between two records is two visits
-    /// to two records, not two runs of one.
+    /// Contiguous means contiguous — hopping records is two visits, not one run.
     @Test("Tracks from two records interleaved do not collapse")
     func interleavedDoesNotCollapse() {
         let result = shelf([
@@ -105,8 +102,7 @@ struct Runs {
         #expect(result == [Fix.second, Fix.record])
     }
 
-    /// An artist has no album key, so it can never join a run — which is what
-    /// stops a whole evening collapsing into one tile.
+    /// No album key, so an artist can't join a run and collapse the evening.
     @Test("An artist between two runs keeps them apart")
     func artistBreaksARun() {
         let result = shelf([
@@ -146,8 +142,7 @@ struct Artists {
         #expect(result == [Fix.song(1)])
     }
 
-    /// The artist whose work is present loses their tile; the one who was only
-    /// looked at keeps theirs.
+    /// The artist whose work is present loses the tile; viewed-only keeps it.
     @Test("Two artists, only one of them played")
     func oneOfTwoArtists() {
         let result = shelf([
@@ -158,8 +153,7 @@ struct Artists {
         #expect(result == [Fix.other, Fix.song(1)])
     }
 
-    /// Rule 2 is applied after rule 3, so a track dropped in favour of its
-    /// record still counts as that artist's work being present.
+    /// Rule 2 after rule 3: a track dropped for its record still counts as present.
     @Test("An artist is covered by a record that replaced their track")
     func coveredThroughACollapsedRun() {
         let result = shelf([
@@ -182,8 +176,7 @@ struct Songs {
             visit(Fix.other, minutes: 2),
             track(1, on: Fix.record, by: Fix.band, minutes: 3),
         ])
-        // The album was opened earlier and the track later; the album is the way
-        // back to both.
+        // The album, opened earlier, is the way back to both.
         #expect(result == [Fix.other, Fix.record])
     }
 
@@ -221,8 +214,7 @@ struct Shape {
         #expect(result == [Fix.list, Fix.other, Fix.band])
     }
 
-    /// A `.task` firing twice, a screen reappearing under a dismissed sheet, a
-    /// "Try again" — none of them should show twice.
+    /// A `.task` firing twice or a "Try again" should never show twice.
     @Test("The same thing twice is one tile, at the later time")
     func idempotent() {
         let entries = RecentTrail.shelf(from: [
@@ -233,9 +225,7 @@ struct Shape {
         #expect(entries.first?.at == Fix.t0.addingTimeInterval(9 * 60))
     }
 
-    /// A run of tracks produces a nameless album tile; an earlier visit to that
-    /// album has the name, and throwing it away would leave the shelf unable to
-    /// draw offline.
+    /// A run's album tile is nameless; discarding an earlier name breaks offline draw.
     @Test("A name from an earlier visit survives a later nameless one")
     func nameSurvives() {
         let entries = RecentTrail.shelf(from: [

@@ -19,8 +19,7 @@ private func seeded() throws -> (ModelContext, Kid) {
     return (context, kid)
 }
 
-/// Drains the outbox the way a device does: send everything, agree on it, and
-/// come back. A converging outbox is empty the second time.
+/// Sends everything, agrees on it, comes back — a converging outbox empties.
 @MainActor
 private func drain(_ context: ModelContext) throws -> [Outbox.Change] {
     let owed = try Outbox.pending(in: context)
@@ -30,9 +29,7 @@ private func drain(_ context: ModelContext) throws -> [Outbox.Change] {
         case .upsert(let record):
             Outbox.markSynced(record, in: context)
         case .delete(let name, _):
-            // A tombstone is owed until the server has been told, exactly like a
-            // record is owed until it is marked. Forgetting this half is its own
-            // way for an outbox never to drain.
+            // A tombstone is owed until told, same as a record, or drain never finishes.
             tombstones.first { $0.recordName == name }?.markExported()
         }
     }
@@ -42,19 +39,7 @@ private func drain(_ context: ModelContext) throws -> [Outbox.Change] {
 
 // MARK: -
 
-/// **The bug this suite exists for, and it was found by running the thing
-/// rather than by reading it.**
-///
-/// A row whose parent relationship has been nulled cannot derive its natural
-/// key. The mapper used to answer that with a fresh `UUID()`, so the same dead
-/// row was exported under a different name on every pass: the outbox never
-/// drained, the CloudKit zone grew by one record per orphan per sync, and
-/// nothing anywhere reported a problem, because from the sending side it looked
-/// exactly like ordinary work.
-///
-/// The store on the maintainer's device has these — earlier builds' removal
-/// paths all detached instead of deleting — so this is not hypothetical and not
-/// only about new data.
+/// A fresh UUID() per orphan meant the outbox never drained; found by running it.
 @Suite("An orphaned row is never sent")
 @MainActor
 struct OrphanExport {
@@ -70,9 +55,7 @@ struct OrphanExport {
         #expect(favorite.syncRecord() == nil)
     }
 
-    /// **The regression that matters.** Two exports of an unchanged store have
-    /// to name the same records — this is what was false, and it is what made
-    /// convergence impossible rather than merely slow.
+    /// Two exports of an unchanged store must name the same records — that was false.
     @Test("Two passes over an unchanged store agree on every name")
     func namesAreStable() throws {
         let (context, kid) = try seeded()
@@ -81,8 +64,7 @@ struct OrphanExport {
         _ = playlist.addSong(id: CatalogID(.song, "c"), displayName: "C")
         try context.save()
 
-        // Detached by hand, which is exactly the shape an older build left on
-        // disk. `context.save()` keeps them: nulling an inverse is not a delete.
+        // Detached by hand — context.save() keeps it; nulling an inverse isn't a delete.
         favorite.kid = nil
         try context.save()
 
@@ -92,8 +74,7 @@ struct OrphanExport {
         #expect(first == second)
     }
 
-    /// And the consequence, stated as the thing a person would notice: the
-    /// number next to "Sync now" reaches zero and stays there.
+    /// The consequence: "Sync now"'s number reaches zero and stays there.
     @Test("The outbox drains, and stays drained")
     func outboxConverges() throws {
         let (context, kid) = try seeded()
@@ -113,8 +94,7 @@ struct OrphanExport {
         #expect(try drain(context).isEmpty)
     }
 
-    /// The marks table is where the unbounded growth showed up first — one new
-    /// mark per orphan per sync, forever, on the device rather than the server.
+    /// Marks grew unbounded first — one new mark per orphan per sync, forever.
     @Test("Syncing repeatedly does not grow the marks table")
     func marksDoNotGrow() throws {
         let (context, kid) = try seeded()
@@ -131,8 +111,7 @@ struct OrphanExport {
         #expect(try context.fetch(FetchDescriptor<SyncMarkRecord>()).count == settled)
     }
 
-    /// Holding orphans back must not hold anything else back — the failure that
-    /// would trade a growing zone for a child's playlist never arriving.
+    /// Holding orphans back must not also hold back a child's real playlist.
     @Test("Everything with a parent still goes")
     func liveRowsAreUnaffected() throws {
         let (context, kid) = try seeded()
@@ -166,10 +145,7 @@ struct RemovalDeletes {
         #expect(try context.fetch(FetchDescriptor<FavoriteRecord>()).isEmpty)
     }
 
-    /// **The tombstone is what reaches the other device.** Without it the
-    /// favourite stays on a co-parent's phone forever, which is the failure
-    /// `PendingDeletionRecord` documents and did not prevent, because nothing
-    /// ever constructed one.
+    /// Without a tombstone the favorite stays on a co-parent's phone forever.
     @Test("Un-hearting a favorite tells the other device")
     func favoriteDeletionTravels() throws {
         let (context, kid) = try seeded()
@@ -184,9 +160,7 @@ struct RemovalDeletes {
         #expect(owed.contains(.delete(name: name, type: "FavoriteRecord")))
     }
 
-    /// A playlist's songs go with it. Cascade fires when the *kid* goes, not
-    /// when a playlist leaves the array, so deleting only the playlist would
-    /// leave every song in it orphaned.
+    /// Cascade fires on the kid, not the playlist — songs need their own delete call.
     @Test("Throwing a playlist away takes its songs")
     func playlistTakesItsSongs() throws {
         let (context, kid) = try seeded()
@@ -219,8 +193,7 @@ struct RemovalDeletes {
             .delete(name: name, type: "PlaylistEntryRecord")))
     }
 
-    /// A removal followed by a sync has to settle, which is the whole point of
-    /// both halves being here.
+    /// A removal must converge too — the point of both halves being here.
     @Test("A removal converges too")
     func removalConverges() throws {
         let (context, kid) = try seeded()
@@ -241,9 +214,7 @@ struct RemovalDeletes {
 @Suite("Reaping what earlier builds left behind")
 @MainActor
 struct OrphanRepair {
-    /// The rows are unreachable by every query in the store — each one is
-    /// `kid?.id == kidID` or the equivalent — so this deletes nothing anybody
-    /// could see, and finishes a removal the parent already asked for.
+    /// Every query is `kid?.id == kidID`, so an orphan is invisible, not just unused.
     @Test("Orphans are found and counted")
     func orphansAreReaped() throws {
         let (context, kid) = try seeded()
@@ -282,10 +253,7 @@ struct OrphanRepair {
         #expect(try context.fetch(FetchDescriptor<PlaylistEntryRecord>()).count == 1)
     }
 
-    /// **A retracted entry is not an orphan.** It is still the kid's, still
-    /// syncs, and is exactly the row a co-parent needs in order to learn that
-    /// the deny was withdrawn — reaping it would resurrect the deny on their
-    /// device.
+    /// A retracted entry still syncs — reaping it would resurrect the deny elsewhere.
     @Test("A retraction is kept, not reaped")
     func retractionsSurvive() throws {
         let (context, kid) = try seeded()

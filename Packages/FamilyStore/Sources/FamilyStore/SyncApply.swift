@@ -4,32 +4,15 @@ import SwiftData
 
 /// Absorbs a record that arrived from another device.
 ///
-/// **This lives in `FamilyStore` and not beside the merge, deliberately.** Every
-/// stored property here is `private(set)` and changes only through mutators that
-/// stamp `modifiedAt` — the invariant entry-level merge depends on, and one this
-/// store enforces structurally rather than by discipline. Putting the inbound
-/// half in another module would have meant opening public setters on every
-/// field, which dismantles that on the way past. So the module that owns the
-/// models owns the only code that writes them.
+/// Lives here, not beside the merge: fields are `private(set)`, so only the
+/// module owning the models can enforce that every write stamps `modifiedAt`.
 ///
-/// ## Three rules
-///
-/// **Nothing is ever dropped.** A record naming a parent that has not arrived —
-/// a policy entry for a kid this device has not seen yet — is *deferred*, not
-/// discarded. Out-of-order arrival is normal rather than exceptional: two zones
-/// have no arrival ordering between them, so "the household is here, the
-/// children are not yet" is a state every joining device passes through. The
-/// same rule a migration follows, for the same reason.
-///
-/// **`modifiedAt` is taken from the record, never from now.** Every mutator here
-/// is called with the incoming timestamp. Stamping the local clock instead would
-/// make an import look like an edit, and the next export would send it back —
-/// two devices ping-ponging a row neither one changed.
-///
-/// **A field this build cannot read is left alone rather than defaulted.** It is
-/// a value from a newer build, and substituting a default is how a newer
-/// build's tightening becomes an older build's default. This is the same
-/// direction `SandboxSettingRecord` resolution already takes.
+/// **Nothing is ever dropped** — a record naming a parent not yet here is
+/// deferred, not discarded; zones arrive with no ordering between them.
+/// **`modifiedAt` comes from the record, never `now`** — stamping locally
+/// would turn an import into an edit and start an export ping-pong.
+/// **An unreadable field is left alone, not defaulted** — it may be from a
+/// newer build, and a default would erase that build's tightening.
 public enum SyncApply {
     public enum Outcome: Sendable, Equatable {
         case inserted
@@ -47,14 +30,10 @@ public enum SyncApply {
         case unreadable(String)
     }
 
-    /// Resolves the identifiers a record points at. See ``RecordMapper`` on why
-    /// every cross-record link is a plain identifier rather than a reference.
+    /// Cross-record links are plain identifiers; see `RecordMapper` for why.
     @MainActor
     public struct Context {
-        /// Public so the sync layer can save after a batch. It does not get to
-        /// *write models* through it — that is what the apply functions are for
-        /// — but it does have to commit, and hiding the context would only mean
-        /// passing it a second time alongside.
+        /// Public only to let callers commit; writes still go through apply.
         public let modelContext: ModelContext
 
         public init(_ modelContext: ModelContext) {
@@ -89,13 +68,7 @@ public enum SyncApply {
         }
     }
 
-    /// Every type this build knows how to place.
-    ///
-    /// Compared against `RecordMapper.encodableTypes` by a test, so a model that
-    /// can be *sent* and cannot be *received* fails the build rather than
-    /// becoming a kind of row that silently never arrives — which is the same
-    /// failure `SyncCoverage` exists to prevent one layer up, and it is
-    /// invisible from the sending device.
+    /// Checked against `RecordMapper.encodableTypes`: unreceivable fails the build.
     public static let applicableTypes: Set<String> = [
         "Family", "Kid", "GrownUp", "PolicyEntryRecord", "SandboxSettingRecord",
         "SuggestionRecord", "SuggestionEntryRecord", "FavoriteRecord", "PlaylistRecord",
@@ -138,9 +111,7 @@ public enum SyncApply {
 
         if context.family(id) != nil { return .updated }
 
-        // A household has no mutable fields of its own that travel — its
-        // identity *is* its content. Creating it is what matters, because
-        // everything else defers until it exists.
+        // A household has no mutable fields of its own; existing is all that matters.
         let family = Family(id: id, at: touched)
         context.modelContext.insert(family)
         return .inserted
@@ -156,10 +127,7 @@ public enum SyncApply {
             return .deferred(.unreadable(Field.name))
         }
 
-        // The cached columns. Unreadable means a value from a newer build, and
-        // the *most restrictive* fallback is the right one for the two fields
-        // that decide what a child can reach — the same choice the schema
-        // defaults already make.
+        // Unreadable (a newer build's value) falls back to the most restrictive choice.
         let mode = record.string("mode").flatMap(SandboxMode.init(rawValue:)) ?? .allowOnly
         let unrated =
             record.string("unratedBehavior").flatMap(UnratedBehavior.init(rawValue:)) ?? .block
@@ -170,9 +138,7 @@ public enum SyncApply {
             kid = existing
             outcome = .updated
             existing.rename(to: name, at: touched)
-            // Through `applyCachedSandbox`, not `setMode`: the latter writes a
-            // *decision* row, and importing one would invent a decision nobody
-            // made. Decisions arrive as their own records.
+            // Not `setMode`: that writes a decision row, inventing one nobody made.
             existing.applyCachedSandbox(mode: mode, unratedBehavior: unrated, at: touched)
         } else {
             kid = Kid(id: id, name: name, mode: mode, unratedBehavior: unrated, at: touched)
@@ -251,10 +217,7 @@ public enum SyncApply {
             let addedAt = record.date(Field.addedAt)
         else { return .deferred(.unreadable("kind")) }
 
-        // Matched on the natural key rather than on `id`, because that is what
-        // the record name is derived from — two devices that both minted a row
-        // for the same deny have different ids and the same key, and matching on
-        // `id` would insert a second row for a record the server considers one.
+        // Matched on the natural key, not `id`: two racing devices share a key, not an id.
         let existing = kid.entries.first {
             $0.kind == rawKind && $0.itemKind == rawItemKind && $0.catalogID == catalogID
         }
@@ -278,9 +241,7 @@ public enum SyncApply {
             outcome = .inserted
         }
 
-        // **The standing, taken verbatim.** Both timestamps only move forward,
-        // so this is the merge's outcome landing rather than a decision being
-        // re-made — and `isLive` reads it exactly as it reads a local edit.
+        // Timestamps only move forward: this lands the merge's outcome, not a re-decision.
         entry.applySync(
             addedAt: addedAt,
             assertedAt: record.date(Field.assertedAt),
@@ -307,10 +268,7 @@ public enum SyncApply {
             let decidedAt = record.date(Field.decidedAt)
         else { return .deferred(.unreadable("keyRaw")) }
 
-        // Append-only: a decision is a fact about a moment and is never edited,
-        // so an arriving one either already exists or is new. There is nothing
-        // to update, which is the whole reason these rows cannot lose a
-        // tightening to a concurrent rename.
+        // Append-only: a decision is never edited, so it either already exists or is new.
         if kid.sandboxSettings.contains(where: { $0.id == id }) { return .updated }
 
         let decision = SandboxSettingRecord(
@@ -347,8 +305,7 @@ extension SyncApply {
             let itemKind = ItemKind(rawValue: rawItemKind)
         else { return .deferred(.unreadable("itemKind")) }
 
-        // The target is the natural key's second half, and a snapshot's reads
-        // through to `id` for a row written before `sourcePlaylistID` existed.
+        // The target is the natural key's second half; older rows read through to `id`.
         let sourcePlaylistID = record.uuid("sourcePlaylistID")
         let target: SuggestionTarget
         if let catalogID = record.string("catalogID"), !catalogID.isEmpty {
@@ -356,8 +313,7 @@ extension SyncApply {
         } else if itemKind == .playlist {
             target = .snapshotPlaylist(local: sourcePlaylistID ?? id)
         } else {
-            // A suggestion with neither is a row this build cannot place.
-            // Dropped is not an option; it waits for a build that can.
+            // Neither means this build can't place it — deferred, never dropped.
             return .deferred(.unreadable("catalogID"))
         }
 
@@ -478,9 +434,7 @@ extension SyncApply {
             favorite = existing
             outcome = .updated
         } else {
-            // The raw initializer, because an `itemKind` this build cannot read
-            // must still round-trip rather than being refused — a favorite is
-            // not a permission, and `row` already drops what it cannot render.
+            // Raw initializer: an unreadable `itemKind` round-trips rather than being refused.
             favorite = FavoriteRecord(
                 id: id,
                 rawItemKind: rawItemKind,
@@ -524,10 +478,7 @@ extension SyncApply {
             playlist = existing
             outcome = .updated
         } else {
-            // **The identifier is preserved, and here it is load-bearing.** A
-            // playlist's natural key *is* its id, so minting a fresh one would
-            // give the same playlist a different record name and put a second
-            // copy on the server.
+            // The id is the playlist's natural key; a fresh one forks the server row.
             playlist = PlaylistRecord(id: id, name: name, at: record.date(Field.createdAt) ?? touched)
             context.modelContext.insert(playlist)
             kid.attach(playlist)
@@ -618,8 +569,7 @@ extension SyncApply {
             device = DeviceRecord(
                 id: id,
                 label: label,
-                // The most restrictive role, for the reason the rest of this
-                // store fails closed: an unreadable role must not open a player.
+                // Most restrictive role: an unreadable role must not open a player.
                 role: record.string("roleRaw").flatMap(DeviceRole.init(rawValue:)) ?? .parentOnly,
                 platform: record.string("platformRaw").flatMap(DevicePlatform.init(rawValue:)) ?? .pad,
                 at: record.date(Field.enrolledAt) ?? touched
@@ -644,10 +594,7 @@ extension SyncApply {
         return outcome
     }
 
-    // The four below are **write-once**: each records something that happened at
-    // a moment and is never edited afterwards. So an arriving copy either
-    // already exists or is new, and there is nothing to reconcile — which is
-    // also why none of them needed a merge rule beyond `immutable`.
+    // The four below are write-once: an arriving copy either already exists or is new.
 
     @MainActor
     fileprivate static func applyPasscodeEpoch(
@@ -685,11 +632,7 @@ extension SyncApply {
             let issuedAt = record.date("issuedAt")
         else { return .deferred(.unreadable("clearedThrough")) }
 
-        // **Deliberately does not defer on a missing kid.** A clear is an
-        // instruction about a range, and it has to be able to land before the
-        // child's own record does — otherwise a device that has not finished
-        // hydrating would import the history first and the instruction to
-        // destroy it second, which is the race the watermark exists to remove.
+        // Never defers on a missing kid: it must land before the child's own record.
         context.modelContext.insert(
             HistoryClearRecord(
                 id: id,
@@ -784,19 +727,7 @@ extension SyncApply {
 // MARK: - Finding what we already have
 
 extension SyncApply {
-    /// The local row that a record name refers to, encoded for merging.
-    ///
-    /// `nil` when this device does not have it — which is the ordinary case for
-    /// anything a co-parent has just created, and the signal to insert rather
-    /// than merge.
-    ///
-    /// **Matched by recomputing names rather than by storing them.** A record
-    /// name is derived from the row's content, so a stored copy is a second
-    /// source of truth that goes stale the moment the content changes — and the
-    /// content changing is exactly when the name matters. Recomputing is O(n)
-    /// per lookup over one household's rows, which is affordable for the same
-    /// reason the outbox scan is: the four event tables travel as segments and
-    /// are not in this set.
+    /// Names are recomputed, never stored — a stored copy goes stale on edit.
     @MainActor
     public static func localRecord(
         named name: String, type: String, in context: Context
@@ -826,12 +757,7 @@ extension SyncApply {
         }
     }
 
-    /// Deletes whatever a record name refers to, for a deletion that arrived
-    /// from another device.
-    ///
-    /// **Does not write a tombstone.** `Outbox.delete` does, because that is a
-    /// deletion *this* device is announcing; echoing one back would have two
-    /// devices telling each other about the same removal forever.
+    /// Deletes locally; writes no tombstone, unlike `Outbox.delete`.
     @MainActor
     @discardableResult
     public static func deleteLocal(named name: String, type: String, in context: Context) -> Bool {
@@ -849,10 +775,7 @@ extension SyncApply {
         case SuggestionEntryRecord.syncRecordType: drop(SuggestionEntryRecord.self)
         case Kid.syncRecordType: drop(Kid.self)
         case GrownUp.syncRecordType: drop(GrownUp.self)
-        // Policy entries and devices are never deleted — they retract and they
-        // are revoked, and both are rows that stay. A deletion arriving for one
-        // is a bug somewhere else, and honouring it would destroy the tombstone
-        // that carries the withdrawal.
+        // Entries and devices retract/revoke, never delete; a deletion is a bug elsewhere.
         default: false
         }
     }

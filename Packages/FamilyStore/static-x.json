@@ -1,0 +1,109 @@
+{
+  "checks": {
+    "claude": {
+      "novelty": "changed-file",
+      "tools": {
+        "swift/comments/llm-tells": "warn",
+        "swift/comments/long": "warn"
+      }
+    },
+    "commit": {
+      "novelty": "changed-lines",
+      "tools": {
+        "swift/comments/long": "warn",
+        "swift/comments/llm-tells": "warn"
+      }
+    },
+    "push": {
+      "novelty": "none",
+      "tools": {
+        "swift/comments/long": "block",
+        "swift/comments/llm-tells": "block",
+        "swift/comments/stale-refs": {
+          "level": "block",
+          "minConfidence": "medium"
+        }
+      }
+    }
+  },
+  "swift": {
+    "comments": {
+      "long": {
+        "input": {
+          "maxLines": 1,
+          "maxChars": 83
+        },
+        "ignore": [
+          "/// What an activity segment's payload holds. /// /// **High",
+          "/// A dropped log line is acceptable; a stalled player is no",
+          "/// Replaces an unsorted `kids.first`, correct by accident u",
+          "/// Stored, not derived — `CatalogItem` carries no title, an",
+          "/// Accepted-share Apple Account for this grown-up. `nil` un",
+          "/// **Not a favorite** — never fills a heart, never chosen; ",
+          "/// The gap between neighbours, so an insert never touches e",
+          "// // Empty ancestry costs the gapless join and lets a bare ",
+          "/// A device *checks against* this rather than owning the pa",
+          "// Held outside the row: an unbounded blob against a 1 MB `C",
+          "// What makes a row the same row across two devices. Two pie",
+          "/// **Recomputed, not folded** — a fold can't un-decide, and",
+          "/// The first projection here — derived, rebuildable, so a s",
+          "/// Outbound only — encoding is a total function of public g",
+          "// Clamped to the trail's floor — sweeping past the oldest v",
+          "// Rolls events older than the window into weekly summaries,",
+          "/// A week, derived from live events until the retention swe",
+          "/// The schema, as a numbered version — there is data in the",
+          "/// Batched, not per-row — a backlog of searches can't queue",
+          "/// Absorbs a record that arrived from another device. /// /"
+        ]
+      },
+      "stale-refs": {
+        "ignore": [
+          "CKRecord",
+          "CKShare.Participant",
+          "CKAccountStatus.restricted",
+          "CKUserIdentity.nameComponents",
+          "CKRecordNameZoneWideShare",
+          "lookupInfo",
+          "willMigrate",
+          "didMigrate",
+          "fromVersion",
+          "CatalogItem",
+          "KidPlayerModel",
+          "MergedLibrary",
+          "DeviceLibraryState",
+          "FilteredCatalog",
+          "resolveAncestry",
+          "resolveToCatalog",
+          "LibraryWalk",
+          "BindingResolver",
+          "AccountState",
+          "SharePlan.grants",
+          "ActingGrownUp",
+          "ActingGrownUpStore",
+          "AdminGate",
+          "firstDenied",
+          "newerRecord",
+          "renumber",
+          "TileCell",
+          "isPasscodeSet",
+          "setPasscode",
+          "queuedVerdict",
+          "Session.queuedVerdict",
+          "MigrationTests",
+          "FamilySchemaV1",
+          "absorbedAt",
+          "CLAUDE.md",
+          "ZKID",
+          "ZBOUNDACCOUNTRECORDNAME",
+          "CatalogKit",
+          "AccountSetup",
+          "DeviceConfiguration",
+          "identifierForVendor",
+          "MusicKit",
+          "FamilySync",
+          "nameComponents"
+        ]
+      }
+    }
+  }
+}

@@ -44,8 +44,7 @@ struct Grouping {
         #expect(groups.first?.total == 3)
     }
 
-    /// Never one number. The unseen count is a fact about our over-fetch loop;
-    /// summing them reports our own machinery as things the child went after.
+    /// Never one number — summing would report our machinery as the child's own doing.
     @Test("Reached and unseen are counted separately")
     func countsAreSplit() {
         let groups = BlockGroup.group([
@@ -65,8 +64,7 @@ struct Grouping {
             block("Loud C", artist: Fix.loud, minutes: 12),
             block("Quiet A", artist: Fix.quiet, reach: .reached, minutes: 1),
         ])
-        // The quiet artist has one row against three, and it is the one that
-        // describes something the child did.
+        // One row against three, but the one describing what the child did.
         #expect(groups.first?.artistID == Fix.quiet)
     }
 
@@ -87,8 +85,7 @@ struct Grouping {
             block("Unseen", minutes: 30),
             block("Tapped", reach: .reached, origin: .search(term: "monster"), minutes: 1),
         ])
-        // Latest would have picked the unseen row; the reached one is what makes
-        // the group a sentence a parent recognises.
+        // Latest would pick the unseen row; reached makes the sentence recognisable.
         #expect(groups.first?.sample.displayName == "Tapped")
         #expect(groups.first?.sample.origin == .search(term: "monster"))
     }

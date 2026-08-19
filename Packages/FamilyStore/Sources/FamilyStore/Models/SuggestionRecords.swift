@@ -2,57 +2,22 @@ import Foundation
 import PolicyEngine
 import SwiftData
 
-/// Something a parent put in front of their kid.
-///
-/// **A suggestion widens reach.** Non-dismissed rows are folded into the kid's
-/// policy as allows by ``Kid/buildPolicy()``, so a suggested item is reachable at
-/// every sandbox level. That is the whole point of the feature — the rest of the
-/// parent's surface is about bounding what a kid gets to, and this is the one
-/// that hands them something.
-///
-/// It is the reason two rules below are the way they are:
-///
-/// - **Dismissal drops the allow, not just the tile.** A kept allow on a passed-on
-///   suggestion would be an *invisible* one: at level 2 a per-item allow overrides
-///   the rating check, so a dismissed explicit song would stay playable from
-///   search forever with no screen in the app saying so. The allow list would not
-///   list it and this list would show it greyed out. The invariant is that
-///   everything widening reach appears on exactly one visible screen.
-/// - **An unreadable row fails by omission, not by denial.** ``PolicyEntryRecord``
-///   does the opposite — a row it cannot read becomes a deny — because dropping a
-///   real deny silently unblocks something a parent refused. Copying that here
-///   would be backwards: a deny wins in every mode, so a corrupt *suggestion*
-///   would become a family-wide block, which is strictly worse than the failure
-///   the rule exists to prevent. Suggestions are additive, so their failure mode
-///   is additive too: drop it, report it.
-///
-/// **Not an event, and not the kid's library either.** A retention sweep must not
-/// reach this table — a parent has not withdrawn a suggestion by clearing logs —
-/// and neither must anything that reads what the *kid* kept. Favoriting something
-/// off this shelf writes an ordinary ``FavoriteRecord`` and leaves this row alone.
+/// A suggestion widens reach: non-dismissed rows fold into policy as allows.
 @Model
 public final class SuggestionRecord {
     public private(set) var id: UUID = UUID()
     public private(set) var modifiedAt: Date = Date.distantPast
 
-    /// The Apple Music catalog identifier, or `nil` for a snapshot playlist.
-    ///
-    /// `nil` is a supported state on exactly one kind of row. See
-    /// ``SuggestionTarget/snapshotPlaylist(local:)`` for why a parent's own
-    /// playlist has no identifier to put here, and ``target`` for the read that
-    /// refuses to make sense of any other row missing one.
+    /// `nil` only for a snapshot playlist — see ``SuggestionTarget``.
     public private(set) var catalogID: String?
 
-    /// `ItemKind.rawValue`. Part of the identity, because MusicKit identifiers
-    /// are only unique within a type.
+    /// `ItemKind.rawValue`; part of identity since catalog ids aren't type-unique.
     public private(set) var itemKind: String = ItemKind.album.rawValue
 
-    /// Copied at write time and never refreshed, so the shelf renders offline
-    /// and a delisted item still reads as a name instead of an identifier.
+    /// Copied at write time so the shelf renders offline for a delisted item.
     public private(set) var displayName: String = ""
 
-    /// The artist under an album, the curator under a playlist. Copied for the
-    /// same reason and at the same moment.
+    /// Artist under an album, curator under a playlist; copied the same way.
     public private(set) var subtitle: String?
 
     /// A reference only. Artwork bytes are never copied into our storage.
@@ -60,54 +25,25 @@ public final class SuggestionRecord {
 
     public private(set) var suggestedAt: Date = Date.distantPast
 
-    /// Ascending and monotonic within a kid; the shelf reads it descending.
-    ///
-    /// One past the highest at insert, so adding a suggestion never rewrites the
-    /// rows around it. Shifting fifty rows to make room at position zero would
-    /// stamp fifty `modifiedAt`s, which is the sync churn this store spends
-    /// effort avoiding everywhere else.
+    /// One past the highest at insert, so adding never rewrites neighboring rows.
     public private(set) var position: Int = 0
 
-    /// Which of the kid's own playlists this snapshots, for a
-    /// `snapshotPlaylist` target. `nil` for a catalog target, and `nil` for a
-    /// snapshot row written before the column existed — see ``target`` for why
-    /// that needs no backfill.
-    ///
-    /// A **local** UUID and the one deliberate exception to the rule that every
-    /// stored identifier is an Apple Music catalog identifier: a playlist the
-    /// kid made did not exist until they made it.
+    /// Local UUID for a kid's own playlist — the one non-catalog stored id.
     public private(set) var sourcePlaylistID: UUID?
 
-    /// When the kid passed on it. `nil` if they never have.
-    ///
-    /// Not on its own the answer — see ``isDismissed``, which compares it with
-    /// ``restoredAt``.
+    /// When passed on; combine with ``restoredAt`` via ``isDismissed``, not alone.
     public private(set) var dismissedAt: Date?
 
-    /// When a parent offered it again, or `nil` if they never have.
-    ///
-    /// `nil` is the truthful value for every row written before the column
-    /// existed: nothing had been restored, because restoring cleared the
-    /// dismissal instead of recording anything.
+    /// When re-offered; `nil` also means never-restored for pre-column rows.
     public private(set) var restoredAt: Date?
 
-    /// A parent's one line about why they picked it. Shown to the kid.
-    ///
-    /// Free text an adult typed that a child reads — worth knowing about before
-    /// the field exists rather than after.
+    /// A parent's note, shown to the kid — plan for that before the field exists.
     public private(set) var note: String?
 
-    /// Which ``GrownUp`` picked it — their `attribution`, not their name. `nil`
-    /// when nobody is on the roster, which is how the shelf reads as a plain
-    /// "From your grown-up" until somebody is.
-    ///
-    /// **What the kid's home screen groups on.** The identifier rather than the
-    /// name, so two grown-ups who share one still get their own shelf.
+    /// Which grown-up picked it, by id, so co-attributed grown-ups share a shelf.
     public private(set) var addedBy: String?
 
-    /// Their name as it read when this was suggested, copied like ``displayName``
-    /// and for the same reason. Rewritten only by
-    /// ``Family/renameGrownUp(_:to:at:)``.
+    /// Name as suggested, copied like ``displayName``; rewritten only on rename.
     public private(set) var addedByName: String?
 
     public var kid: Kid?
@@ -134,20 +70,7 @@ public final class SuggestionRecord {
             self.catalogID = catalogID.rawValue
             self.itemKind = catalogID.kind.rawValue
         case .snapshotPlaylist(let local):
-            // **The row keeps its own identity and points at the playlist in a
-            // column of its own.** It used to do the opposite — `self.id =
-            // local` — on the reasoning that one UUID is better than two that
-            // can disagree. That holds for one writer and breaks for two: the
-            // suggestion's identity became the *playlist's*, so two grown-ups
-            // suggesting the same source playlist produced two records with an
-            // identical key and no unique constraint to stop them. CloudKit
-            // rejects unique constraints outright, so nothing would have. A
-            // mapper keyed on `id` overwrites one parent's note, their
-            // attribution and every resolved entry under it.
-            //
-            // It also let a `SuggestionRecord` id collide with a
-            // `PlaylistRecord` id across two namespaces that are otherwise
-            // unrelated.
+            // Own id, not the playlist's — reuse let two suggesters collide.
             self.sourcePlaylistID = local
             self.catalogID = nil
             self.itemKind = ItemKind.playlist.rawValue
@@ -163,11 +86,7 @@ public final class SuggestionRecord {
         self.modifiedAt = at
     }
 
-    /// Builds a row straight from stored strings, bypassing the typed enums.
-    ///
-    /// Internal, and the only way to produce a row this version cannot read —
-    /// which is what the drop-it path in ``row`` and the fold in
-    /// ``Kid/buildPolicy()`` have to be tested against.
+    /// Internal: the only way to build a row this version can't read, for tests.
     init(
         id: UUID = UUID(),
         rawItemKind: String,
@@ -187,22 +106,7 @@ public final class SuggestionRecord {
 
     // MARK: - Mutation
 
-    /// The upsert half: suggesting something already on the shelf refreshes the
-    /// copied metadata rather than making a second row.
-    ///
-    /// `suggestedAt` and `position` deliberately do **not** move here. Suggesting
-    /// something that is already live is usually a parent forgetting they did,
-    /// and reshuffling the shelf under a kid for that is worse than doing
-    /// nothing. ``restore(position:at:)`` is the case where the order *should*
-    /// change, and it is a separate call because it is a separate intention.
-    ///
-    /// **Attribution moves to whoever just suggested it.** If Mum re-suggests
-    /// what Dad put there, the tile moves to Mum's shelf. Suggesting is an act,
-    /// and the shelf names who performed it — the alternative leaves a row
-    /// credited to somebody who did not do the thing that produced its current
-    /// contents. The note above is the deliberate asymmetry: a note is a sentence
-    /// somebody wrote and is only ever set, never cleared, while attribution is a
-    /// fact about the write in hand and is replaced wholesale, `nil` included.
+    /// Upsert: refreshes metadata and reassigns attribution, but not position.
     func refresh(
         displayName: String,
         subtitle: String?,
@@ -215,47 +119,29 @@ public final class SuggestionRecord {
         self.displayName = displayName
         self.subtitle = subtitle
         self.artworkURL = artworkURL
-        // Only ever set, never cleared by a refresh: a re-suggestion that came
-        // through a surface without a note field must not silently erase the
-        // sentence a parent wrote on the one that had it.
+        // Set-only: a note-less re-suggestion must not erase an existing note.
         if let note { self.note = note }
         self.addedBy = addedBy
         self.addedByName = addedByName
         self.modifiedAt = at
     }
 
-    /// Corrects the copied name after a rename. See ``Family/renameGrownUp(_:to:at:)``.
+    /// Corrects the copied name after a grown-up renames themselves.
     func rewriteAddedByName(to newName: String, at: Date = .now) {
         addedByName = newName
         modifiedAt = at
     }
 
-    /// The kid passed on it.
-    ///
-    /// Stamps `modifiedAt` even though it is a kid's action rather than a
-    /// parent's — the other kid-side writes in this store deliberately do not.
-    /// The difference is that this one changes what the child can reach, and
-    /// `modifiedAt` is what a sync merge compares. A dismissal that lost a race
-    /// with another device would put the item back.
+    /// Stamps `modifiedAt`, unlike other kid-side writes, because this changes reach.
     public func dismiss(at: Date = .now) {
         guard dismissedAt == nil else { return }
         dismissedAt = at
         modifiedAt = at
     }
 
-    /// The parent offered it again.
-    ///
-    /// Moves it to the front, unlike ``refresh(displayName:subtitle:artworkURL:note:at:)``:
-    /// re-suggesting something a kid passed on is a deliberate second act, and it
-    /// is worth nothing if the kid never sees it.
+    /// Moves it to the front — a re-offer is worth nothing if the kid never sees it.
     public func restore(position newPosition: Int, at: Date = .now) {
-        // **Stamped rather than cleared**, for the reason
-        // `PolicyEntryRecord.reassert(at:)` gives. Clearing `dismissedAt` throws
-        // away the fact a merge needs: a device that has not seen the restore
-        // holds a copy where the dismissal is simply present, and with nothing
-        // to compare it against the older copy wins and a parent's re-offer
-        // silently disappears. Two timestamps that only move forward let the
-        // comparison decide, from either arrival order.
+        // Stamps, never clears — clearing would let a merge silently drop the restore.
         restoredAt = at
         position = newPosition
         suggestedAt = at
@@ -267,10 +153,7 @@ public final class SuggestionRecord {
         modifiedAt = at
     }
 
-    /// Appends a resolved song, or does nothing if it is already here.
-    ///
-    /// Ancestry is not optional here the way it is elsewhere — see
-    /// ``SuggestionEntryRecord``.
+    /// Appends a resolved song, or does nothing if already here; ancestry required.
     @discardableResult
     public func addSong(
         id songID: CatalogID,
@@ -298,48 +181,27 @@ public final class SuggestionRecord {
 
     // MARK: - Reading
 
-    /// What this points at, or `nil` for a row this version cannot read.
-    ///
-    /// A missing `catalogID` is only meaningful on a playlist. Anything else
-    /// without one is unreadable and dropped — never guessed at, and never
-    /// turned into a deny.
+    /// `nil` for a row this version can't read — dropped, never guessed or denied.
     public var target: SuggestionTarget? {
         guard let kind = ItemKind(rawValue: itemKind) else { return nil }
         if let catalogID, !catalogID.isEmpty {
             return .catalog(CatalogID(kind, catalogID))
         }
         guard kind == .playlist else { return nil }
-        // **Reads through to `id` for a row written before the column existed.**
-        // Those rows *are* keyed by the playlist's UUID, so `id` is the right
-        // answer for them and no backfill write is needed — the same shape as
-        // `PolicyEntryRecord.assertion` reading through to `addedAt`.
+        // Falls back to `id` for rows predating this column — no backfill needed.
         return .snapshotPlaylist(local: sourcePlaylistID ?? id)
     }
 
-    /// Whether the kid has passed on this and a parent has not since re-offered
-    /// it.
-    ///
-    /// A plain comparison, for the reason ``PolicyEntryRecord/isLive`` gives:
-    /// on one device the order of two actions is not in doubt, and a parent
-    /// re-offering something the kid just passed on must see it come back now
-    /// rather than in two minutes. The cross-device ambiguity is ``Merge``'s.
+    /// Plain comparison: one device's order isn't ambiguous, unlike a merge's.
     public var isDismissed: Bool {
         guard let dismissedAt else { return false }
         guard let restoredAt else { return true }
         return dismissedAt > restoredAt
     }
 
-    /// Every catalog identifier this suggestion vouches for.
-    ///
-    /// What ``Kid/buildPolicy()`` folds in as allows, and empty for a dismissed
-    /// row. A playlist contributes its own identifier *and* every resolved
-    /// track: nothing in this app puts a playlist into a track's lineage, so an
-    /// allow on the playlist alone reaches the container and none of its
-    /// contents.
+    /// A playlist's allow reaches the container and its tracks, not by lineage.
     public var allowedIDs: [CatalogID] {
-        // `isDismissed`, not `dismissedAt == nil`. A restore no longer clears
-        // the dismissal — it stamps against it — so the bare nil check would
-        // leave a re-offered suggestion granting nothing.
+        // `isDismissed`, not `dismissedAt == nil` — a restore stamps, doesn't clear.
         guard !isDismissed, let target else { return [] }
         var ids: [CatalogID] = []
         if case .catalog(let id) = target { ids.append(id) }
@@ -368,21 +230,13 @@ public final class SuggestionRecord {
     }
 }
 
-/// One resolved song inside a suggested playlist.
-///
-/// Structurally a ``PlaylistEntryRecord`` and deliberately not one: that table is
-/// the kid's own work and is read back by ``MergedLibrary``, and a suggestion
-/// landing in it would put the parent's picks on the kid's shelf — the one thing
-/// this feature must not do. The value form *is* shared: ``PlaylistEntryRow``
-/// says "a song, in order, with its metadata copied down," which is exactly what
-/// this is, and two identical structs would be two places to remember.
+/// Not a ``PlaylistEntryRecord``: that table is read into the kid's own shelf.
 @Model
 public final class SuggestionEntryRecord {
     public private(set) var id: UUID = UUID()
     public private(set) var modifiedAt: Date = Date.distantPast
 
-    /// **Always a song.** There is no `itemKind` column because there is no
-    /// other kind this can be.
+    /// Always a song; no `itemKind` column because nothing else lands here.
     public private(set) var catalogID: String = ""
 
     public private(set) var displayName: String = ""
@@ -394,22 +248,8 @@ public final class SuggestionEntryRecord {
 
     // MARK: - Ancestry
     //
-    // The same five flat columns as ``FavoriteRecord``, and here they are closer
-    // to load-bearing than anywhere else they appear.
-    //
-    // `Session.queuedVerdict` opens with `guard !item.ancestors.isEmpty` and
-    // returns `.unknown` otherwise, and `KidPlayerModel` refuses to queue
-    // anything `.unknown`. A snapshot row storing only an identifier and a name
-    // would therefore cost **every track in a suggested playlist its gapless
-    // join** — forty tracks, forty gaps.
-    //
-    // It matters for safety too, and more quietly: a bare song id that is in the
-    // allow set evaluates `.allowed` at level 2 with a deny on its artist never
-    // consulted, because `firstDenied` has no ancestors to walk. Since a
-    // suggestion *is* an allow, that is not hypothetical here.
-    //
-    // None of it costs a request. `resolveToCatalog` already asks for
-    // `[.albums, .artists]` and currently throws the answer away.
+    // Empty ancestry costs the gapless join and lets a bare id skip
+    // `firstDenied`'s artist walk — a real deny-bypass, not hypothetical.
 
     public private(set) var albumID: String?
     public private(set) var albumName: String?
@@ -438,7 +278,7 @@ public final class SuggestionEntryRecord {
         apply(ancestry)
     }
 
-    /// Records lineage learned after the fact. See ``FavoriteRecord/record(ancestry:at:)``.
+    /// Records lineage learned after the fact.
     public func record(ancestry: LibraryAncestry, at: Date = .now) {
         guard !ancestry.isEmpty else { return }
         apply(ancestry)
@@ -479,20 +319,14 @@ public final class SuggestionEntryRecord {
 }
 
 extension SuggestionEntryRecord {
-    /// Deterministic order for a suggested playlist's songs. See
-    /// ``PlaylistEntryRecord/inOrder(_:_:)``.
+    /// Mirrors ``PlaylistEntryRecord/inOrder(_:_:)`` for a suggested playlist.
     static func inOrder(_ a: SuggestionEntryRecord, _ b: SuggestionEntryRecord) -> Bool {
         (a.position, a.id.uuidString) < (b.position, b.id.uuidString)
     }
 }
 
 extension SuggestionRecord {
-    /// Newest first, which is how the kid's shelf reads it.
-    ///
-    /// The tiebreak matters more here than on a playlist: two grown-ups
-    /// suggesting something while offline both take one past the highest
-    /// position they can see, so a collision is the *expected* case rather than
-    /// a rare one.
+    /// Newest first; two offline grown-ups often collide on the same position.
     static func newestFirst(_ a: SuggestionRecord, _ b: SuggestionRecord) -> Bool {
         (a.position, a.id.uuidString) > (b.position, b.id.uuidString)
     }
@@ -524,9 +358,7 @@ extension SuggestionRecord {
         if let position { self.position = position }
         if let suggestedAt { self.suggestedAt = suggestedAt }
 
-        // Advance only, both halves. A device that has not seen the dismissal
-        // carries none, and that absence must never read as "the kid never
-        // passed on this" — dismissal withdraws an allow.
+        // Advance-only: absence must never read as "never dismissed" (withdraws an allow).
         if let dismissedAt, dismissedAt > (self.dismissedAt ?? .distantPast) {
             self.dismissedAt = dismissedAt
         }
@@ -534,9 +366,7 @@ extension SuggestionRecord {
             self.restoredAt = restoredAt
         }
 
-        // Fills in for a row written before the column existed, and never
-        // rewrites one that has it — see ``target``, which reads through to
-        // `id` for exactly those rows.
+        // Fills in only for a pre-column row; never overwrites one that has it.
         if let sourcePlaylistID, self.sourcePlaylistID == nil {
             self.sourcePlaylistID = sourcePlaylistID
         }
@@ -545,10 +375,7 @@ extension SuggestionRecord {
 }
 
 extension SuggestionRecord {
-    /// Attaches a resolved song built elsewhere. Internal: the supported way to
-    /// make one is ``addSong(id:displayName:artworkURL:ancestry:at:)``, and the
-    /// caller that needs this is `SyncApply` placing a row that arrived with its
-    /// own identifier.
+    /// Internal: `SyncApply` uses this for a row that arrived with its own id.
     func attach(_ record: SuggestionEntryRecord) {
         entries.append(record)
         record.suggestion = self

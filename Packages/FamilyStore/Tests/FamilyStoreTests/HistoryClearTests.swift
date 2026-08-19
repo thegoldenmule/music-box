@@ -28,8 +28,7 @@ private func store(kids names: [String] = ["Robin"]) throws -> (ModelContext, Fa
     return (context, family, kids)
 }
 
-/// Through `attach`, the way `EventLog` does it — a row inserted and pointed at a
-/// kid without going near the `private(set)` relationship.
+/// Through `attach`, like `EventLog`: bypasses the `private(set)` relationship.
 @MainActor
 private func search(_ kid: Kid, _ term: String, at: Date, in context: ModelContext) {
     let row = SearchEventRecord(
@@ -67,9 +66,7 @@ struct TheArithmetic {
         #expect(HistoryClears.boundary(for: robin, in: rows) == nil)
     }
 
-    /// **The one that would be wrong if it picked by `issuedAt`.** Two parents
-    /// clearing at once produce two rows, and a clock skew of a second must not undo
-    /// a deliberate deletion.
+    /// Picking by `issuedAt` would let clock skew undo a deliberate deletion.
     @Test("The instruction that reaches furthest wins, not the newest one")
     func furthestWins() {
         let kid = UUID()
@@ -97,8 +94,7 @@ struct TheArithmetic {
                 == When.wednesday)
     }
 
-    /// Losing the watermark has to fail toward doing the work again, since applying
-    /// a clear twice deletes nothing the first pass left behind.
+    /// No watermark fails toward redoing work — a clear twice deletes nothing extra.
     @Test("A device with no watermark has everything outstanding")
     func noWatermark() {
         let kid = UUID()
@@ -128,8 +124,7 @@ struct LocalClearRecords {
         #expect(rows.first?.clearedThrough == When.tuesday)
     }
 
-    /// A clear is a statement about the past. One reaching into the future would
-    /// keep deleting a child's listening until somebody noticed.
+    /// A clear is about the past; reaching forward would keep deleting unnoticed.
     @Test("The instruction does not reach past the moment it was issued")
     func doesNotReachForward() throws {
         let (context, _, kids) = try store()
@@ -160,9 +155,7 @@ struct LocalClearRecords {
 
 // MARK: -
 
-/// The situation the record exists for: the instruction travels, the rows never
-/// did. These stand in for two devices — the event tables are in `neverSyncs`, so
-/// a second device's copies were only ever local to it.
+/// Simulates a second device: event tables never sync, only the instruction does.
 @Suite("A device carrying out somebody else's clear")
 @MainActor
 struct ApplyingAnArrival
@@ -187,9 +180,7 @@ struct ApplyingAnArrival
         #expect(left.first?.term == "after")
     }
 
-    /// A clear issued last Tuesday and arriving today must not take a week of
-    /// listening nobody asked about — which is why this is not
-    /// ``Kid/deleteHistory(at:issuedBy:)``.
+    /// A late-arriving clear must not also take a week of listening nobody asked for.
     @Test("A late arrival leaves everything written since alone")
     func lateArrivalIsBounded() throws {
         let (context, _, kids) = try store()
@@ -225,10 +216,7 @@ struct ApplyingAnArrival
         #expect(left.first?.term == "sam's")
     }
 
-    /// **Derived state is not a loophole.** A parent told the logs are gone must not
-    /// find the child's home screen still listing what they were doing — the whole
-    /// reason `RecentTrailRecord` is exempt from the retention sweep and not from
-    /// this.
+    /// Derived state isn't a loophole: a cleared log must also clear the Recent shelf.
     @Test("The Recent shelf goes with the visits it was built from")
     func shelfGoesToo() throws {
         let (context, _, kids) = try store()
@@ -290,8 +278,7 @@ struct ApplyingAnArrival
         #expect(marks.watermark(for: kids[0].id) == When.tuesday)
     }
 
-    /// Order-independence is the property that makes the range form worth having:
-    /// two instructions arriving in either order settle at the same place.
+    /// Order-independence: two instructions settle the same regardless of arrival.
     @Test("Two instructions settle at the furthest, whichever arrives first")
     func arrivalOrderDoesNotMatter() throws {
         for reversed in [false, true] {

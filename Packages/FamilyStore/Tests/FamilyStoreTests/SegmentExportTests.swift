@@ -11,8 +11,7 @@ private enum Fix {
     static let album = CatalogID(.album, "album-A")
     static let artist = CatalogID(.artist, "artist-A")
 
-    /// 2023-11-14T22:13:20Z — deliberately late in the UTC day, so a device east of
-    /// UTC would put it on the 15th and the grouping test means something.
+    /// Late in the UTC day, so a device east of UTC would land it on the 15th.
     static let t0 = Date(timeIntervalSince1970: 1_700_000_000)
     static let nextDay = t0.addingTimeInterval(86_400)
 
@@ -80,9 +79,7 @@ private func addBlock(_ kid: Kid, at: Date, in context: ModelContext) {
 
 @Suite("What a segment payload carries")
 struct ThePayload {
-    /// Every field, because these bytes are read back months later by a build that
-    /// may not have written them, and a field lost in encoding is a field a parent's
-    /// report silently stops showing.
+    /// A field lost in encoding is a field a parent's report silently stops showing.
     @Test("A play round-trips every field, origin included")
     func playRoundTrips() throws {
         let event = PlayEvent(
@@ -101,8 +98,7 @@ struct ThePayload {
         #expect(back.rows.first?.play == event)
     }
 
-    /// `BlockReason` and `PlaybackOrigin` both carry associated values and both route
-    /// through their frozen stored form rather than a synthesised shape.
+    /// Both route through their frozen stored form, not a synthesised shape.
     @Test("A block round-trips its reason and its reach")
     func blockRoundTrips() throws {
         let event = BlockEvent(
@@ -121,9 +117,7 @@ struct ThePayload {
         #expect(back.rows.first?.block == event)
     }
 
-    /// The one field the maintainer decided stays through compaction. It is also the
-    /// most sensitive thing this store holds, so an encoding that quietly dropped it
-    /// would be both a loss and a false reassurance.
+    /// The most sensitive field here — a quiet drop would be a false reassurance.
     @Test("A search keeps its raw term")
     func searchKeepsTheTerm() throws {
         let event = SearchEvent(
@@ -136,8 +130,7 @@ struct ThePayload {
         #expect(back.rows.first?.search?.gaveUpEarly == true)
     }
 
-    /// **The wire is frozen even though the property names are not.** If this breaks,
-    /// somebody renamed a field and every segment already written became unreadable.
+    /// If this breaks, a rename made every segment already written unreadable.
     @Test("The keys on the wire are the frozen short ones")
     func keysAreFrozen() throws {
         let data = try JSONEncoder().encode(
@@ -175,7 +168,7 @@ struct Packing {
         #expect(searches.allSatisfy { $0.exportedAt != nil })
     }
 
-    /// Otherwise every sync pass re-exports a child's whole history.
+    /// Otherwise every sync pass re-exports the child's whole history.
     @Test("Packing twice writes nothing the second time")
     func idempotent() throws {
         let (_, context, kid) = try storeWithKid()
@@ -190,8 +183,7 @@ struct Packing {
         #expect(try context.fetch(FetchDescriptor<ActivitySegmentRecord>()).count == 1)
     }
 
-    /// The day is part of the record key, so two devices in two time zones have to
-    /// agree which day a row belongs to.
+    /// The day is part of the record key, so devices in two zones must agree on it.
     @Test("Two days are two segments, keyed by UTC day")
     func splitsByDay() throws {
         let (_, context, kid) = try storeWithKid()
@@ -208,8 +200,7 @@ struct Packing {
         #expect(days.contains("2023-11-15"))
     }
 
-    /// `index` exists so a day is a sequence rather than one object, which is what
-    /// makes an interrupted export resumable.
+    /// `index` makes a day a resumable sequence rather than one object.
     @Test("A day longer than one segment is indexed in order")
     func chunksAndIndexes() throws {
         let (_, context, kid) = try storeWithKid()
@@ -225,8 +216,7 @@ struct Packing {
         #expect(Set(segments.map(\.index)) == [0, 1])
     }
 
-    /// A device that exported half a day yesterday continues the sequence, so an
-    /// existing segment is never overwritten by one holding different rows.
+    /// Continues the sequence — an existing segment is never overwritten by one.
     @Test("A later export resumes the index rather than restarting it")
     func resumesIndex() throws {
         let (_, context, kid) = try storeWithKid()
@@ -263,14 +253,11 @@ struct Packing {
 
 // MARK: -
 
-/// Two stores standing in for two devices. This is the half that did not exist:
-/// arriving segments were stored and never read, so a co-parent accumulated opaque
-/// blobs and their report was empty.
+/// The half that did not exist: segments arrived and were never read back.
 @Suite("Absorbing another device's segments")
 @MainActor
 struct Absorbing {
-    /// Moves the segment rows across without moving the event rows, which is exactly
-    /// what sync does — the event tables are in `neverSyncs`.
+    /// Moves only segment rows, matching sync — event tables are in `neverSyncs`.
     private func ship(
         from source: ModelContext, to destination: ModelContext, kid: Kid
     ) throws {
@@ -322,8 +309,7 @@ struct Absorbing {
         #expect(block?.event?.reach == .unseen)
     }
 
-    /// The forensic column is worthless if absorbing rewrites it to whoever imported
-    /// the row.
+    /// The forensic column is worthless if absorbing rewrites it to the importer.
     @Test("An absorbed row keeps the device that originally wrote it")
     func keepsOriginatingDevice() throws {
         let (_, kidsDevice, robinThere) = try storeWithKid()
@@ -347,8 +333,7 @@ struct Absorbing {
         #expect(row?.originatingDeviceID == Fix.deviceA)
     }
 
-    /// This runs on every sync pass, so a second pass has to cost nothing — and a
-    /// re-export under a churned device identity has to be harmless.
+    /// Runs every sync pass, so a second pass or a churned device id costs nothing.
     @Test("Absorbing twice inserts nothing the second time")
     func idempotent() throws {
         let (_, kidsDevice, robinThere) = try storeWithKid()
@@ -374,8 +359,7 @@ struct Absorbing {
         #expect(try parents.fetch(FetchDescriptor<SearchEventRecord>()).count == 1)
     }
 
-    /// A device's own segments describe rows it already has. Absorbing them would
-    /// duplicate its history against itself.
+    /// A device's own segments describe rows it already has, so absorbing them dupes.
     @Test("A device does not absorb its own segments")
     func skipsOwn() throws {
         let (_, context, kid) = try storeWithKid()
@@ -389,9 +373,7 @@ struct Absorbing {
         #expect(try context.fetch(FetchDescriptor<SearchEventRecord>()).count == 1)
     }
 
-    /// **Kept and skipped, never dropped.** The device that wrote it still has the
-    /// rows, and a later build here will read it; deleting would lose a child's
-    /// history to a version check.
+    /// Kept, never dropped — a later build reads it; a version check owes it no less.
     @Test("A segment from a newer build is left alone rather than discarded")
     func futureVersionIsKept() throws {
         let (_, context, kid) = try storeWithKid()
@@ -422,9 +404,7 @@ struct Absorbing {
 
 // MARK: -
 
-/// The interlock between the two halves of Stage 7. A clear reaches rows that had
-/// not arrived when it was issued, and a segment written by a device that had not
-/// heard about it yet is exactly that case.
+/// A clear reaches rows not yet arrived — a segment from a device that missed it.
 @Suite("Absorbing does not resurrect cleared history")
 @MainActor
 struct ClearedRowsStayGone {
@@ -439,8 +419,7 @@ struct ClearedRowsStayGone {
         return (context, kid)
     }
 
-    /// Without the boundary check this comes back on the co-parent's phone, which is
-    /// the device nobody is looking at.
+    /// Without the boundary check this resurfaces on the phone nobody is watching.
     @Test("A segment holding rows a clear destroyed is absorbed as nothing")
     func clearedRowsAreSkipped() throws {
         let (_, kidsDevice, robinThere) = try storeWithKid()
@@ -468,7 +447,7 @@ struct ClearedRowsStayGone {
         #expect(try parents.fetch(FetchDescriptor<SearchEventRecord>()).isEmpty)
     }
 
-    /// A clear is bounded, so it must not swallow what came after it.
+    /// A clear is bounded — it must not swallow what came after it.
     @Test("Rows after the boundary still arrive")
     func laterRowsStillArrive() throws {
         let (_, kidsDevice, robinThere) = try storeWithKid()

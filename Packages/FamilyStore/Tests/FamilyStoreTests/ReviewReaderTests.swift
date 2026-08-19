@@ -144,8 +144,7 @@ struct Windows {
         #expect(window.searches.first?.gaveUpEarly == true)
     }
 
-    /// The one field that separates a search result we filtered from a song the
-    /// kid pressed play on. Nothing else stored tells them apart.
+    /// The one stored field distinguishing a filtered result from a played song.
     @Test("A block the kid reached for is distinguishable from one they never saw")
     func reachSurvives() async throws {
         let (container, kidID) = try await storeWithKid()
@@ -162,8 +161,7 @@ struct Windows {
 
     @Test("Nothing is filtered out — a blocked row is still a row")
     func nothingIsFiltered() async throws {
-        // The rule this whole component turns on. A denied artist is exactly
-        // what a parent opened the screen for.
+        // The rule this component turns on — a denied artist is why it exists.
         let (container, kidID) = try await storeWithKid(
             entries: [(.deny, Fix.artist, "A Band")]
         )
@@ -232,8 +230,7 @@ struct Windows {
 
 @Suite("Rows that will not read back")
 struct Unreadable {
-    /// The first exercise the `nil` returns on `PlaybackOrigin` and
-    /// `BlockReason` have ever had.
+    /// The first exercise `nil` on `PlaybackOrigin`/`BlockReason` has ever had.
     @Test("A corrupt origin is counted, not silently dropped")
     func corruptOrigin() async throws {
         let (container, kidID) = try await storeWithKid()
@@ -299,9 +296,7 @@ struct DeniedBy {
         #expect(window.blocks.first?.deniedBy?.kind == .deny)
     }
 
-    /// The common case straight after approve-from-report. The block still
-    /// happened; the rule no longer exists, and nothing re-derives which rule
-    /// *would* catch it now.
+    /// After approve-from-report: the block stands, but no rule re-derives.
     @Test("A removed entry leaves the block with its reason and no rule")
     func removedEntry() async throws {
         let (container, kidID) = try await storeWithKid()
@@ -341,8 +336,7 @@ struct CoverageTests {
         #expect(window.coverage == .complete)
     }
 
-    /// A swept week and a quiet week are different claims and an empty list can
-    /// only make one of them.
+    /// A swept week and a quiet week differ; an empty list can only mean one.
     @Test("A summary inside the window says the detail before it is gone")
     func summarised() async throws {
         let (container, kidID) = try await storeWithKid()

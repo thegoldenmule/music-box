@@ -1,44 +1,9 @@
 import Foundation
 import PolicyEngine
 
-/// The three things worth recording, as values.
-///
-/// These cross an actor boundary on their way to the store — ``EventLog`` runs
-/// off the caller's thread — so they are `Sendable` structs rather than the
-/// `@Model` classes they become. The caller never touches a model object.
-///
-/// Every timestamp is supplied, never taken from a hidden clock. It is device
-/// time either way, which a kid can change, so weekly bucketing is approximate
-/// and a report is not forensic.
-
-/// The kid arrived at something.
-///
-/// One fact covering four kinds: they pressed play on a song, or they opened an
-/// album, an artist, a playlist. It is one event rather than four because the
-/// trail that feeds the Recent shelf has to compare them *to each other* — an
-/// album supersedes its artist, a song supersedes its album — and a comparison
-/// across four tables is four times the work for no extra truth.
-///
-/// **Distinct from ``PlayEvent``, which is written on stop.** Duration is the
-/// signal the parent's report wants, so a play is recorded when it ends and a
-/// mis-tap under five seconds is never recorded at all. Neither of those is what
-/// a Recent shelf means by recent: a kid who presses play wants to see it there
-/// now, not when the song finishes. Started and listened-for-N-seconds are two
-/// facts and both are worth having.
-///
-/// **No `origin`, deliberately** — the one event without one. A visit is
-/// recorded where a container push lands, and `TileCell` pushes a bare
-/// `CatalogItem` through `NavigationLink(value:)`, dropping the origin on the
-/// way. The alternative to a guess is better than the guess: the trail's
-/// *previous entry* is where the kid came from, which is strictly more than
-/// `browse(id)` carries. If something ever genuinely needs the coarse origin,
-/// thread a route value through `TileCell` rather than inventing a column here.
+/// No `origin`: the trail's previous entry says more than a coarse guess would.
 public struct VisitEvent: Hashable, Sendable, Codable {
-    /// **Frozen, and short.** These names are the wire format of an activity
-    /// segment — bytes read back out of a parent's history months later, possibly
-    /// by a build that did not write them — so renaming a property must not change
-    /// them. Short because the four event tables are the great majority of this
-    /// store's write volume. Same rule on all four types below.
+    /// Frozen, short wire names — read back months later by builds that vary.
     enum CodingKeys: String, CodingKey {
         case itemID = "id"
         case displayName = "n"
@@ -58,17 +23,11 @@ public struct VisitEvent: Hashable, Sendable, Codable {
     /// A reference. Artwork bytes are never copied into our storage.
     public let artworkURL: URL?
 
-    /// Lineage, and the whole basis of the walk: a song belongs to an album and
-    /// an artist, an album to an artist. `nil` when it never resolved — and an
-    /// entry with unknown lineage is deliberately **not** treated as anyone's
-    /// descendant, so the container it came from stays on the shelf beside it.
-    /// That fails toward showing more, which on a shelf costs nothing.
+    /// `nil` lineage isn't anyone's descendant — fails toward showing more.
     public let albumID: CatalogID?
     public let artistID: CatalogID?
 
-    /// What the catalog said when they got here. See ``PlayEvent/rating`` —
-    /// same field, same reason: the parent's report re-judges old rows against
-    /// today's policy, and the rating is what decides most of them.
+    /// What the catalog said then; the report re-judges rows against today's policy.
     public let rating: StoredRating
 
     /// Opened, or played. The shelf does not care; a parent does.
@@ -97,8 +56,7 @@ public struct VisitEvent: Hashable, Sendable, Codable {
     }
 }
 
-/// One search, debounced to the term the kid settled on rather than every
-/// keystroke.
+/// One search, debounced to the term the kid settled on, not every keystroke.
 public struct SearchEvent: Hashable, Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case term = "t"
@@ -113,8 +71,7 @@ public struct SearchEvent: Hashable, Sendable, Codable {
     public let resultCount: Int
     public let blockedCount: Int
 
-    /// We stopped looking. **Not** "nothing matched" — a search logged with zero
-    /// results and this set did not find nothing, it gave up.
+    /// Not "nothing matched" — zero results and giving up are different states.
     public let gaveUpEarly: Bool
 
     public init(
@@ -147,25 +104,14 @@ public struct PlayEvent: Hashable, Sendable, Codable {
 
     public let songID: CatalogID
 
-    /// `nil` when lineage never resolved. Such rows count toward totals but
-    /// cannot be grouped by album or artist.
+    /// `nil` unresolved rows still count toward totals, just not by album/artist.
     public let albumID: CatalogID?
     public let artistID: CatalogID?
 
     /// Captured at play time, so a delisted song still reads as a name.
     public let displayName: String
 
-    /// What the catalog said about this song when it played.
-    ///
-    /// Recorded because the parent's report re-judges old rows against today's
-    /// policy, and **the rating is the input that decides most of them.** A row
-    /// without it, handed to a `denyPlusAuto` engine, comes back
-    /// `blocked(.unrated)` for everything — a report claiming a kid can no
-    /// longer play the whole of last week.
-    ///
-    /// A ``StoredRating`` rather than a bare optional so that "the catalog gave
-    /// no rating" stays distinguishable from "nobody wrote it down". `nil` here
-    /// is not `.clean` and is not `.unknown` either.
+    /// Kept so the report can re-judge rows; distinguishes "unrated" from "unknown".
     public let rating: StoredRating
     public let at: Date
     public let secondsPlayed: Int
@@ -192,10 +138,7 @@ public struct PlayEvent: Hashable, Sendable, Codable {
     }
 }
 
-/// One block, including ones filtered out of a search the kid never saw.
-///
-/// Blocks are the valuable half of the log: they are how a parent learns what
-/// their kid is curious about. Kept with their reason, never dropped.
+/// Blocks are the log's valuable half — kept with reason, never dropped.
 public struct BlockEvent: Hashable, Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case itemID = "id"
@@ -214,19 +157,14 @@ public struct BlockEvent: Hashable, Sendable, Codable {
     /// `nil` when lineage never resolved.
     public let artistID: CatalogID?
 
-    /// What the catalog said about this item when it was judged. See
-    /// ``PlayEvent/rating`` — same field, same reason, and here it also lets a
-    /// report say whether a block a parent has since allowed was about a rating
-    /// or about one of their own rules.
+    /// What the catalog said when judged; tells if an allow-since was a rating call.
     public let rating: StoredRating
     public let at: Date
 
-    /// Whether the kid ever saw this. The one field on a block that is about
-    /// them rather than about the item.
+    /// The one block field that is about the kid rather than about the item.
     public let reach: BlockReach
 
-    /// Captured at judgement time, because the policy that produced it may have
-    /// changed by the time anyone reads the report.
+    /// Captured at judgement time — the policy behind it may since have changed.
     public let reason: BlockReason
     public let origin: PlaybackOrigin
 

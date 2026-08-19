@@ -20,8 +20,7 @@ private enum Fix {
     static let t1 = Date(timeIntervalSince1970: 1_700_086_400)
     static let t2 = Date(timeIntervalSince1970: 1_700_172_800)
 
-    /// A song on `album`, by `artist` — the lineage a snapshot entry has to
-    /// carry for the player to be able to queue it.
+    /// A song on `album`, by `artist` — lineage a snapshot entry must carry.
     static let ancestry = LibraryAncestry(
         albumID: album.rawValue,
         albumName: "An Album",
@@ -86,8 +85,7 @@ struct Suggestions {
         kid.addSuggestion(target: .catalog(Fix.album), displayName: "An Album", at: Fix.t0)
         kid.addSuggestion(target: .catalog(Fix.artist), displayName: "An Artist", at: Fix.t1)
 
-        // The album is behind the artist, and suggesting it again — a parent
-        // forgetting they already did — must not push it back in front.
+        // Re-suggesting must not push the album back in front of the artist.
         kid.addSuggestion(target: .catalog(Fix.album), displayName: "An Album", at: Fix.t2)
 
         #expect(kid.liveSuggestions.map(\.displayName) == ["An Artist", "An Album"])
@@ -112,8 +110,7 @@ struct Suggestions {
         )
         kid.addSuggestion(target: .catalog(Fix.artist), displayName: "Second", at: Fix.t1)
 
-        // Making room at the front by shifting every position would stamp every
-        // `modifiedAt` and churn the rows sync most wants quiet.
+        // Shifting every position to make room would churn rows sync wants quiet.
         #expect(first.modifiedAt == Fix.t0)
         #expect(first.position == 0)
     }
@@ -139,8 +136,7 @@ struct Suggestions {
         )
         kid.dismissSuggestion(record, at: Fix.t1)
 
-        // A dismissal withdraws an allow. Losing that to a sync merge would put
-        // the item back in front of the child.
+        // A dismissal withdraws an allow; losing it to a merge exposes the child.
         #expect(record.modifiedAt == Fix.t1)
     }
 
@@ -222,9 +218,7 @@ struct SuggestedPlaylists {
         )
         record.addSong(id: Fix.song, displayName: "One", ancestry: Fix.ancestry, at: Fix.t0)
 
-        // Without this the song reaches `queuedVerdict` with no ancestors, comes
-        // back `.unknown`, and the player refuses to queue it — every track in
-        // the playlist losing its gapless join.
+        // Without lineage the song judges `.unknown` and loses its gapless join.
         let entry = try #require(kid.liveSuggestions.first?.entries.first)
         #expect(entry.ancestry.album == Fix.album)
         #expect(entry.ancestry.artist == Fix.artist)
@@ -250,8 +244,7 @@ struct SuggestedPlaylists {
         )
         record.addSong(id: Fix.song, displayName: "One", ancestry: Fix.ancestry, at: Fix.t0)
 
-        // Nothing in this app puts a playlist into a track's lineage, so an
-        // allow on the playlist identifier alone would open onto blocked rows.
+        // A playlist allow alone wouldn't reach its tracks' own lineage check.
         let row = try #require(kid.liveSuggestions.first)
         #expect(row.catalogID == Fix.catalogPlaylist)
         #expect(row.entries.count == 1)
@@ -279,8 +272,7 @@ struct SuggestionPolicy {
         )
         kid.dismissSuggestion(record, at: Fix.t1)
 
-        // The whole reason dismissal is not just a hidden tile: a kept allow
-        // here would be an invisible one, listed on no screen in the app.
+        // Dismissal must retract the allow too, or it's invisible, not just hidden.
         #expect(kid.buildPolicy().policy.entries.isEmpty)
     }
 
@@ -338,8 +330,7 @@ struct SuggestionPolicy {
     @Test("An unreadable suggestion is dropped, never turned into a deny")
     func unreadableIsDropped() throws {
         let (context, kid) = try newKid()
-        // A row this version cannot make sense of: no identifier, and not the
-        // one kind that is allowed to lack one.
+        // No identifier, and not the one kind allowed to lack one — unreadable.
         let broken = SuggestionRecord(
             rawItemKind: ItemKind.album.rawValue,
             catalogID: nil,
@@ -350,9 +341,7 @@ struct SuggestionPolicy {
         kid.attach(broken, at: Fix.t0)
 
         let build = kid.buildPolicy()
-        // The opposite of what an unreadable *policy* row does, and deliberately
-        // so: a deny wins in every mode, so failing closed here would block
-        // something nobody objected to.
+        // Unlike an unreadable policy row, this fails open: no one asked to block it.
         #expect(build.policy.entries.isEmpty)
         #expect(build.unreadableSuggestionIDs == [broken.id])
         #expect(build.hasUnreadableEntries == false)
@@ -378,8 +367,7 @@ struct SuggestionPolicy {
         kid.attach(broken, at: Fix.t0)
 
         let build = kid.buildPolicy()
-        // The admin resolves `unreadableEntryIDs` against `kid.entries`. A
-        // suggestion's id in there would look up to nothing.
+        // Kept separate: a `kid.entries` lookup would miss a suggestion id.
         #expect(build.unreadableEntryIDs == [brokenEntry.id])
         #expect(build.unreadableSuggestionIDs == [broken.id])
     }
@@ -392,17 +380,12 @@ struct SuggestionPolicy {
             ancestors: [Ancestor(id: Fix.album, rating: .clean)]
         )
 
-        // Level 2: an allow on a *container* does not lift the rating check off
-        // its children. Same rule that stops allowing an artist from permitting
-        // their next explicit release, and a suggestion is not a way around it.
+        // Level 2: a container allow doesn't lift the rating check off children.
         let (_, two) = try newKid(mode: .denyPlusAuto)
         two.addSuggestion(target: .catalog(Fix.album), displayName: "An Album", at: Fix.t0)
         #expect(two.makeEngine().evaluate(track) == .blocked(.explicitContent))
 
-        // Level 1: an allow-listed ancestor is enough and no rating is
-        // consulted. So the most restrictive level permits what the middle one
-        // refuses. Pinned here because the suggest sheet's playable count is
-        // written against it.
+        // Level 1 skips the rating check entirely — pinned for the suggest count.
         let (_, one) = try newKid(mode: .allowOnly)
         one.addSuggestion(target: .catalog(Fix.album), displayName: "An Album", at: Fix.t0)
         #expect(one.makeEngine().evaluate(track) == .allowed)
@@ -453,9 +436,7 @@ struct SuggestionDeletion {
         kid.deleteEverything(at: Fix.t2)
         try context.save()
 
-        // Curation stays, the way the allow list does. And the dismissal stays
-        // with it: clearing that flag would silently widen what the kid reaches,
-        // which a delete must never do.
+        // Dismissal must survive a delete too, or it silently widens what's reachable.
         #expect(kid.suggestions.count == 1)
         #expect(kid.dismissedSuggestions.count == 1)
         #expect(kid.buildPolicy().policy.entries.isEmpty)
@@ -498,8 +479,7 @@ struct SuggestionOrigins {
     @Test("A suggested playlist is not read back as the kid's own")
     func notConfusedWithKidPlaylist() throws {
         let local = UUID()
-        // Both carry a bare UUID in the same column. Only the frozen case name
-        // tells them apart, and the report says different things about each.
+        // Same UUID column; only the frozen case name tells the two origins apart.
         #expect(PlaybackOrigin.suggestedPlaylist(local).stored.name != PlaybackOrigin.kidPlaylist(local).stored.name)
         #expect(PlaybackOrigin(stored: PlaybackOrigin.kidPlaylist(local).stored) == .kidPlaylist(local))
     }
@@ -520,8 +500,7 @@ struct SuggestionOrigins {
             kidPlaylistName: { _ in "The kid's own" },
             suggestionName: { _ in "Road Trip 2019" }
         )
-        // Named from the suggestions table, not the kid's playlists — two
-        // tables, two lookups, and a row in one is not a row in the other.
+        // Named via the suggestions table, not the kid's own — separate lookups.
         #expect(description == .suggestedPlaylist(local, name: "Road Trip 2019"))
     }
 }

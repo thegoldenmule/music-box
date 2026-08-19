@@ -2,17 +2,7 @@ import Foundation
 import PolicyEngine
 import SwiftData
 
-/// One row on a kid's allow or deny list.
-///
-/// Allow and deny share a table with a flag rather than living in two tables:
-/// they have the same shape, the engine reads them together, and splitting them
-/// would mean writing every lookup twice.
-///
-/// `catalogID` is **always** an Apple Music catalog identifier. Library picks
-/// are resolved to their catalog equivalents before they reach here, and
-/// library identifiers are never stored. One namespace is why a deny on an
-/// artist reaches that artist's tracks, and why this record needs no scope
-/// field.
+/// One allow/deny row. `catalogID` is always canonical — never a library id.
 @Model
 public final class PolicyEntryRecord {
     public private(set) var id: UUID = UUID()
@@ -21,16 +11,12 @@ public final class PolicyEntryRecord {
     /// `"allow"` or `"deny"` — `PolicyEntry.Kind.rawValue`.
     public private(set) var kind: String = PolicyEntry.Kind.deny.rawValue
 
-    /// `ItemKind.rawValue`. Part of the identity: MusicKit identifiers are only
-    /// unique within a type, so an album id could otherwise collide with a song
-    /// id and quietly widen a parent's list.
+    /// `ItemKind.rawValue` — ids collide across types without this discriminator.
     public private(set) var itemKind: String = ItemKind.song.rawValue
 
     public private(set) var catalogID: String = ""
 
-    /// Copied at add time and never refreshed. A renamed album keeps the name
-    /// it had, and a delisted one still reads as a name instead of an
-    /// identifier. Freshness traded for the list rendering offline.
+    /// Copied at add time, never refreshed — trades freshness for offline reads.
     public private(set) var displayName: String = ""
 
     /// A reference only. Artwork bytes are never copied into our storage.
@@ -38,54 +24,19 @@ public final class PolicyEntryRecord {
 
     public private(set) var addedAt: Date = Date.distantPast
 
-    /// Which ``GrownUp`` added it — their `attribution`, not their name. `nil`
-    /// when the roster is empty, which is how a household that never names
-    /// anybody works.
+    /// Which ``GrownUp`` added it. `nil` means the roster was empty then.
     public private(set) var addedBy: String?
 
-    /// Their name as it read when this was added, copied for the same reason
-    /// ``displayName`` is: the shelf renders offline, and a grown-up taken off
-    /// the roster still reads as a name.
-    ///
-    /// The one thing that rewrites it is ``Family/renameGrownUp(_:to:at:)`` —
-    /// see there for why this copy is the exception that gets corrected.
+    /// Copied name for offline rendering; only ``renameGrownUp`` may correct it.
     public private(set) var addedByName: String?
 
-    /// Which device this was typed on. `nil` for every row written before the
-    /// column existed, which is the truthful answer rather than a gap.
-    ///
-    /// `addedBy` says which *grown-up* claims it; this says which *machine*
-    /// wrote it, and the two answer different questions. When a deny turns up
-    /// twice, or turns up and then does not, this is the column that makes it
-    /// diagnosable instead of a mystery — and it cannot be recovered later,
-    /// because it exists nowhere else once the row is written.
+    /// Which device wrote it, distinct from `addedBy` — unrecoverable once lost.
     public private(set) var originatingDeviceID: UUID?
 
-    /// When this row was last **asserted**, if it has been re-added since it was
-    /// first created. `.distantPast` on every row that has only ever been added
-    /// once, which is why ``assertion`` reads through to ``addedAt``.
-    ///
-    /// Two columns rather than one mutable `addedAt` because `addedAt` is what
-    /// the admin shows a parent — *"you added this on Tuesday"* — and a re-add
-    /// after a retraction should not rewrite that sentence.
+    /// Re-assert time; keeps ``addedAt``'s "added on Tuesday" sentence stable.
     public private(set) var assertedAt: Date = Date.distantPast
 
-    /// When this row was **withdrawn**, or `nil` while it stands.
-    ///
-    /// **Removal is a retraction, not a delete, and that is the whole
-    /// mechanism.** Two parents editing one list offline produce independent
-    /// field changes on independent rows; nothing is co-written, every device
-    /// computes the same live set from the same timestamps, and there is
-    /// nothing to arbitrate. Last-write-wins over a whole list — the thing the
-    /// spec forbids outright — never comes up, because there is no list-shaped
-    /// value to write.
-    ///
-    /// It is also the only tombstone available. A deleted row leaves nothing to
-    /// enumerate, so a delete can never be exported and a co-parent's device
-    /// keeps the entry forever.
-    ///
-    /// `nil` is the default and the truthful value for every row that predates
-    /// the column: nothing had been retracted, because nothing could be.
+    /// Retraction, not delete — a tombstone exports; a deleted row cannot.
     public private(set) var retractedAt: Date?
 
     public var kid: Kid?
@@ -114,17 +65,13 @@ public final class PolicyEntryRecord {
         self.modifiedAt = at
     }
 
-    /// Corrects the copied name after a rename. See ``Family/renameGrownUp(_:to:at:)``.
+    /// Corrects the copied name; called from ``Family/renameGrownUp(_:to:at:)``.
     func rewriteAddedByName(to newName: String, at: Date = .now) {
         addedByName = newName
         modifiedAt = at
     }
 
-    /// Builds a row straight from stored strings, bypassing the typed enums.
-    ///
-    /// Internal, and the only way to produce a row this version cannot read —
-    /// which is exactly what the fail-closed path in
-    /// ``Kid/buildPolicy()`` has to be tested against.
+    /// Builds from raw strings — the only way to make an unreadable row.
     init(
         id: UUID = UUID(),
         rawKind: String,
@@ -146,10 +93,7 @@ public final class PolicyEntryRecord {
         self.modifiedAt = at
     }
 
-    /// The typed entry, or `nil` if the stored strings do not make one.
-    ///
-    /// See ``Kid/buildPolicy()`` for what happens to a row that lands here —
-    /// the answer is deliberately not "skip it".
+    /// Typed entry, or `nil` if unreadable — see ``Kid/buildPolicy()``.
     public var entry: PolicyEntry? {
         guard
             let kind = PolicyEntry.Kind(rawValue: kind),
@@ -160,32 +104,13 @@ public final class PolicyEntryRecord {
 
     // MARK: - Standing
 
-    /// How far apart two device clocks are assumed to be able to drift.
-    ///
-    /// Inside this window an assert and a retract are **too close to call**.
-    /// Neither device is wrong; they simply do not agree what "after" means, and
-    /// picking the later timestamp is picking whichever device's clock ran fast.
+    /// Assumed clock drift — inside it, no device's timestamp outranks the other.
     public static let clockSkewWindow: TimeInterval = 120
 
-    /// The moment this row was last claimed to stand.
-    ///
-    /// Reads through to ``addedAt`` for a row that has never been re-asserted,
-    /// which is what lets the columns above default to `.distantPast` and `nil`
-    /// and still be right about every row written before they existed.
+    /// Reads through to ``addedAt`` so pre-existing rows default correctly.
     public var assertion: Date { max(assertedAt, addedAt) }
 
-    /// Whether this row is part of the policy right now.
-    ///
-    /// A plain comparison, deliberately. **The skew rule is not here** — it
-    /// belongs where two clocks actually meet, which is the merge, and putting
-    /// it here was a mistake worth recording rather than quietly fixing.
-    ///
-    /// On one device there is one clock and the order of two actions is not in
-    /// doubt: a parent who removes an allow and puts it back a moment later has
-    /// unambiguously done the second thing second. Failing closed on that made
-    /// their own edit appear not to work for two minutes, on the screen they
-    /// were looking at. The ambiguity the window exists for only arises between
-    /// two devices, and ``Merge`` is where those meet.
+    /// Plain comparison — the skew window is ``Merge``'s job, not one device's.
     public var isLive: Bool {
         guard let retractedAt else { return true }
         return assertion > retractedAt
@@ -197,13 +122,7 @@ public final class PolicyEntryRecord {
         modifiedAt = at
     }
 
-    /// Puts a retracted row back.
-    ///
-    /// **Does not clear ``retractedAt``**, deliberately. Both timestamps only
-    /// ever move forward, so the comparison in ``isLive`` decides — and a device
-    /// that has not yet seen the retraction cannot resurrect the row merely by
-    /// having an older copy with no retraction on it. Clearing the column would
-    /// throw away the fact the merge needs.
+    /// Never clears retractedAt — timestamps only advance, or merge loses info.
     public func reassert(at: Date = .now) {
         assertedAt = at
         modifiedAt = at
@@ -211,17 +130,10 @@ public final class PolicyEntryRecord {
 }
 
 // MARK: - Absorbing a record another device wrote
-//
-// Internal, so only this module can call them, and in this file so
-// `private(set)` stays exactly as strict as it was. Each one is **monotonic**:
-// it advances a value or leaves it, and never clears one. That is a second
-// safety net under the merge rather than a duplicate of it — `apply` is supposed
-// to be handed a merged record, but a caller that hands it a raw remote copy
-// still cannot use an *absence* to undo a retraction or a claim.
-//
-// Nothing here stamps the local clock. Every one takes the incoming
-// `modifiedAt`, because stamping now would make an import look like an edit and
-// the next export would send it straight back.
+
+// Monotonic — advances or leaves a value, never clears; a safety net under merge.
+
+// Never stamps the local clock — an import must not read as an edit on export.
 
 extension PolicyEntryRecord {
     func applySync(
@@ -231,13 +143,10 @@ extension PolicyEntryRecord {
         originatingDeviceID: UUID?,
         at: Date
     ) {
-        // Earliest wins, matching the merge rule: a re-add on another device
-        // must not rewrite the sentence the admin shows a parent.
+        // Earliest wins — a re-add elsewhere must not rewrite the shown sentence.
         self.addedAt = min(self.addedAt, addedAt)
 
-        // Advance only. A device that has not seen the retraction carries no
-        // `retractedAt` at all, and that absence must never read as "put it
-        // back" — which is the failure the tombstone exists to prevent.
+        // Advance only; a missing retractedAt must never read as "put it back".
         if let assertedAt, assertedAt > self.assertedAt { self.assertedAt = assertedAt }
         if let retractedAt, retractedAt > (self.retractedAt ?? .distantPast) {
             self.retractedAt = retractedAt

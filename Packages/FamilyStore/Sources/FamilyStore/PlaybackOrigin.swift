@@ -1,11 +1,7 @@
 import Foundation
 import PolicyEngine
 
-/// Where a play or a block came from.
-///
-/// Mirrors the player's `Origin`. It is here rather than in the player because
-/// it is a stored column: what a v1 event does not record about its own origin
-/// is absent from that period forever.
+/// Where a play or block came from; a v1 event omitting it loses it forever.
 public enum PlaybackOrigin: Hashable, Sendable {
     /// The home screen — the allow list in level 1, recents otherwise.
     case home
@@ -16,53 +12,22 @@ public enum PlaybackOrigin: Hashable, Sendable {
     /// Browsing a container: an artist's albums, or an album's tracks.
     case browse(CatalogID)
 
-    /// A catalog playlist. Kept distinct from ``browse(_:)`` because a playlist
-    /// is part of a track's lineage when the track is played from it, and a deny
-    /// on the playlist has to reach it.
+    /// A catalog playlist; unlike `browse`, a deny on it reaches its tracks.
     case playlist(CatalogID)
 
-    /// One of the kid's own playlists, by its local identifier.
-    ///
-    /// A separate case rather than a ``playlist(_:)`` with a made-up identifier
-    /// inside it, because a kid's playlist has no catalog identifier — it did
-    /// not exist until they made it — and every other identifier this store
-    /// keeps is an Apple Music one. Folding a UUID into that namespace would
-    /// break the rule that makes a deny on an artist reach their tracks.
-    ///
-    /// It is also not lineage. A parent cannot deny their kid's own playlist;
-    /// they deny what is in it. So this origin says where a play came from and
-    /// nothing more, which is exactly what the report wants of it.
+    /// Has no catalog ID — the one deliberate exception to that rule.
     case kidPlaylist(UUID)
 
-    /// A tile on the shelf a parent filled.
-    ///
-    /// Distinct from ``home`` because the question it answers is the one the
-    /// whole suggestions feature exists for: *did they listen to what I picked?*
-    /// Folded into `home` — which is where these tiles sit — that question has no
-    /// answer, and it is not one the report can be taught later, because the rows
-    /// from before the column existed would all read as `home`.
+    /// Distinct from `home` so "did they listen to what I picked?" stays answerable.
     case suggestion
 
-    /// A suggested playlist that exists only here, by its local identifier.
-    ///
-    /// The same shape and the same reasoning as ``kidPlaylist(_:)``: a parent's
-    /// own Apple Music playlist has no catalog identifier, and a UUID does not go
-    /// in the catalog namespace. Kept apart from `kidPlaylist` because "a list
-    /// the child made" and "a list an adult handed them" are different answers to
-    /// what a report asks.
+    /// Same UUID exception as `kidPlaylist`, kept apart since child-made differs.
     case suggestedPlaylist(UUID)
 }
 
 // MARK: - Storage form
 
-/// The four columns an origin costs.
-///
-/// The spec's schema named two of them — `origin` and `originTerm` — which
-/// covers ``PlaybackOrigin/home`` and ``PlaybackOrigin/search(term:)`` and
-/// loses the identifier on the other two. `browse` can be an artist *or* an
-/// album, so the kind cannot be inferred from the discriminator either. Both
-/// extra columns are cheap now and impossible to backfill later, so they are
-/// here from v1 even though nothing reads them yet.
+/// Beyond spec: two extra columns for `browse`, cheap now, unbackfillable later.
 struct StoredOrigin: Codable {
     var name: String
     var term: String?
@@ -93,8 +58,7 @@ extension PlaybackOrigin {
         case .playlist(let id):
             StoredOrigin(name: Name.playlist, kind: id.kind.rawValue, id: id.rawValue)
         case .kidPlaylist(let local):
-            // No `kind`: the identifier is ours, not the catalog's, and there is
-            // no `ItemKind` that honestly describes it.
+            // No `kind`: this identifier is ours, not the catalog's — no `ItemKind` fits.
             StoredOrigin(name: Name.kidPlaylist, id: local.uuidString)
         case .suggestion:
             StoredOrigin(name: Name.suggestion)
@@ -104,11 +68,7 @@ extension PlaybackOrigin {
         }
     }
 
-    /// Reads an origin back, or `nil` if the columns do not make one.
-    ///
-    /// Unreadable is `nil` rather than a fallback to `.home`: a report that
-    /// silently claims every orphaned row came from the home screen is worse
-    /// than one that admits it does not know.
+    /// `nil` on unreadable, never `.home` — a false origin beats admitting unknown.
     init?(stored: StoredOrigin) {
         switch stored.name {
         case Name.home:
@@ -137,17 +97,7 @@ extension PlaybackOrigin {
 
 // MARK: - Coding
 
-/// **One wire format, and it is the one the columns already use.**
-///
-/// An origin is now written down in two places: the four event columns, and the
-/// device-local play queue a kid comes back to. Synthesising `Codable` for an
-/// enum with associated values would have given the second one its own shape,
-/// so a case added here would need remembering twice and the two would drift
-/// apart silently. Going through ``StoredOrigin`` means the frozen case names in
-/// ``PlaybackOrigin/Name`` govern both.
-///
-/// Decoding columns that do not make an origin throws rather than falling back
-/// to ``home`` — the same call ``init(stored:)`` makes, for the same reason.
+/// Routes through `StoredOrigin` so a case can't drift from the queue's encoding.
 extension PlaybackOrigin: Codable {
     public func encode(to encoder: any Encoder) throws {
         try stored.encode(to: encoder)

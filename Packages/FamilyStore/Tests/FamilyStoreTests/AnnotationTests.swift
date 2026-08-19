@@ -114,9 +114,7 @@ struct Confidence {
         #expect(annotated.now == .blocked(.notOnAllowList))
     }
 
-    /// The finding that made the `rating` column necessary. Without it every
-    /// play in a level 2 kid's week reads back as blocked, and the report tells
-    /// a parent their child can no longer play anything they listened to.
+    /// The finding that made `rating` necessary — else every play reads blocked.
     @Test("Level 2 with no rating recorded offers no verdict at all")
     func unrecordedRatingIsUnknown() {
         let annotated = ReviewAnnotator.annotate(
@@ -131,8 +129,7 @@ struct Confidence {
 
     @Test("A recorded absence of a rating is a fact, and blocks exactly")
     func recordedUnratedIsExact() {
-        // The catalog answered and had no rating. `UnratedBehavior` decides,
-        // and it will decide the same way tomorrow.
+        // Catalog answered with no rating; `UnratedBehavior` decides, same way tomorrow.
         let annotated = ReviewAnnotator.annotate(
             0,
             knowing: knowledge(rating: nil, ratingIsRecorded: true),

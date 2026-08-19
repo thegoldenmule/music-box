@@ -1,41 +1,16 @@
 import Foundation
 import PolicyEngine
 
-/// What a suggestion points at.
-///
-/// Two shapes rather than an optional identifier, because the difference is not
-/// "some rows are missing a field" — it is two kinds of thing that behave
-/// differently everywhere they are handled, and a total enum makes the compiler
-/// say so at each site.
+/// What a suggestion points at — two kinds so the compiler enforces both.
 public enum SuggestionTarget: Sendable, Hashable {
-    /// An artist, album, song or playlist that exists in the Apple Music
-    /// catalog. The ordinary case.
+    /// The ordinary case: a catalog artist, album, song or playlist.
     case catalog(CatalogID)
 
-    /// A playlist that exists only here, carrying the local identifier that
-    /// names it.
-    ///
-    /// **The second deliberate exception to the one-namespace rule**, after
-    /// ``PlaybackOrigin/kidPlaylist(_:)`` — and a separate case for the same
-    /// reason that one is: a UUID smuggled into ``CatalogID`` would break the
-    /// rule that makes a deny on an artist reach their tracks.
-    ///
-    /// A parent's own Apple Music playlist has no catalog identifier — nobody
-    /// published it — so suggesting one snapshots its tracks by ISRC instead.
-    /// What the kid opens is a list of catalog songs under a name their parent
-    /// chose.
+    /// Unpublished, so no catalog id — a smuggled UUID would break artist-deny reach.
     case snapshotPlaylist(local: UUID)
 }
 
-/// One thing a parent put in front of their kid.
-///
-/// **Not the kid's library, and never merged into it.** A suggestion is the
-/// parent's shelf. It becomes the kid's only if the kid favorites what is on it,
-/// which writes an ordinary ``FavoriteRow`` and leaves this row alone.
-///
-/// `displayName`, `subtitle` and `artworkURL` are copied at write time and never
-/// refreshed, the same trade every other row in this store makes: the shelf
-/// renders offline, and a delisted item still reads as a name.
+/// A parent's shelf, never merged into the kid's library unless favorited.
 public struct SuggestionRow: Sendable, Hashable, Identifiable {
     public let id: UUID
     public let target: SuggestionTarget
@@ -43,61 +18,31 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
     public let subtitle: String?
     public let artworkURL: URL?
 
-    /// When the parent last suggested it. Moves on a re-suggestion, unlike
-    /// ``FavoriteRow/favoritedAt`` — see ``Kid/addSuggestion(target:displayName:subtitle:artworkURL:note:addedBy:at:)``.
+    /// Moves on a re-suggestion, unlike ``FavoriteRow/favoritedAt``.
     public let suggestedAt: Date
 
-    /// Monotonic within a kid, ascending. The shelf sorts on it **descending**,
-    /// so newest is first.
-    ///
-    /// Stored rather than derived from ``suggestedAt`` so that a future
-    /// drag-to-reorder has somewhere to write without a schema change, and
-    /// assigned as one-past-the-highest so that inserting never rewrites the
-    /// rows around it — fifty touched `modifiedAt` stamps per suggestion is
-    /// exactly the sync churn this store is built to avoid.
+    /// Stored, not derived, so a future drag-to-reorder needs no schema change.
     public let position: Int
 
-    /// When the kid passed on it, or `nil` while it is live.
-    ///
-    /// **A dismissed suggestion also stops granting reach** — see
-    /// ``Kid/buildPolicy()``. The row survives so the parent can see it was
-    /// passed on and offer it again; what does not survive is the allow.
+    /// A dismissed suggestion also stops granting reach; the row itself survives.
     public let dismissedAt: Date?
 
-    /// When a parent offered it again, or `nil` if they never have. Compared
-    /// with ``dismissedAt`` by ``isDismissed`` — a restore stamps this rather
-    /// than clearing that, so the merge has both facts to order.
+    /// A restore stamps this, not clearing `dismissedAt`, so merge can order both.
     public let restoredAt: Date?
 
     /// A parent's one line about why. Optional, and shown to the kid.
     public let note: String?
 
-    /// Which grown-up picked it — a ``GrownUp/attribution``, not a name. `nil`
-    /// when the roster is empty. What the home screen groups shelves on.
+    /// A ``GrownUp/attribution``, not a name; what the home screen groups shelves on.
     public let addedBy: String?
 
-    /// Their name as it read at write time. What the kid actually sees — "From
-    /// Dad" — and `nil` falls back to the wording that names nobody.
+    /// Their name as it read at write time — what the kid sees, e.g. "From Dad".
     public let addedByName: String?
 
-    /// The songs this suggestion resolves to, in order. Empty for everything
-    /// that is not a playlist.
-    ///
-    /// **Every playlist suggestion carries these, catalog ones included.** It
-    /// would be tempting to fetch a catalog playlist's tracks on demand and keep
-    /// only its identifier, but nothing in this app puts a playlist into a
-    /// track's lineage: `resolveAncestry` skips playlists deliberately, and no
-    /// caller synthesises the ancestor. So an allow on a playlist identifier
-    /// reaches the playlist and none of its contents, and a kid at level 1 would
-    /// open a suggested playlist onto forty blocked rows. Resolving the tracks
-    /// up front is what makes the tile mean what it looks like.
+    /// Resolved up front: `resolveAncestry` skips playlists, blocking tracks inside.
     public let entries: [PlaylistEntryRow]
 
-    /// **Mirrors ``SuggestionRecord/isDismissed`` and must keep mirroring it.**
-    /// This value type is what every screen reads, so a bare `dismissedAt !=
-    /// nil` here left a re-offered suggestion looking passed-on while the record
-    /// said otherwise — the record and its value form disagreeing about the one
-    /// field that decides whether a child can reach the thing.
+    /// Must mirror ``SuggestionRecord/isDismissed`` — a bare `!= nil` once lied.
     public var isDismissed: Bool {
         guard let dismissedAt else { return false }
         guard let restoredAt else { return true }
@@ -110,8 +55,7 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
         return nil
     }
 
-    /// What kind of thing this is, including for a snapshot — which is always a
-    /// playlist.
+    /// A snapshot is always a playlist.
     public var itemKind: ItemKind {
         switch target {
         case .catalog(let id): id.kind
@@ -151,12 +95,7 @@ public struct SuggestionRow: Sendable, Hashable, Identifiable {
 }
 
 extension SuggestionRow {
-    /// A snapshot playlist's handle, so it can be opened by the same route a
-    /// kid's own playlist is.
-    ///
-    /// `nil` for everything else: an album has no handle, it has an identifier.
-    /// There is never an `appleLibraryID` here — the parent's playlist is theirs,
-    /// and this app has no business writing to it.
+    /// `nil` for a catalog target; never carries `appleLibraryID` — not ours to write.
     public var handle: PlaylistHandle? {
         guard case .snapshotPlaylist(let local) = target else { return nil }
         return PlaylistHandle(local: local)
