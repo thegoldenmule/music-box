@@ -1,5 +1,34 @@
 {
   "checks": {
+    "claude": {
+      "novelty": "changed-file",
+      "tools": {
+        "ts/async/floating-promises": "block",
+        "ts/types/loopholes": {
+          "level": "block",
+          "minSeverity": "warning"
+        },
+        "ts/comments/llm-tells": "warn",
+        "ts/comments/long": "warn",
+        "swift/comments/llm-tells": "warn",
+        "swift/comments/long": "warn"
+      }
+    },
+    "commit": {
+      "novelty": "changed-lines",
+      "tools": {
+        "ts/async/floating-promises": "block",
+        "ts/graph/cycles": "block",
+        "ts/dupes/functions": {
+          "level": "warn",
+          "minSeverity": "warning"
+        },
+        "ts/comments/long": "warn",
+        "ts/comments/llm-tells": "warn",
+        "swift/comments/long": "warn",
+        "swift/comments/llm-tells": "warn"
+      }
+    },
     "push": {
       "novelty": "baseline",
       "tools": {
@@ -16,10 +45,21 @@
           "maxLines": 4,
           "maxChars": 360
         }
+      },
+      "stale-refs": {
+        "ignore": [
+          "MusicItemCollection",
+          "personalMix"
+        ]
       }
     }
   },
   "todo": {
-    "codes": ["comment.long", "comment.llm-tell", "comment.stale-ref", "comment.stale-param"]
+    "codes": [
+      "comment.long",
+      "comment.llm-tell",
+      "comment.stale-ref",
+      "comment.stale-param"
+    ]
   }
 }

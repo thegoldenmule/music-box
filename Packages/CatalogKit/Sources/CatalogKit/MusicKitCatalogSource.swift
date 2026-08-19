@@ -4,24 +4,20 @@ import Foundation
 import MusicKit
 import PolicyEngine
 
-/// The one place in the app that imports MusicKit.
-///
-/// Everything here is mapping: MusicKit types in, ``CatalogItem`` out. Keeping
-/// it mechanical is the point — the interesting behaviour lives in
-/// ``FilteredCatalog``, which is testable without a subscription, a network, or
-/// a device.
+/// The one place in the app that imports MusicKit. Everything here is mapping —
+/// MusicKit types in, ``CatalogItem`` out — and keeping it mechanical is the
+/// point: the interesting behaviour lives in ``FilteredCatalog``, testable
+/// without a subscription, a network, or a device.
 public struct MusicKitCatalogSource: CatalogSource {
     /// Pixel size requested for artwork URLs. Artwork is referenced by URL and
     /// cached like any image; the MusicKit terms do not let us copy it into our
     /// own storage.
     private let artworkSize: Int
 
-    /// Apple Music's hard cap on `limit` for a search request.
-    ///
-    /// Verified on device, the expensive way: asking for 75 returns
-    /// `400 / 40005 Invalid Parameter Value — Value must be an integer less
-    /// than or equal to 25`, and every search failed. Other endpoints allow
-    /// more; search does not.
+    /// Apple Music's hard cap on `limit` for a search request. Verified on
+    /// device, the expensive way: asking for 75 returns `400 / 40005 Invalid
+    /// Parameter Value — must be ≤ 25`, and every search failed. Other
+    /// endpoints allow more; search does not.
     public static let maxSearchLimit = 25
 
     public init(artworkSize: Int = 512) {
@@ -43,11 +39,10 @@ public struct MusicKitCatalogSource: CatalogSource {
         if kinds.contains(.playlist) { types.append(Playlist.self) }
         guard !types.isEmpty else { return .empty }
 
-        // Clamped rather than passed through: a caller asking for more than the
-        // API allows should get a short page, not a failed search. The clamped
-        // value is what `hasMore` is judged against below — comparing against
-        // the *asked-for* limit would read a full 25 as "fewer than 75, so the
-        // catalog is exhausted" and stop paging on the first request.
+        // Clamped rather than passed through: over-asking should get a short
+        // page, not a failed search. `hasMore` below is judged against the
+        // clamped value — against the *asked-for* limit, a full 25 would read
+        // as "fewer than 75, catalog exhausted" and stop paging on page one.
         let effectiveLimit = min(limit, Self.maxSearchLimit)
 
         var request = MusicCatalogSearchRequest(term: term, types: types)
@@ -105,15 +100,10 @@ public struct MusicKitCatalogSource: CatalogSource {
         return try await mapErrors { try await request.response() }.items.first
     }
 
-    /// One request per kind, rather than one per item.
-    ///
-    /// Grouped by kind because `MusicCatalogResourceRequest` is typed: songs,
-    /// albums, artists and playlists cannot travel in one request. Four
-    /// requests for a screen of thirty tiles instead of thirty.
-    ///
-    /// Missing items are dropped rather than reported. An identifier that no
-    /// longer resolves is a delisting, and every caller of this is rendering a
-    /// list where the right answer is simply not to show it.
+    /// One request per kind, not per item — `MusicCatalogResourceRequest` is
+    /// typed, so kinds cannot share one: four calls for thirty tiles. Missing
+    /// items are dropped, not reported: a dead identifier is a delisting, and
+    /// every caller is rendering a list where the right answer is not to show it.
     public func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
         var found: [CatalogID: CatalogItem] = [:]
 
@@ -131,17 +121,10 @@ public struct MusicKitCatalogSource: CatalogSource {
         return ids.compactMap { found[$0] }
     }
 
-    /// One kind, however many identifiers, split to stay under Apple's cap.
-    ///
-    /// Sequential rather than concurrent. The lists this reads are a family's,
-    /// so the count is small — two requests for a long playlist, not twenty —
-    /// and firing them together buys a few hundred milliseconds at the cost of
-    /// being the one call site in the app that can burst the rate limit.
-    ///
-    /// A failed batch fails the whole call, which is deliberate: a partial
-    /// answer would render as a playlist that silently drops its tail, and a
-    /// list that is quietly short is worse than one that is visibly unresolved.
-    /// See ``CatalogFetchLimit``.
+    /// One kind, split to stay under Apple's cap (``CatalogFetchLimit``).
+    /// Sequential: family-sized lists mean two requests, not twenty, and
+    /// concurrency buys milliseconds while risking the rate limit. A failed batch
+    /// fails the whole call — a quietly short playlist is worse than a visible error.
     private func items(ofKind kind: ItemKind, ids: [MusicItemID]) async throws -> [CatalogItem] {
         var found: [CatalogItem] = []
         for batch in CatalogFetchLimit.batches(ids, for: kind) {
@@ -215,14 +198,10 @@ public struct MusicKitCatalogSource: CatalogSource {
 
     // MARK: - Credits
 
-    /// Everyone credited, not just the first one.
-    ///
-    /// The asymmetry with ``ancestry(of:)-(Album)`` is deliberate: that keeps one
-    /// artist because one container is all a deny needs, and this returns the
-    /// whole credit because a record made by two artists names two.
-    ///
-    /// Empty identifiers are dropped for the same reason they are dropped from
-    /// ancestry — a chip that links nowhere is worse than no chip.
+    /// Everyone credited, not just the first: one container is all a deny needs, but
+    /// a record by two artists names two — the ``ancestry(of:)-(Album)`` asymmetry is
+    /// deliberate. Artists and playlists yield nothing (tracks carry their own credits);
+    /// empty identifiers are dropped, as in ancestry — a chip linking nowhere is worse than none.
     public func artists(of id: CatalogID) async throws -> [CatalogItem] {
         let musicID = MusicItemID(id.rawValue)
 
@@ -237,8 +216,6 @@ public struct MusicKitCatalogSource: CatalogSource {
             let detailed = try await mapErrors { try await song.with([.artists]) }
             return (detailed.artists ?? []).map(item(from:)).filter { !$0.id.rawValue.isEmpty }
 
-        // An artist is their own credit, and a playlist's tracks each carry
-        // their own — there is no one answer for the container.
         case .artist, .playlist:
             return []
         }
@@ -248,7 +225,6 @@ public struct MusicKitCatalogSource: CatalogSource {
 
     /// Batched, because search results arrive without relationships and the
     /// policy engine cannot judge a song against a denied artist without one.
-    ///
     /// Only songs and albums need this — artists have no ancestry, and a
     /// playlist's lineage is supplied by whoever is playing it, not fetched.
     public func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {
@@ -265,11 +241,10 @@ public struct MusicKitCatalogSource: CatalogSource {
 
         var ancestryByID: [CatalogID: [Ancestor]] = [:]
 
-        // Split for the same reason ``items(ofKind:ids:)`` is. Chunking only the
-        // lookup would move the failure here rather than fix it: every caller
-        // that resolves a stored list judges it immediately afterwards, and a
-        // song whose lineage never arrived cannot be judged against a denied
-        // artist. See ``CatalogFetchLimit``.
+        // Split for the same reason ``items(ofKind:ids:)`` is — see
+        // ``CatalogFetchLimit``. Chunking only the lookup would move the failure
+        // here rather than fix it: every resolved stored list is judged right
+        // after, and a song with no lineage cannot meet a denied artist.
         for batch in CatalogFetchLimit.batches(songIDs, for: .song) {
             var request = MusicCatalogResourceRequest<Song>(matching: \.id, memberOf: batch)
             request.properties = [.albums, .artists]
@@ -294,17 +269,11 @@ public struct MusicKitCatalogSource: CatalogSource {
         }
     }
 
-    /// An ancestor with an empty identifier is dropped, not stored.
-    ///
-    /// MusicKit will hand back a relationship item whose identifier set is
-    /// empty — it says so in the log: *"A MusicIdentifierSet with empty string
-    /// … is being used"*. Storing that as `CatalogID(.album, "")` is worse than
-    /// storing nothing. It matches no real album, so a parent's deny on that
-    /// album never fires; every such song shares one identifier, so they are
-    /// indistinguishable; and worst of all the item then *looks* like it has
-    /// lineage. The provisional-verdict rule — deny fails open, allow-only
-    /// fails closed — keys off ancestry being empty, and a bogus entry makes a
-    /// guess read as a resolved fact.
+    /// An ancestor with an empty identifier is dropped, not stored — MusicKit
+    /// does hand back relationship items with empty identifier sets.
+    /// `CatalogID(.album, "")` matches no real album, so a deny never fires, and
+    /// the item then *looks* resolved: the provisional-verdict rule — deny fails
+    /// open, allow-only fails closed — keys off ancestry being empty.
     private func ancestry(of song: Song) -> [Ancestor] {
         var ancestors: [Ancestor] = []
         if let album = song.albums?.first, !album.id.rawValue.isEmpty {
@@ -433,9 +402,8 @@ public struct MusicKitCatalogSource: CatalogSource {
 // MARK: - Library seeding
 
 /// Reads the account's library so a parent can seed lists from their own music.
-///
 /// Everything read here is matched to the Apple Music catalog before it goes
-/// anywhere. Nothing library-only is ever stored — see ``LibrarySource`` for why
+/// anywhere; nothing library-only is ever stored — see ``LibrarySource`` for why
 /// that rule exists.
 public struct MusicKitLibrarySource: LibrarySource {
     private let catalog: MusicKitCatalogSource
@@ -497,15 +465,10 @@ public struct MusicKitLibrarySource: LibrarySource {
         return response.items.map(libraryPlaylist(from:))
     }
 
-    /// One playlist's tracks.
-    ///
-    /// Refetched by identifier rather than carried on the value, because
-    /// ``LibraryPlaylist`` crosses into the app and a `MusicItemCollection` is
-    /// not a thing to hand across that boundary.
-    ///
-    /// Music videos are dropped rather than discarded with a reason: there is no
-    /// player surface for one, so it is out of scope rather than unmatchable —
-    /// the same call `children(of:)` makes for a catalog playlist.
+    /// One playlist's tracks, refetched by identifier because ``LibraryPlaylist``
+    /// crosses into the app and a `MusicItemCollection` is not a thing to hand
+    /// across that boundary. Music videos are dropped without a discard reason:
+    /// no player surface exists, so they are out of scope rather than unmatchable.
     public func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryItem] {
         var request = MusicLibraryRequest<Playlist>()
         request.filter(matching: \.id, equalTo: MusicItemID(playlist.id))
@@ -535,14 +498,10 @@ public struct MusicKitLibrarySource: LibrarySource {
         }
     }
 
-    /// Names a library artist in the catalog by resolving a sample of their songs.
-    ///
-    /// The songs are found by searching the library for the artist's name rather
-    /// than by filtering on the relationship. A name search can over-match — a
-    /// band whose name is a common word will pull in songs that are not theirs —
-    /// and that is exactly what the vote is there to absorb: wrong songs have to
-    /// outnumber right ones before they can carry the result, and if they come
-    /// close nobody wins and the parent is told to use catalog search instead.
+    /// Names a library artist in the catalog by voting over a sample of their songs,
+    /// found by *name* search, which can over-match — a common-word band name pulls
+    /// in others' songs. The vote absorbs that: wrong songs must outnumber right
+    /// ones to win, and a near-tie sends the parent to catalog search instead.
     public func resolveArtist(_ artist: LibraryItem) async throws -> ArtistResolution {
         guard artist.kind == .artist else { return .notInAppleMusic }
 
@@ -568,13 +527,10 @@ public struct MusicKitLibrarySource: LibrarySource {
             curatorName: playlist.curatorName,
             trackCount: playlist.tracks?.count,
             artworkURL: artworkURL(playlist.artwork),
-            // A playlist the account holder made carries no `kind` at all;
-            // every case of `Playlist.Kind` names something Apple produced,
-            // `personalMix` included — that one is a mix Apple built *for*
-            // them, which is not the same as one they built. Unverified on
-            // device like the rest of this file, and it decides nothing: both
-            // kinds resolve their tracks the same way, and this only picks the
-            // label the parent reads.
+            // A playlist the account holder made carries no `kind`; every
+            // `Playlist.Kind` case names something Apple produced — `personalMix`
+            // is a mix Apple built *for* them, not by them. Unverified on device,
+            // and it decides nothing: this only picks the label the parent reads.
             isPersonal: playlist.kind == nil
         )
     }
@@ -648,18 +604,10 @@ public struct MusicKitLibrarySource: LibrarySource {
         return LibraryImport(resolved: resolved, discarded: discarded)
     }
 
-    /// Ask the catalog to consider equivalent releases, on OS versions that
-    /// offer it.
-    ///
-    /// A recording code identifies a specific release, and the copy in someone's
-    /// library is often not the copy their storefront carries — a regional
-    /// pressing, a reissue, a different master. Without this those come back
-    /// unmatched and get discarded, which reads to a parent as "Apple Music does
-    /// not have this record" when it plainly does.
-    ///
-    /// Opportunistic on purpose. It arrived in iOS and macOS 26.4, and the
-    /// floor stays at iOS 17 so hand-me-down hardware still runs the app. Older
-    /// systems simply match more strictly.
+    /// Consider equivalent releases, where the OS offers it: the library's copy is
+    /// often not the storefront's release (regional pressing, reissue), and without
+    /// this real records read as "not on Apple Music". Opportunistic — it arrived in
+    /// 26.4, the iOS 17 floor stays; older systems just match more strictly.
     private func findEquivalentsIfAvailable<T>(_ request: inout MusicCatalogResourceRequest<T>) {
         if #available(iOS 26.4, macOS 26.4, tvOS 26.4, watchOS 26.4, visionOS 26.4, *) {
             request.options = [.findEquivalents]
