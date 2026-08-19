@@ -1,15 +1,12 @@
 import Foundation
 
-// Re-exported so callers of this module get `CatalogID`, `ContentRating`,
-// `Verdict` and friends without a second import. This layer's whole job is to
-// speak the policy engine's vocabulary.
+// Re-exported so callers need no second import for `CatalogID`, `ContentRating`,
+// `Verdict` — every type this layer's public API is written in terms of.
 @_exported import PolicyEngine
 
-/// Things that go wrong, in terms the UI can act on.
-///
-/// The point of this type is that several of these are not our bug but will be
-/// reported as our bug. A raw MusicKit error surfaced to a parent is a support
-/// ticket; a named case is a sentence we can write.
+/// Things that go wrong, in terms the UI can act on. Several of these are not
+/// our bug but will be reported as our bug; a raw MusicKit error surfaced to a
+/// parent is a support ticket, a named case is a sentence we can write.
 public enum CatalogError: Error, Sendable, Hashable {
     /// The user has not granted access to Apple Music, or revoked it in Settings.
     case notAuthorized(AuthorizationStatus)
@@ -26,11 +23,9 @@ public enum CatalogError: Error, Sendable, Hashable {
     case offline
 
     /// Playback was refused by something outside this app — Screen Time's music
-    /// restriction, or Apple Music's own parental controls.
-    ///
-    /// Worth its own case because it is confusing on its face: the parent set a
-    /// restriction somewhere else, possibly months ago, and our app is where it
-    /// shows up. Explain it and point at the setting.
+    /// restriction, or Apple Music's parental controls. Its own case because a
+    /// restriction set elsewhere, possibly months ago, surfaces here confusingly;
+    /// explain it and point at the setting rather than reading as our refusal.
     case restrictedOutsideApp
 
     /// The item is gone from the catalog. Allow lists have to survive this.

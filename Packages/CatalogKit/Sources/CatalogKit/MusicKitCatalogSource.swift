@@ -269,11 +269,9 @@ public struct MusicKitCatalogSource: CatalogSource {
         }
     }
 
-    /// An ancestor with an empty identifier is dropped, not stored — MusicKit
-    /// does hand back relationship items with empty identifier sets.
-    /// `CatalogID(.album, "")` matches no real album, so a deny never fires, and
-    /// the item then *looks* resolved: the provisional-verdict rule — deny fails
-    /// open, allow-only fails closed — keys off ancestry being empty.
+    /// An ancestor with an empty identifier is dropped, not stored — MusicKit does hand back relationships with empty
+    /// identifier sets. `CatalogID(.album, "")` matches no real album, so a deny never fires and the item then looks
+    /// resolved: the provisional-verdict rule (deny fails open, allow-only fails closed) keys off ancestry being empty.
     private func ancestry(of song: Song) -> [Ancestor] {
         var ancestors: [Ancestor] = []
         if let album = song.albums?.first, !album.id.rawValue.isEmpty {

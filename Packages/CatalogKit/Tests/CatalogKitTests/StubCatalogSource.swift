@@ -3,12 +3,9 @@ import Foundation
 import CatalogKit
 import PolicyEngine
 
-/// A catalog that returns whatever the test hands it, and records what was
-/// asked for.
-///
-/// The whole reason ``CatalogSource`` is a protocol: the over-fetch loop is the
-/// interesting logic in this package, and it can be exercised with no network,
-/// no subscription and no device.
+/// A catalog that returns whatever the test hands it, and records what was asked for. The
+/// whole reason ``CatalogSource`` is a protocol: the over-fetch loop is the interesting logic
+/// in this package, and it can be exercised with no network, no subscription and no device.
 actor StubCatalogSource: CatalogSource {
     struct SearchCall: Equatable, Sendable {
         let term: String

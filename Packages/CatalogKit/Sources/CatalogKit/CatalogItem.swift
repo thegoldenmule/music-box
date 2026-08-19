@@ -1,30 +1,15 @@
 import Foundation
 import PolicyEngine
 
-/// Alias for `PolicyEngine`'s `ContentRating`.
-///
-/// The MusicKit adapter needs to name this type in the same file where
-/// `MusicKit.ContentRating` is in scope, and cannot qualify it as
-/// `PolicyEngine.ContentRating` — the module name is shadowed by the
-/// `PolicyEngine` struct inside it. Declared here, in a file that does not
-/// import MusicKit, where the bare name is unambiguous.
+/// Alias for `PolicyEngine`'s `ContentRating`. The MusicKit adapter needs this type in
+/// scope in the same file as `MusicKit.ContentRating`, and can't qualify it
+/// `PolicyEngine.ContentRating` — the module name is shadowed by the `PolicyEngine` struct
+/// inside it. Declared here, where no MusicKit import leaves the bare name unambiguous.
 public typealias SandboxContentRating = ContentRating
 
-/// One item as the app displays it, and as the policy engine judges it.
-///
-/// This is the boundary type: everything above this layer works in these, and
-/// nothing above this layer imports MusicKit.
-///
-/// Always an Apple Music catalog item. Library content reaches the app only by
-/// being resolved to its catalog equivalent first — see ``LibrarySource``.
-///
-/// **`Codable` is for device-local caches, never for the store.** Anything that
-/// goes in the CloudKit zone copies the fields it needs by name — that is what
-/// makes a schema change a decision rather than an accident of this type
-/// gaining a property. Encoding the whole item is for state a device may throw
-/// away and rebuild, which today means the persisted play queue: a value that
-/// fails to decode simply means the app opens with nothing loaded, so the shape
-/// stays free to change.
+/// One item as the app displays it and the policy engine judges it — the boundary type: nothing above imports MusicKit.
+/// Always a catalog item; library content arrives only resolved, see ``LibrarySource``. `Codable` is for device-local
+/// caches, not the store: the CloudKit zone copies fields by name so a schema change stays a decision, not an accident.
 public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
     public let id: CatalogID
 
@@ -39,34 +24,25 @@ public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
     /// `nil` means the catalog gave us no rating, not that the item is clean.
     public let rating: ContentRating?
 
-    /// Containers this item sits inside, nearest first.
-    ///
-    /// Often empty straight out of a search: MusicKit does not return
-    /// relationships with search results. ``CatalogSource/resolveAncestry(for:)``
-    /// fills these in as a batch before anything is judged.
+    /// Containers this item sits inside, nearest first. Often empty straight out
+    /// of a search: MusicKit returns no relationships with search results.
+    /// ``CatalogSource/resolveAncestry(for:)`` fills these in as a batch before anything is judged.
     public let ancestors: [Ancestor]
 
-    /// How long a song runs, in seconds.
-    ///
-    /// `nil` for everything that is not a song, and for a song the catalog gave
-    /// no length for. Presentation only — nothing about a policy decision reads
-    /// it.
+    /// How long a song runs, in seconds. `nil` for everything that
+    /// isn't a song, and for a song the catalog gave no length for.
+    /// Presentation only — nothing about a policy decision reads it.
     public let duration: TimeInterval?
 
-    /// Where a song sits on its album, as the catalog numbers it.
-    ///
-    /// Kept rather than derived from position in a list, because the list a kid
-    /// sees has had the policy engine through it: track 4 blocked makes the fifth
-    /// song the fourth row, and a number counted off the rows would quietly
-    /// renumber the record.
+    /// Where a song sits on its album, as the catalog numbers it. Kept, not derived from
+    /// list position: the list a kid sees has had the engine through it — track 4 blocked
+    /// makes song 5 the fourth row, and counting off rows would quietly renumber the record.
     public let trackNumber: Int?
 
-    /// Whether the catalog calls this release a single.
-    ///
-    /// **Three states, not two.** MusicKit's `Album.isSingle` is itself
-    /// optional, so `nil` means "the catalog did not say" and never "no" — the
-    /// same shape as `rating`, and the same trap. ``isSingleRelease`` is what
-    /// decides; nothing should read this directly.
+    /// Whether the catalog calls this release a single. Three states, not two:
+    /// MusicKit's `Album.isSingle` is itself optional, so `nil` means the
+    /// catalog didn't say, never no — the same shape and trap as `rating`.
+    /// ``isSingleRelease`` decides; nothing should read this directly.
     public let isSingle: Bool?
 
     /// How many tracks the catalog says a release has, whatever the kid may
@@ -97,17 +73,9 @@ public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
         self.trackCount = trackCount
     }
 
-    /// Whether to treat this as a single rather than a record.
-    ///
-    /// The catalog's own flag when there is one. When there is not, two tracks or
-    /// fewer stands in for it — a fallback, and one worth naming as such: which
-    /// of the two branches actually decides on a real artist page is
-    /// **unmeasured**, because nothing Apple-facing has run yet. If the flag
-    /// turns out to arrive on every album, the second line is dead code and can
-    /// go; if it never arrives on a relationship fetch, the count is the whole
-    /// rule.
-    ///
-    /// False for anything that is not an album, which carries neither field.
+    /// Whether to treat this as a single rather than a record. The catalog's own flag when there is one; otherwise two
+    /// tracks or fewer stands in — a fallback whose actual role is unmeasured. If the flag always arrives, the fallback is
+    /// dead code; if it never does, the count is the whole rule. False for anything that isn't an album.
     public var isSingleRelease: Bool {
         if let isSingle { return isSingle }
         if let trackCount { return trackCount <= 2 }

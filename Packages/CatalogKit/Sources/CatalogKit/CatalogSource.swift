@@ -18,51 +18,31 @@ public protocol CatalogSource: Sendable {
     /// case an allow list has to survive.
     func item(for id: CatalogID) async throws -> CatalogItem?
 
-    /// Resolve many items at once.
-    ///
-    /// A batch call for the same reason ``resolveAncestry(for:)`` is one: a
-    /// screen built from stored identifiers — recents, a play history, an allow
-    /// list — has a page of them, and one round trip per tile is thirty round
-    /// trips per screen.
-    ///
-    /// Items that no longer exist are simply absent from the result, so the
-    /// caller cannot assume the output lines up with the input by position.
+    /// Resolve many items at once. A batch call for the same reason
+    /// ``resolveAncestry(for:)`` is one: a screen built from stored identifiers has a page
+    /// of them, and one round trip per tile is thirty per screen. Items that no longer exist
+    /// are simply absent, so output can't be assumed to line up with input by position.
     func items(for ids: [CatalogID]) async throws -> [CatalogItem]
 
     /// What is inside a container: an artist's albums, an album's tracks, a
     /// playlist's entries.
     func children(of id: CatalogID) async throws -> [CatalogItem]
 
-    /// An artist's best-known songs, as the catalog ranks them.
-    ///
-    /// Not ``children(of:)``, which for an artist is their albums. A screen that
-    /// shows both wants them apart, and merging them would make "what is inside
-    /// this container" mean two different things depending on who asked.
-    ///
-    /// Empty for anything that is not an artist.
+    /// An artist's best-known songs, as the catalog ranks them. Not
+    /// ``children(of:)``, which for an artist is their albums: a screen showing both
+    /// wants them apart, and merging would make "what is inside this container" mean
+    /// two things depending who asked. Empty for anything that isn't an artist.
     func topSongs(of id: CatalogID) async throws -> [CatalogItem]
 
-    /// Who is credited on an album or a song, as items in their own right.
-    ///
-    /// Distinct from ancestry, and deliberately so. ``resolveAncestry(for:)``
-    /// keeps a single artist because it feeds the policy engine, where one
-    /// container is enough to carry a deny; this is for *showing* the credit, and
-    /// a record made by two artists names two. Nothing judged is decided from
-    /// what comes back here.
-    ///
-    /// Returns items rather than identifiers because a name is the whole point,
-    /// and a name is not something ``Ancestor`` carries.
+    /// Who is credited on an album or song, as items in their own right. Distinct from ancestry: ``resolveAncestry(for:)``
+    /// keeps one artist to feed the engine, where one container carries a deny; this shows the credit, and a record made by
+    /// two names two. Items, not identifiers — a name is the point and ``Ancestor`` carries none.
     func artists(of id: CatalogID) async throws -> [CatalogItem]
 
-    /// Attach ancestry to a batch of items.
-    ///
-    /// This exists as a batch call on purpose. MusicKit does not return
-    /// relationships with search results, and the policy engine cannot judge a
-    /// song against a denied artist without knowing who the artist is — so
-    /// every search result needs its lineage before it can be filtered. Done
-    /// one item at a time that is thirty round trips per page.
-    ///
-    /// Items that already carry ancestry should be returned untouched.
+    /// Attach ancestry to a batch of items. A batch call on purpose: MusicKit returns no
+    /// relationships with search results, and the engine can't judge a song against a denied artist
+    /// without knowing who it is — every result needs lineage first, and one item at a time is
+    /// thirty round trips per page. Items with ancestry return untouched.
     func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem]
 }
 

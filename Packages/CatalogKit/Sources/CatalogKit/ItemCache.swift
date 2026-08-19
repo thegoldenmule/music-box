@@ -1,12 +1,9 @@
 import PolicyEngine
 
-/// Somewhere to keep items we have already fetched.
-///
-/// A protocol rather than a concrete type because the storage question is not
-/// settled: the MusicKit terms restrict what metadata we may persist and for
-/// what purpose, so an on-disk cache needs an answer first. In-memory is the
-/// safe starting point, and this is the seam that lets it change later without
-/// touching anything that reads from it.
+/// Somewhere to keep items already fetched. A protocol, not a concrete type,
+/// because the storage question isn't settled: MusicKit's terms restrict what
+/// metadata we may persist and why, so an on-disk cache needs an answer first.
+/// In-memory is the safe start, and this is the seam that lets it change later.
 public protocol ItemCache: Sendable {
     func item(for id: CatalogID) async -> CatalogItem?
     func store(_ item: CatalogItem) async
@@ -22,11 +19,9 @@ extension ItemCache {
     }
 }
 
-/// Holds items for the life of the session and no longer.
-///
-/// Deliberately forgets everything on launch. That sidesteps the persistence
-/// question entirely while still killing the repeat lookups that make a filtered
-/// search page crawl.
+/// Holds items for the life of the session and no longer. Deliberately forgets
+/// everything on launch — that sidesteps the persistence question entirely while
+/// still killing the repeat lookups that make a filtered search page crawl.
 public actor InMemoryItemCache: ItemCache {
     private var items: [CatalogID: CatalogItem] = [:]
     private let capacity: Int
@@ -59,10 +54,9 @@ public actor InMemoryItemCache: ItemCache {
 }
 
 /// Wraps any source so repeated lookups of the same item hit the cache.
-///
 /// Only `item(for:)` and `resolveAncestry(for:)` are cached — the two that
-/// repeat. Searches are not: the same term can return different results as the
-/// catalog changes, and a stale search page is worse than a slow one.
+/// repeat. Searches are not: the same term can return different results as
+/// the catalog changes, and a stale search page is worse than a slow one.
 public struct CachingCatalogSource: CatalogSource {
     private let wrapped: any CatalogSource
     private let cache: any ItemCache

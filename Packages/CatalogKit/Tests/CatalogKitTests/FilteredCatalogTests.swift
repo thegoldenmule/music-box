@@ -730,12 +730,10 @@ struct CachingTests {
     }
 }
 
-/// The rule an artist's shelf of records is built on.
-///
-/// Worth its own tests because it is the one place in this package that guesses:
-/// the catalog's own flag is optional, and what an absent flag means is a
-/// decision rather than a fact. Whether the fallback ever fires is unmeasured —
-/// see ``CatalogItem/isSingleRelease``.
+/// The rule an artist's shelf of records is built on. Worth its own tests because
+/// it's the one place in this package that guesses: the catalog's own flag is
+/// optional, and what an absent flag means is a decision rather than a fact. Whether
+/// the fallback ever fires is unmeasured — see ``CatalogItem/isSingleRelease``.
 @Suite("Singles and records")
 struct SingleReleaseTests {
     @Test(
