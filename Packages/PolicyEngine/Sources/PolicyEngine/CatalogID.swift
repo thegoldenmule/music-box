@@ -1,7 +1,4 @@
-/// The kind of thing a catalog identifier points at.
-///
-/// These are the four types a parent can put on a list. MusicKit exposes more
-/// (stations, curators, genres); the sandbox does not use them.
+/// The four types a parent can list; MusicKit has more (stations, genres) unused.
 public enum ItemKind: String, Sendable, Codable, Hashable, CaseIterable {
     case artist
     case album
@@ -9,10 +6,7 @@ public enum ItemKind: String, Sendable, Codable, Hashable, CaseIterable {
     case song
 }
 
-/// A reference to one item in the Apple Music catalog. The kind is part of the
-/// identity: MusicKit identifiers are only unique within a type, so matching on
-/// the raw string alone would let an album ID collide with a song ID and
-/// quietly widen a parent's allow list.
+/// Kind is part of identity — MusicKit ids are unique only within a type.
 public struct CatalogID: Hashable, Sendable, Codable {
     public let kind: ItemKind
     public let rawValue: String

@@ -22,9 +22,7 @@ public struct PolicyEntry: Hashable, Sendable, Codable {
     }
 }
 
-/// Everything the engine needs to know about one kid's configuration. Allow
-/// and deny are one list with a flag rather than two: they share a shape and
-/// the engine reads both together, so splitting would mean every lookup twice.
+/// One kid's full config; allow/deny share one list to avoid two lookups.
 public struct Policy: Hashable, Sendable, Codable {
     public let mode: SandboxMode
     public let entries: [PolicyEntry]

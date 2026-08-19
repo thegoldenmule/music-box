@@ -1,7 +1,4 @@
-/// The answer to "can this kid see or play this right now?"
-///
-/// Not a boolean. The reason is what the activity report is made of, and what
-/// the message shown to the kid comes from.
+/// Not a boolean: the reason feeds the activity report and the kid's message.
 public enum Verdict: Hashable, Sendable {
     case allowed
     case blocked(Reason)
@@ -24,14 +21,10 @@ public enum Reason: Hashable, Sendable {
     /// Level 1: the parent never added this, or anything containing it.
     case notOnAllowList
 
-    /// The parent denied this item or one of its containers. Carries whichever
-    /// entry matched, so the report can say *which* deny did it.
+    /// Carries whichever deny entry matched, so the report can say which one.
     case deniedByParent(CatalogID)
 
-    /// Level 2: the catalog marks this explicit. It often carries both an
-    /// explicit and a clean cut of the same song, so callers should look for
-    /// the clean one rather than pretending the song does not exist — a lookup
-    /// that belongs in the catalog layer, not here.
+    /// Often a clean cut exists too — look it up in the catalog, don't hide it.
     case explicitContent
 
     /// Level 2: no rating available, and ``UnratedBehavior`` says to block.

@@ -42,8 +42,8 @@
     "comments": {
       "long": {
         "input": {
-          "maxLines": 4,
-          "maxChars": 360
+          "maxLines": 1,
+          "maxChars": 83
         }
       },
       "stale-refs": {

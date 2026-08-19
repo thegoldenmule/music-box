@@ -1,7 +1,4 @@
-/// Decides what one kid may see or play. Every surface asks this; nothing else
-/// decides, and the player asks again immediately before playback rather than
-/// trusting the UI — shown but then refused is a UI bug, not a safety failure.
-/// Build one per kid and reuse it: the constructor indexes the lists once.
+/// Decides what one kid may see or play; every surface must ask this.
 public struct PolicyEngine: Sendable {
     public let policy: Policy
 
@@ -25,9 +22,7 @@ public struct PolicyEngine: Sendable {
 
     /// Judge one item. Synchronous, no I/O — the caller supplies ancestry.
     public func evaluate(_ item: Item) -> Verdict {
-        // Rule 1. Deny wins, in every mode, and a deny on a container reaches
-        // everything inside it. A parent who denied an artist and separately
-        // allowed one of their songs meant the deny.
+        // Deny wins in every mode; a deny on a container reaches everything inside.
         if let match = firstDenied(item) {
             return .blocked(.deniedByParent(match))
         }
@@ -38,15 +33,11 @@ public struct PolicyEngine: Sendable {
             return .allowed
 
         case .allowOnly:
-            // Rule 3. No rating check here: if a parent hand-picked it, they
-            // meant it, explicit or not.
+            // Level 1: no rating check — a parent hand-pick means it either way.
             return isListedAllowed(item) ? .allowed : .blocked(.notOnAllowList)
 
         case .denyPlusAuto:
-            // Rule 4. An allow on the item *itself* overrides the rating check
-            // — the per-item override. An allow on a container does not, so
-            // "allow this artist" cannot silently permit their next explicit
-            // release.
+            // Level 2: item-level allow overrides rating; container-level allow does not.
             if allowed.contains(item.id) {
                 return .allowed
             }
@@ -72,10 +63,7 @@ public struct PolicyEngine: Sendable {
     }
 
     private func ratingVerdict(for item: Item) -> Verdict {
-        // Artists and playlists are containers and carry no rating — MusicKit's
-        // `Playlist` has no `contentRating` at all. They may appear; what is
-        // inside is judged track by track as it comes up. Without this,
-        // `UnratedBehavior.block` would hide every artist and playlist.
+        // Containers carry no rating; skip them or unratedBehavior hides them all.
         switch item.id.kind {
         case .artist, .playlist:
             return .allowed
@@ -93,8 +81,7 @@ public struct PolicyEngine: Sendable {
             case .allow:
                 return .allowed
             case .block, .inheritFromAncestor:
-                // `inheritFromAncestor` already had its chance in
-                // `effectiveRating` and found nothing. Fall back to blocking.
+                // inheritFromAncestor already tried in effectiveRating and found nothing.
                 return .blocked(.unrated)
             }
         }
