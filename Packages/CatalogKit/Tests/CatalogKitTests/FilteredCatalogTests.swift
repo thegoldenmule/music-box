@@ -72,8 +72,7 @@ struct OverFetchTests {
         let config = FilteredCatalog.Configuration(overFetchMultiplier: 3)
         let sut = FilteredCatalog(source: source, engine: Fix.engine(), configuration: config)
 
-        // Five, not the old twenty-five: the multiplier only has room to work
-        // below Apple Music's cap of 25 per search request.
+        // Five, not twenty-five: multiplier only has room below Apple's 25 cap.
         _ = try await sut.search(term: "x", kinds: [.song], limit: 5)
 
         #expect(await source.searchCalls.first?.limit == 15)
@@ -89,10 +88,7 @@ struct OverFetchTests {
 
         _ = try await sut.search(term: "x", kinds: [.song], limit: limit)
 
-        // Asking for 75 is a 400 from Apple Music, not a large page. Every
-        // search failed outright until the default page ceiling came down to
-        // 25, and nothing in the package caught it — the stub happily served
-        // whatever it was asked for.
+        // Asking 75 was once a real 400; the stub alone wouldn't have caught it.
         let asked = await source.searchCalls.map(\.limit)
         #expect(asked.allSatisfy { $0 <= 25 })
         #expect(!asked.isEmpty)
@@ -101,9 +97,7 @@ struct OverFetchTests {
     @Test("A single request never exceeds the page ceiling")
     func respectsPageCeiling() async throws {
         let source = StubCatalogSource(pages: [Fix.mixedPage(10, hasMore: false)])
-        // A ceiling below the API's own cap, so this exercises the ceiling
-        // rather than implying a page of 50 is something Apple Music would
-        // serve. It would not — see `Configuration.maxPageSize`.
+        // Ceiling below Apple's cap — exercises the ceiling, not a real page size.
         let config = FilteredCatalog.Configuration(overFetchMultiplier: 10, maxPageSize: 20)
         let sut = FilteredCatalog(source: source, engine: Fix.engine(), configuration: config)
 
@@ -145,10 +139,7 @@ struct OverFetchTests {
 
     @Test("An item returned on two pages is judged once and shown once")
     func deduplicatesAcrossPages() async throws {
-        // Search ordering is Apple's relevance ranking and nothing promises it
-        // holds still between two requests at different offsets, so an item can
-        // drift across a page boundary and come back twice. Song 2 is allowed
-        // on both pages here and song 3 is explicit on both.
+        // Relevance order can drift across offsets, so items can repeat pages.
         let source = StubCatalogSource(pages: [
             Fix.page((0..<4).map { Fix.songItem($0, rating: $0 == 3 ? .explicit : .clean) }),
             Fix.page((2..<8).map { Fix.songItem($0) }, hasMore: false),
@@ -157,9 +148,7 @@ struct OverFetchTests {
 
         let results = try await sut.search(term: "x", kinds: [.song], limit: 10)
 
-        // On screen this was a blank the height of a row with its separators
-        // gone, because `ForEach` keys on the identifier and two rows shared
-        // one.
+        // On screen: a blank row-height gap, since `ForEach` keys on the id.
         let ids = results.items.map(\.id)
         #expect(ids == [0, 1, 2, 4, 5, 6, 7].map(Fix.song))
         #expect(ids.count == Set(ids).count)
@@ -231,8 +220,7 @@ struct OverFetchTests {
 
 @Suite("Kinded search")
 struct KindedSearchTests {
-    /// Three kinds, and enough songs to swamp the other two if they shared a
-    /// budget.
+    /// Enough songs to swamp the other two kinds if they shared a budget.
     private func source() -> StubCatalogSource {
         StubCatalogSource(pagesByKind: [
             .artist: [Fix.page((0..<3).map(Fix.artistItem), hasMore: false)],
@@ -247,10 +235,7 @@ struct KindedSearchTests {
 
         let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
 
-        // The bug this exists to catch: one shared limit, plus the adapter
-        // appending songs first, means `prefix(limit)` cuts every album and
-        // artist off the end of a full page of songs. The screen then looks
-        // exactly as if the catalog had no albums to offer.
+        // The bug caught: a shared limit lets `prefix` cut every album/artist off.
         #expect(results.items(of: .artist).count == 3)
         #expect(results.items(of: .album).count == 4)
         #expect(results.items(of: .song).count == 24)
@@ -263,10 +248,7 @@ struct KindedSearchTests {
 
         _ = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
 
-        // The whole reason this is one loop per kind. Apple Music applies
-        // `limit` and `offset` per type, so a mixed request breaks both the
-        // `hasMore` inference and the offset arithmetic — silently, and only
-        // on device.
+        // Why one loop per kind: a mixed request breaks hasMore and offset math.
         let calls = await source.searchCalls
         #expect(calls.allSatisfy { $0.kinds.count == 1 })
         #expect(await source.searchCallCount(for: .artist) == 1)
@@ -281,8 +263,7 @@ struct KindedSearchTests {
 
         _ = try await sut.search(term: "x", budgets: [.artist: 2, .song: 24])
 
-        // Over-fetch is per kind too: 2 × 3 for artists, and songs clamped at
-        // Apple Music's cap of 25.
+        // Over-fetch is per kind: 2×3 for artists, songs clamped at 25.
         let asked = await source.searchCalls
         #expect(asked.first { $0.kinds == [.artist] }?.limit == 6)
         #expect(asked.first { $0.kinds == [.song] }?.limit == 25)
@@ -296,18 +277,14 @@ struct KindedSearchTests {
         let results = try await sut.search(term: "x", budgets: [.song: 10, .album: 0])
 
         #expect(await source.searchCallCount(for: .album) == 0)
-        // Absent, not present-and-empty: never asked for is a different fact
-        // from asked for and found nothing, and a filter control needs both.
+        // Absent differs from present-and-empty; a filter needs both facts.
         #expect(results.results(for: .album) == nil)
         #expect(results.results(for: .song) != nil)
     }
 
     @Test("Artists survive UnratedBehavior.block, which would otherwise hide them all")
     func artistsAreNotBlockedAsUnrated() async throws {
-        // Artists carry no rating in the catalog, so `nil` here is normal
-        // rather than missing data. The engine treats them as containers for
-        // exactly this reason — without that, turning on artist search under
-        // the default unrated behavior would return nothing, every time.
+        // No rating on artists; nil is normal, or unrated blocks them all.
         let sut = FilteredCatalog(source: source(), engine: Fix.engine(unrated: .block))
 
         let results = try await sut.search(term: "x", budgets: [.artist: 6])
@@ -339,8 +316,7 @@ struct KindedSearchTests {
 
         let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
 
-        // Artists, then songs, then albums — the tab order, so the two cannot
-        // disagree about what "first" means.
+        // Artists, songs, albums — tab order, so the two can't disagree.
         #expect(results.items.prefix(3).allSatisfy { $0.id.kind == .artist })
         #expect(results.items.dropFirst(3).prefix(24).allSatisfy { $0.id.kind == .song })
         #expect(results.items.dropFirst(27).allSatisfy { $0.id.kind == .album })
@@ -357,16 +333,13 @@ struct KindedSearchTests {
 
         let results = try await sut.search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
 
-        // A filter that leads to an empty screen is a dead end a kid has no way
-        // to interpret, so the control is built from this rather than from what
-        // was asked for.
+        // Built from what came back, not what was asked, so no filter dead-ends.
         #expect(results.populatedKinds == [.artist, .song])
     }
 
     @Test("One kind giving up is reported, and does not read as the end")
     func gaveUpEarlyWinsOverReachedEnd() async throws {
-        // Songs are entirely explicit and the source always claims more, so
-        // that loop burns its retries; artists run out honestly on page one.
+        // Songs stay explicit, burning retries; artists finish on page one.
         let explicit = (0..<20).map { page in
             Fix.page((0..<4).map { Fix.songItem(page * 4 + $0, rating: .explicit) }, hasMore: true)
         }
@@ -378,8 +351,7 @@ struct KindedSearchTests {
 
         let results = try await sut.search(term: "x", budgets: [.song: 10, .artist: 6])
 
-        // Asymmetric on purpose: "we stopped looking" has to survive the merge,
-        // because losing it turns a partial answer into a confident empty one.
+        // "Stopped looking" must survive merging, or a partial reads as empty.
         #expect(results.gaveUpEarly)
         #expect(!results.reachedEnd)
         #expect(results.results(for: .artist)?.reachedEnd == true)
@@ -443,9 +415,7 @@ struct IncrementalSearchTests {
 
         let all = try await snapshots(sut)
 
-        // Completion order is a race, so what is asserted is the shape rather
-        // than which kind won: nothing is ever lost between snapshots, and a
-        // caller can replace its state with each one instead of accumulating.
+        // Asserts shape, not race order — nothing lost, state fully replaced.
         var arrived = 0
         var outstanding = 3
         for snapshot in all {
@@ -468,8 +438,7 @@ struct IncrementalSearchTests {
 
         let all = try await snapshots(sut, budgets: [.artist: 6, .song: 24])
 
-        // Both read as "no items", and the screen has to tell them apart to
-        // choose between a spinner and "nothing matched".
+        // Both read as "no items" — the screen must tell spinner from "no match".
         #expect(all.first?.isPending(.artist) == true)
         #expect(all.last?.isPending(.artist) == false)
         #expect(all.last?.items(of: .artist).isEmpty == true)
@@ -484,8 +453,7 @@ struct IncrementalSearchTests {
         let awaited = try await FilteredCatalog(source: source(), engine: Fix.engine())
             .search(term: "x", budgets: [.artist: 6, .album: 6, .song: 24])
 
-        // One is implemented in terms of the other, and this is the test that
-        // notices if that stops being true.
+        // One is built on the other; this test catches if that stops being true.
         #expect(awaited.items.map(\.id) == streamed?.items.map(\.id))
         #expect(awaited.isComplete)
         #expect(awaited.pending.isEmpty)
@@ -535,9 +503,7 @@ struct ChildrenTests {
         #expect(results.blocked.count == 2)
     }
 
-    /// Ancestry is resolved before judging here too. A kid on an artist's own
-    /// page is the one place a deny on that artist most obviously has to bite,
-    /// and their top songs arrive from the catalog with no lineage attached.
+    /// Resolved before judging: top songs arrive from the catalog with no lineage.
     @Test("A deny on the artist reaches their top songs")
     func topSongsRespectArtistDeny() async throws {
         let source = StubCatalogSource(
@@ -567,10 +533,7 @@ struct ChildrenTests {
         #expect(credits.map(\.title) == ["Artist 1", "Artist 2"])
     }
 
-    /// The case ancestry cannot cover: a record keeps only its *first* artist as
-    /// an ancestor, so a collaboration stays reachable while the second name on
-    /// it is denied. Filtering the credits is what stops that name being a link
-    /// into everything they have ever made.
+    /// Ancestry keeps only the first artist; credits catch a denied co-credit too.
     @Test("A denied co-credit is dropped, and the record itself stays reachable")
     func deniedCreditIsDropped() async throws {
         let denied = CatalogID(.artist, "artist-2")
@@ -584,9 +547,7 @@ struct ChildrenTests {
         #expect(credits.map(\.title) == ["Artist 1"])
     }
 
-    /// Level 1 is the harder half of the same rule. Nothing is denied here — the
-    /// artist simply is not on the allow list, and a link to them would open onto
-    /// a page with nothing on it.
+    /// Level 1's harder half: unlisted, not denied — its link opens onto nothing.
     @Test("Level 1 offers only credits the parent put on the list")
     func allowOnlyKeepsListedCredits() async throws {
         let listed = CatalogID(.artist, "artist-1")
@@ -647,9 +608,7 @@ struct CachingTests {
         ])
         let sut = CachingCatalogSource(wrapping: source, cache: InMemoryItemCache())
 
-        // Warm one in the middle, so serving from the cache and fetching the
-        // rest would reshuffle if the order were not restored afterwards. A
-        // recents screen is in time order and that order is the content.
+        // Warms the middle id; order must survive a cache-plus-fetch mix.
         _ = try await sut.item(for: Fix.song(1))
 
         let ids = [Fix.song(2), Fix.song(1), Fix.song(0)]
@@ -671,9 +630,7 @@ struct CachingTests {
 
         _ = try await sut.items(for: [Fix.song(0), Fix.song(1)])
 
-        // The stub has no batch of its own, so it falls back to one call per
-        // item — which is exactly what makes the count readable here. One more
-        // call, for the one that was missing.
+        // Stub has no batch, one call per item — one more, for the missing one.
         #expect(await source.itemCallCount == before + 1)
     }
 
@@ -684,8 +641,7 @@ struct CachingTests {
 
         let items = try await sut.items(for: [Fix.song(0), Fix.song(99)])
 
-        // Delisted items are absent rather than reported: every caller of this
-        // is rendering a list, where the right answer is not to show it.
+        // Delisted items are absent, not reported — callers here render a list.
         #expect(items.map(\.id) == [Fix.song(0)])
     }
 
@@ -730,10 +686,7 @@ struct CachingTests {
     }
 }
 
-/// The rule an artist's shelf of records is built on. Worth its own tests because
-/// it's the one place in this package that guesses: the catalog's own flag is
-/// optional, and what an absent flag means is a decision rather than a fact. Whether
-/// the fallback ever fires is unmeasured — see ``CatalogItem/isSingleRelease``.
+/// The one place this package guesses what an absent flag means, not a fact.
 @Suite("Singles and records")
 struct SingleReleaseTests {
     @Test(
@@ -741,8 +694,7 @@ struct SingleReleaseTests {
         arguments: [
             (true, 1, true),
             (true, 12, true),
-            // A flagged single with a record's worth of tracks is still a
-            // single. The flag wins outright rather than being second-guessed.
+            // A flagged single wins outright, even with many tracks.
             (false, 1, false),
             (false, 12, false),
         ]
@@ -761,9 +713,7 @@ struct SingleReleaseTests {
         #expect(album.isSingleRelease == expected)
     }
 
-    /// Neither field, so nothing to go on — and the shelf shows it. Failing this
-    /// way round is deliberate: a single that slips onto the shelf is untidy,
-    /// where a record wrongly hidden is unreachable.
+    /// Fails toward showing: a stray single is untidy; a hidden record is worse.
     @Test("Knowing nothing means it is a record")
     func unknownIsARecord() {
         #expect(!Fix.albumItem(1).isSingleRelease)

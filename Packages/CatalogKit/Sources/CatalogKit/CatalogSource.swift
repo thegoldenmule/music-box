@@ -1,12 +1,8 @@
 import PolicyEngine
 
-/// Where catalog data comes from.
-///
-/// One protocol so the app can run against MusicKit in production and against a
-/// stub in tests. Nothing above this layer knows which it is talking to.
+/// One protocol for MusicKit or a test stub; nothing above knows which.
 public protocol CatalogSource: Sendable {
-    /// One page of raw, unfiltered results. Filtering is the caller's job —
-    /// see ``FilteredCatalog``.
+    /// Raw, unfiltered — filtering is the caller's job, see ``FilteredCatalog``.
     func search(
         term: String,
         kinds: Set<ItemKind>,
@@ -14,41 +10,27 @@ public protocol CatalogSource: Sendable {
         offset: Int
     ) async throws -> CatalogPage
 
-    /// Resolve one item. Returns `nil` when it no longer exists, which is the
-    /// case an allow list has to survive.
+    /// Nil when the item no longer exists — a case an allow list must survive.
     func item(for id: CatalogID) async throws -> CatalogItem?
 
-    /// Resolve many items at once. A batch call for the same reason
-    /// ``resolveAncestry(for:)`` is one: a screen built from stored identifiers has a page
-    /// of them, and one round trip per tile is thirty per screen. Items that no longer exist
-    /// are simply absent, so output can't be assumed to line up with input by position.
+    /// Batched like ``resolveAncestry(for:)``; missing ids are absent, unordered.
     func items(for ids: [CatalogID]) async throws -> [CatalogItem]
 
-    /// What is inside a container: an artist's albums, an album's tracks, a
-    /// playlist's entries.
+    /// What a container holds: albums, tracks, or a playlist's songs, per kind.
     func children(of id: CatalogID) async throws -> [CatalogItem]
 
-    /// An artist's best-known songs, as the catalog ranks them. Not
-    /// ``children(of:)``, which for an artist is their albums: a screen showing both
-    /// wants them apart, and merging would make "what is inside this container" mean
-    /// two things depending who asked. Empty for anything that isn't an artist.
+    /// Ranked top songs, not ``children(of:)`` — an artist's albums, kept apart.
     func topSongs(of id: CatalogID) async throws -> [CatalogItem]
 
-    /// Who is credited on an album or song, as items in their own right. Distinct from ancestry: ``resolveAncestry(for:)``
-    /// keeps one artist to feed the engine, where one container carries a deny; this shows the credit, and a record made by
-    /// two names two. Items, not identifiers — a name is the point and ``Ancestor`` carries none.
+    /// Every credited artist as items — ancestry keeps only one, for the engine.
     func artists(of id: CatalogID) async throws -> [CatalogItem]
 
-    /// Attach ancestry to a batch of items. A batch call on purpose: MusicKit returns no
-    /// relationships with search results, and the engine can't judge a song against a denied artist
-    /// without knowing who it is — every result needs lineage first, and one item at a time is
-    /// thirty round trips per page. Items with ancestry return untouched.
+    /// Batched: search returns no relationships, but the engine needs lineage.
     func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem]
 }
 
 extension CatalogSource {
-    /// One at a time, for sources with nothing better. Correct but slow, which
-    /// is why every real source overrides it.
+    /// Correct but slow, one at a time — every real source overrides this.
     public func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
         var items: [CatalogItem] = []
         for id in ids {
@@ -62,36 +44,28 @@ extension CatalogSource {
         items
     }
 
-    /// No top songs, for sources with no notion of ranking. A screen that gets
-    /// nothing back simply has no songs section.
+    /// Empty for sources with no ranking — the screen omits the songs section.
     public func topSongs(of id: CatalogID) async throws -> [CatalogItem] {
         []
     }
 
-    /// No credits, for sources that cannot supply them. A screen that gets
-    /// nothing back falls back to the artist name it already has, which is the
-    /// same thing minus the link.
+    /// Empty here falls back to the artist name already on hand, minus the link.
     public func artists(of id: CatalogID) async throws -> [CatalogItem] {
         []
     }
 }
 
-/// Authorization and subscription state.
-///
-/// Split from ``CatalogSource`` because it is asked once at launch and then
-/// observed, rather than being part of every read.
+/// Split from ``CatalogSource``: asked once at launch, then just observed.
 public protocol CatalogAccess: Sendable {
     /// Prompt for access to Apple Music. Safe to call when already granted.
     func requestAuthorization() async -> AuthorizationStatus
 
     var authorizationStatus: AuthorizationStatus { get }
 
-    /// Whether the signed-in account can actually play catalog content right
-    /// now. Ask before promising anything, not at play time.
+    /// Ask before promising anything, not at play time.
     func subscriptionState() async throws -> SubscriptionState
 
-    /// Subscription changes over the life of the session — a plan lapsing
-    /// mid-session is a real case.
+    /// Tracks a plan lapsing mid-session, a real case this needs to catch.
     var subscriptionUpdates: AsyncStream<SubscriptionState> { get }
 }
 
@@ -106,12 +80,10 @@ public struct SubscriptionState: Sendable, Hashable {
     /// The account can play catalog content.
     public let canPlayCatalogContent: Bool
 
-    /// We may offer a subscription. Only meaningful behind a parental gate —
-    /// nothing about buying anything belongs on the kid's side of the app.
+    /// Offer a subscription — only behind a parental gate, never the kid's side.
     public let canBecomeSubscriber: Bool
 
-    /// iCloud Music Library is on. When false, library reads return nothing,
-    /// and that needs saying rather than showing an empty list.
+    /// False means library reads return nothing; say so, don't show an empty list.
     public let hasCloudLibraryEnabled: Bool
 
     public init(

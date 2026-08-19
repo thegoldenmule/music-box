@@ -3,9 +3,7 @@ import Foundation
 import CatalogKit
 import PolicyEngine
 
-/// A catalog that returns whatever the test hands it, and records what was asked for. The
-/// whole reason ``CatalogSource`` is a protocol: the over-fetch loop is the interesting logic
-/// in this package, and it can be exercised with no network, no subscription and no device.
+/// Returns what tests hand it, records requests — why CatalogSource is a protocol.
 actor StubCatalogSource: CatalogSource {
     struct SearchCall: Equatable, Sendable {
         let term: String
@@ -27,10 +25,7 @@ actor StubCatalogSource: CatalogSource {
     private(set) var ancestryResolvedCount = 0
     private(set) var itemCallCount = 0
 
-    /// - Parameter pagesByKind: a separate queue per kind, for the kinded search
-    ///   — which runs one loop per kind, concurrently. Three loops drawing from
-    ///   the single `pages` queue makes which loop gets which page a race, so a
-    ///   test written that way passes or fails on scheduling.
+    /// - Parameter pagesByKind: separate queues; a shared `pages` races per kind.
     init(
         pages: [CatalogPage] = [],
         pagesByKind: [ItemKind: [CatalogPage]] = [:],
@@ -68,8 +63,7 @@ actor StubCatalogSource: CatalogSource {
         return pages.removeFirst()
     }
 
-    /// How many requests this kind's loop made. `searchCalls` is in completion
-    /// order across concurrent loops, so counting it by hand is a race.
+    /// Counts by kind — searchCalls' completion order makes hand-counting a race.
     func searchCallCount(for kind: ItemKind) -> Int {
         searchCalls.filter { $0.kinds == [kind] }.count
     }
@@ -101,10 +95,7 @@ actor StubCatalogSource: CatalogSource {
     }
 }
 
-/// A library that resolves whatever the test says resolves.
-///
-/// Models the one rule that matters: an item with no catalog match is discarded,
-/// never stored.
+/// Resolves what the test says; the one rule that matters: no match, discarded.
 actor StubLibrarySource: LibrarySource {
     private var library: [LibraryItem]
     private var catalogMatches: [String: CatalogItem]
@@ -113,8 +104,7 @@ actor StubLibrarySource: LibrarySource {
 
     private(set) var resolveCallCount = 0
 
-    /// - Parameter catalogMatches: keyed by ISRC or UPC. Anything absent is
-    ///   treated as not being on Apple Music.
+    /// - Parameter catalogMatches: keyed by ISRC/UPC; absent means not on Apple.
     init(
         library: [LibraryItem] = [],
         catalogMatches: [String: CatalogItem] = [:],
@@ -139,8 +129,7 @@ actor StubLibrarySource: LibrarySource {
         Array(library.filter { $0.kind == .artist }.prefix(limit))
     }
 
-    /// The real one's shape without MusicKit: sample the artist's songs by name,
-    /// resolve them, and let ``ArtistVote`` decide.
+    /// The real shape without MusicKit: sample songs, let ArtistVote decide.
     func resolveArtist(_ artist: LibraryItem) async throws -> ArtistResolution {
         guard artist.kind == .artist else { return .notInAppleMusic }
         let songs = try await searchLibrary(
@@ -231,8 +220,7 @@ enum Fix {
         )
     }
 
-    /// An artist carries no rating and no lineage — the catalog has neither for
-    /// them. That is the whole reason the engine treats them as containers.
+    /// No rating, no lineage — why the engine treats artists as containers.
     static func artistItem(_ n: Int) -> CatalogItem {
         CatalogItem(id: CatalogID(.artist, "artist-\(n)"), title: "Artist \(n)", rating: nil)
     }

@@ -1,8 +1,6 @@
 import PolicyEngine
 
-/// An item the policy engine turned down, kept rather than dropped: blocks are the most useful
-/// line in a parent's report, how they learn what their kid is curious about. The reports
-/// screen turns these into one-tap "allow" buttons, so discarding them here costs the feature.
+/// Kept, not dropped: parent reports turn blocks into one-tap allow buttons.
 public struct BlockedItem: Sendable, Hashable {
     public let item: CatalogItem
     public let reason: Reason
@@ -21,17 +19,13 @@ public struct FilteredResults: Sendable, Hashable {
     /// What was filtered out along the way, for the activity log.
     public let blocked: [BlockedItem]
 
-    /// The source ran out of results. An empty page here genuinely means
-    /// "nothing matches", and paging further is pointless.
+    /// Source exhausted: an empty page means no matches, not merely a pause.
     public let reachedEnd: Bool
 
-    /// We hit the retry cap while still short of the limit. Distinct from
-    /// ``reachedEnd``: this means we stopped looking, not that nothing is there.
-    /// The UI should offer to keep going rather than claim an empty result.
+    /// Hit retry cap below limit; unlike reachedEnd, offer more, not empty.
     public let gaveUpEarly: Bool
 
-    /// How many requests the source was asked for. Useful when tuning the
-    /// over-fetch multiplier against real searches.
+    /// Requests made, for tuning ``overFetchMultiplier`` against real searches.
     public let requestCount: Int
 
     public init(
@@ -49,26 +43,15 @@ public struct FilteredResults: Sendable, Hashable {
     }
 }
 
-/// One search, kinds kept apart, for two reasons. Visible: results append songs then albums then
-/// artists under one shared limit, so `prefix(limit)` cuts albums/artists off. Device-only:
-/// Apple applies `limit`/`offset` per type, so a three-type request for 25 returns up to 75 —
-/// read as one page it miscounts `hasMore` and skips catalog next time.
+/// Kinds separate: Apple pages limit/offset per type, breaking hasMore if merged.
 public struct KindedResults: Sendable, Hashable {
-    /// Results for each kind whose loop has finished. Three states, not two: absent
-    /// from both this and ``pending`` means never asked for; in ``pending`` means
-    /// still on its way; here with no items means asked for and matched nothing.
+    /// Per kind: absent = never asked, `pending` = in flight, empty = no match.
     public let byKind: [ItemKind: FilteredResults]
 
-    /// Kinds that were asked for and have not come back yet.
-    ///
-    /// Non-empty only on a snapshot from ``FilteredCatalog/searchIncrementally(term:budgets:)``.
-    /// The awaited search never returns one of these.
+    /// Kinds still in flight; empty once the search (not a snapshot) returns.
     public let pending: Set<ItemKind>
 
-    /// The order the kid's filter offers kinds in. Artists first: the kind a
-    /// search is most often for, and cheapest — no rating means nothing filtered
-    /// and no paging, so it's reliably first on screen. Songs before albums: a
-    /// kid looking for a song outnumbers one looking for the record it came off.
+    /// Order: artists first (cheap, unrated), songs before albums by frequency.
     public static let displayOrder: [ItemKind] = [.artist, .song, .album, .playlist]
 
     public init(byKind: [ItemKind: FilteredResults], pending: Set<ItemKind> = []) {
@@ -80,9 +63,7 @@ public struct KindedResults: Sendable, Hashable {
 
     public func items(of kind: ItemKind) -> [CatalogItem] { byKind[kind]?.items ?? [] }
 
-    /// Whether this kind is still being fetched. Distinct from having come back
-    /// empty, which is what makes a spinner and "nothing matched" different
-    /// screens instead of the same guess.
+    /// Distinct from empty: keeps a spinner from reading as "no matches".
     public func isPending(_ kind: ItemKind) -> Bool { pending.contains(kind) }
 
     /// Every kind has reported in.
@@ -93,57 +74,42 @@ public struct KindedResults: Sendable, Hashable {
         Self.displayOrder.filter { !items(of: $0).isEmpty }
     }
 
-    /// Everything allowed, in ``displayOrder``. Order *within* a kind is the
-    /// source's — search relevance is the ordering, and nothing reshuffles it.
+    /// Allowed items in ``displayOrder``; within a kind, source order stands.
     public var items: [CatalogItem] {
         Self.displayOrder.flatMap { items(of: $0) }
     }
 
-    /// Every block from every kind, kept whole. The activity report is built
-    /// from these, including results the kid never saw.
+    /// Every block, kept whole — the activity report includes results never shown.
     public var blocked: [BlockedItem] {
         Self.displayOrder.flatMap { byKind[$0]?.blocked ?? [] }
     }
 
-    /// Requests across every kind, so the number still means "what this search
-    /// cost" now that a search is several loops.
+    /// Summed across kinds, so it still means "what this search cost".
     public var requestCount: Int {
         byKind.values.reduce(0) { $0 + $1.requestCount }
     }
 
-    /// True when any kind stopped looking before it filled. Pessimistic and
-    /// asymmetric with ``reachedEnd`` on purpose: "we stopped looking" must survive
-    /// merging, since losing it turns a partial answer into a confident empty one.
+    /// True if any kind gave up; must survive merging or a partial reads as empty.
     public var gaveUpEarly: Bool {
         byKind.values.contains { $0.gaveUpEarly }
     }
 
-    /// True only when **every** kind ran out. Anything less and there is more to
-    /// be had somewhere.
+    /// True only once every kind has run out — otherwise more exists somewhere.
     public var reachedEnd: Bool {
         !byKind.isEmpty && byKind.values.allSatisfy(\.reachedEnd)
     }
 }
 
-/// A catalog source with a kid's policy applied to everything it returns. MusicKit
-/// search takes a term, types, limit and offset, with no way to ask for clean results
-/// only — filtering happens here after the fact, leaving holes in a page (ask for 25,
-/// get 12). This compensates by over-asking and paging until the page is full.
+/// MusicKit can't filter server-side; this over-fetches and pages to fill holes.
 public struct FilteredCatalog: Sendable {
     public struct Configuration: Sendable, Hashable {
-        /// How much more to ask for than we need. Wants measuring against real
-        /// searches once we know how common explicit and unrated results are.
+        /// Over-fetch factor; unmeasured pending explicit/unrated frequency data.
         public var overFetchMultiplier: Int
 
-        /// Extra pages after the first before giving up, so a search with no
-        /// clean results anywhere returns an honest empty state instead of
-        /// spinning. One initial request plus this many retries.
+        /// Retries past first page so a truly empty search ends, not spins.
         public var maxRetries: Int
 
-        /// Upper bound on a single request. 25 is Apple Music's hard cap on search, not
-        /// a preference — asking for more is a 400. Verified on device: the default used
-        /// to be 100 and every search failed outright. Over-fetching past 25 happens by
-        /// paging (``maxRetries``); ``overFetchMultiplier`` earns its keep below that.
+        /// 25 is Apple's search cap — over 25 was a device-verified 400.
         public var maxPageSize: Int
 
         public init(
@@ -190,10 +156,7 @@ public struct FilteredCatalog: Sendable {
 
         var allowed: [CatalogItem] = []
         var blocked: [BlockedItem] = []
-        /// Every identifier already judged this search, allowed or blocked. Paging
-        /// can return an item from an earlier page: search order isn't stable across
-        /// offsets, so an item can shift across a boundary and repeat. One set for
-        /// both outcomes: the engine is pure, so a repeat gets the same verdict.
+        /// Judged ids so far — paging can repeat one if the source's order shifts.
         var seen: Set<CatalogID> = []
         var offset = 0
         var requestCount = 0
@@ -207,15 +170,11 @@ public struct FilteredCatalog: Sendable {
             requestCount += 1
             offset += page.items.count
 
-            // Lineage first — a song cannot be judged against a denied artist
-            // without knowing who its artist is.
+            // Lineage first: can't judge a song against a denied artist blind.
             let resolved = try await source.resolveAncestry(for: page.items)
 
             for item in resolved {
-                // A duplicate is not merely a row shown twice. Every list above
-                // this keys on the identifier — SwiftUI's `ForEach` does — and
-                // two entries sharing one produce a blank the height of a row
-                // where a song should be, with its separators missing too.
+                // Duplicate ids break `ForEach`: a blank row, separators gone.
                 guard seen.insert(item.id).inserted else { continue }
 
                 switch engine.evaluate(item.policyItem) {
@@ -249,13 +208,9 @@ public struct FilteredCatalog: Sendable {
         )
     }
 
-    /// Search several kinds at once, each with its own budget: one over-fetch loop per
-    /// kind, concurrently — see ``KindedResults`` for why merging is wrong twice over.
-    /// Safe because the loops share nothing but the cache actor; any kind failing aborts
-    /// the search, the existing retry rule. `budgets`: per-kind target, zero skips it.
+    /// One loop per kind, concurrently; any kind failing aborts the search.
     public func search(term: String, budgets: [ItemKind: Int]) async throws -> KindedResults {
-        // Built on the incremental search rather than beside it, so the two
-        // cannot drift. This one simply keeps the last snapshot.
+        // Built atop incremental search, not beside it, so they can't drift.
         var latest = KindedResults(byKind: [:])
         for try await snapshot in searchIncrementally(term: term, budgets: budgets) {
             latest = snapshot
@@ -263,9 +218,7 @@ public struct FilteredCatalog: Sendable {
         return latest
     }
 
-    /// The same search, a kind at a time as each lands. Each element is a complete snapshot, not a delta — a caller replaces
-    /// state, never accumulates. Kinds don't cost the same: artists settle in one request, songs page repeatedly, so
-    /// awaiting all three blocks the fast on the slow. Dropping the stream cancels searches, since a kid retypes.
+    /// Snapshot stream; dropping it cancels searches when a kid retypes.
     public func searchIncrementally(
         term: String,
         budgets: [ItemKind: Int]
@@ -275,9 +228,7 @@ public struct FilteredCatalog: Sendable {
             return AsyncThrowingStream { $0.finish() }
         }
 
-        // Started in display order so the kind the screen opens on has its
-        // request away first. It is a head start, not a guarantee — the group
-        // still yields in completion order.
+        // Display order first for a head start; group still yields by completion.
         let ordered = wanted.keys.sorted { a, b in
             let order = KindedResults.displayOrder
             return (order.firstIndex(of: a) ?? .max) < (order.firstIndex(of: b) ?? .max)
@@ -305,9 +256,7 @@ public struct FilteredCatalog: Sendable {
                     }
                     continuation.finish()
                 } catch {
-                    // One kind failing aborts the search, which is the existing
-                    // rule: the loop retries to fill a page, never to recover
-                    // from a failure.
+                    // One kind failing aborts the search; retries only fill pages.
                     continuation.finish(throwing: error)
                 }
             }
@@ -315,24 +264,17 @@ public struct FilteredCatalog: Sendable {
         }
     }
 
-    /// What is inside a container, filtered.
-    ///
-    /// Used for browsing an album or artist, and for playing a playlist — the
-    /// blocked entries are what the player skips rather than stopping on.
+    /// Container contents, filtered; playlist skips blocked, doesn't stop.
     public func children(of id: CatalogID) async throws -> FilteredResults {
         try await judge(source.children(of: id))
     }
 
-    /// An artist's top songs, filtered — the same treatment albums get, and for the
-    /// same reason: this is a list a kid is handed, so a denied track is absent
-    /// rather than shown and refused. The blocked half comes back for the report.
+    /// Top songs, filtered like albums: a denied track is absent, not refused.
     public func topSongs(of id: CatalogID) async throws -> FilteredResults {
         try await judge(source.topSongs(of: id))
     }
 
-    /// Resolve lineage for a list, then run the whole of it past the engine. Ancestry
-    /// first — a song can't be judged against a denied artist without knowing who its
-    /// artist is, and on a page that is an artist that isn't hypothetical.
+    /// Resolves ancestry first — can't judge against a denied artist blind.
     private func judge(_ items: [CatalogItem]) async throws -> FilteredResults {
         let resolved = try await source.resolveAncestry(for: items)
 
@@ -356,17 +298,12 @@ public struct FilteredCatalog: Sendable {
         )
     }
 
-    /// The credited artists this kid may actually visit: filtered because a credit links to that artist's catalogue.
-    /// Dropped, not returned blocked — nothing was rendered, so there's nothing to report; the album already logs.
-    /// Matters because a record stays reachable while a co-credit is denied, since ancestry only carries the first.
+    /// Dropped, not blocked: unrendered, unreported; co-credit stays reachable.
     public func artists(of id: CatalogID) async throws -> [CatalogItem] {
         try await source.artists(of: id).filter { engine.evaluate($0.policyItem).isAllowed }
     }
 
-    /// Judge one item, resolving its lineage first if it has none.
-    ///
-    /// This is what the player calls immediately before playback starts. It asks
-    /// again rather than trusting that the UI only offered allowed things.
+    /// Called right before playback; re-asks rather than trusting the UI's offer.
     public func verdict(for item: CatalogItem) async throws -> Verdict {
         let resolved = item.ancestors.isEmpty
             ? (try await source.resolveAncestry(for: [item])).first ?? item

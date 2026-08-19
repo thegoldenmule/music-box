@@ -1,9 +1,6 @@
 import PolicyEngine
 
-/// Somewhere to keep items already fetched. A protocol, not a concrete type,
-/// because the storage question isn't settled: MusicKit's terms restrict what
-/// metadata we may persist and why, so an on-disk cache needs an answer first.
-/// In-memory is the safe start, and this is the seam that lets it change later.
+/// A protocol, not concrete: MusicKit's persistence terms are still unsettled.
 public protocol ItemCache: Sendable {
     func item(for id: CatalogID) async -> CatalogItem?
     func store(_ item: CatalogItem) async
@@ -19,16 +16,12 @@ extension ItemCache {
     }
 }
 
-/// Holds items for the life of the session and no longer. Deliberately forgets
-/// everything on launch — that sidesteps the persistence question entirely while
-/// still killing the repeat lookups that make a filtered search page crawl.
+/// Session-only, forgotten on launch — sidesteps persistence, cuts repeat lookups.
 public actor InMemoryItemCache: ItemCache {
     private var items: [CatalogID: CatalogItem] = [:]
     private let capacity: Int
 
-    /// - Parameter capacity: how many items to keep before dropping the oldest
-    ///   arrivals. A session's browsing is small; this is a backstop against a
-    ///   long session growing without bound.
+    /// - Parameter capacity: backstop against an unbounded session, not a limit.
     public init(capacity: Int = 2000) {
         self.capacity = capacity
     }
@@ -53,10 +46,7 @@ public actor InMemoryItemCache: ItemCache {
     }
 }
 
-/// Wraps any source so repeated lookups of the same item hit the cache.
-/// Only `item(for:)` and `resolveAncestry(for:)` are cached — the two that
-/// repeat. Searches are not: the same term can return different results as
-/// the catalog changes, and a stale search page is worse than a slow one.
+/// Caches item(for:), resolveAncestry(for:) only — slow beats a stale search.
 public struct CachingCatalogSource: CatalogSource {
     private let wrapped: any CatalogSource
     private let cache: any ItemCache
@@ -90,10 +80,7 @@ public struct CachingCatalogSource: CatalogSource {
         return fetched
     }
 
-    /// Serves what it can from the cache and asks for only the rest.
-    ///
-    /// Ordering follows the caller's, not the cache's: a recents screen is in
-    /// time order, and splitting into hits and misses must not reshuffle it.
+    /// Cache hits plus a fetch for the rest; caller's order survives the split.
     public func items(for ids: [CatalogID]) async throws -> [CatalogItem] {
         var cached: [CatalogItem] = []
         var missing: [CatalogID] = []
@@ -125,9 +112,7 @@ public struct CachingCatalogSource: CatalogSource {
         return songs
     }
 
-    /// Not served from the cache, only stored into it: the cache is keyed by
-    /// item, and nothing in it records *whose* credit an artist was — or whose
-    /// ranking a song appeared in.
+    /// Stored, not served — keyed by item, not by whose credit it was.
     public func artists(of id: CatalogID) async throws -> [CatalogItem] {
         let artists = try await wrapped.artists(of: id)
         await cache.store(artists)
@@ -158,8 +143,7 @@ public struct CachingCatalogSource: CatalogSource {
         return reorder(resolved + fetched, like: items)
     }
 
-    /// Keep the caller's ordering — search relevance is the ordering, and
-    /// splitting into cached and uncached must not scramble it.
+    /// Keeps caller order — splitting cached from uncached must not scramble it.
     private func reorder(_ items: [CatalogItem], like original: [CatalogItem]) -> [CatalogItem] {
         reorder(items, like: original.map(\.id))
     }

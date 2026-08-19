@@ -1,22 +1,16 @@
 import Foundation
 import PolicyEngine
 
-/// Alias for `PolicyEngine`'s `ContentRating`. The MusicKit adapter needs this type in
-/// scope in the same file as `MusicKit.ContentRating`, and can't qualify it
-/// `PolicyEngine.ContentRating` — the module name is shadowed by the `PolicyEngine` struct
-/// inside it. Declared here, where no MusicKit import leaves the bare name unambiguous.
+/// Alias needed: module `PolicyEngine` is shadowed by the struct of the same name.
 public typealias SandboxContentRating = ContentRating
 
-/// One item as the app displays it and the policy engine judges it — the boundary type: nothing above imports MusicKit.
-/// Always a catalog item; library content arrives only resolved, see ``LibrarySource``. `Codable` is for device-local
-/// caches, not the store: the CloudKit zone copies fields by name so a schema change stays a decision, not an accident.
+/// The MusicKit boundary type; `Codable` is for local caches, not CloudKit.
 public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
     public let id: CatalogID
 
     public let title: String
 
-    /// Artist name for a song or album, curator for a playlist. `nil` for an
-    /// artist, where it would just repeat the title.
+    /// Artist or curator name; nil for an artist, where it'd repeat the title.
     public let subtitle: String?
 
     public let artworkURL: URL?
@@ -24,29 +18,19 @@ public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
     /// `nil` means the catalog gave us no rating, not that the item is clean.
     public let rating: ContentRating?
 
-    /// Containers this item sits inside, nearest first. Often empty straight out
-    /// of a search: MusicKit returns no relationships with search results.
-    /// ``CatalogSource/resolveAncestry(for:)`` fills these in as a batch before anything is judged.
+    /// Nearest first; empty from search until resolveAncestry(for:) fills them in.
     public let ancestors: [Ancestor]
 
-    /// How long a song runs, in seconds. `nil` for everything that
-    /// isn't a song, and for a song the catalog gave no length for.
-    /// Presentation only — nothing about a policy decision reads it.
+    /// Seconds, songs only; presentation only, no policy decision reads it.
     public let duration: TimeInterval?
 
-    /// Where a song sits on its album, as the catalog numbers it. Kept, not derived from
-    /// list position: the list a kid sees has had the engine through it — track 4 blocked
-    /// makes song 5 the fourth row, and counting off rows would quietly renumber the record.
+    /// Catalog track number, not row position — blocking one renumbers the rest.
     public let trackNumber: Int?
 
-    /// Whether the catalog calls this release a single. Three states, not two:
-    /// MusicKit's `Album.isSingle` is itself optional, so `nil` means the
-    /// catalog didn't say, never no — the same shape and trap as `rating`.
-    /// ``isSingleRelease`` decides; nothing should read this directly.
+    /// Three states like `rating`; nil means unsaid. isSingleRelease decides.
     public let isSingle: Bool?
 
-    /// How many tracks the catalog says a release has, whatever the kid may
-    /// actually see of it.
+    /// Catalog's own track count, regardless of what the kid actually sees.
     public let trackCount: Int?
 
     public init(
@@ -73,9 +57,7 @@ public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
         self.trackCount = trackCount
     }
 
-    /// Whether to treat this as a single rather than a record. The catalog's own flag when there is one; otherwise two
-    /// tracks or fewer stands in — a fallback whose actual role is unmeasured. If the flag always arrives, the fallback is
-    /// dead code; if it never does, the count is the whole rule. False for anything that isn't an album.
+    /// Catalog flag if present, else ≤2 tracks; fallback frequency is unmeasured.
     public var isSingleRelease: Bool {
         if let isSingle { return isSingle }
         if let trackCount { return trackCount <= 2 }
@@ -108,8 +90,7 @@ public struct CatalogItem: Sendable, Hashable, Identifiable, Codable {
 public struct CatalogPage: Sendable, Hashable {
     public let items: [CatalogItem]
 
-    /// Whether the source believes more results exist past this page. When
-    /// false, the over-fetch loop stops rather than burning its retries.
+    /// False stops the over-fetch loop rather than burning retries.
     public let hasMore: Bool
 
     public init(items: [CatalogItem], hasMore: Bool) {

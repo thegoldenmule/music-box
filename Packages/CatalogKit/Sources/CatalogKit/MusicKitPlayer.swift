@@ -4,10 +4,7 @@ import Foundation
 import MusicKit
 import PolicyEngine
 
-/// ``CatalogPlayer`` on top of `ApplicationMusicPlayer` — the application queue,
-/// not the system one: the system player shares state with the Music app, so a
-/// kid's play would reorder the parent's Up Next and the parent's queue would
-/// arrive here unvetted. This class is why the macOS floor is 14.0.
+/// Uses the app queue, not system (leaks the parent's Up Next); forces macOS 14.
 @MainActor
 public final class MusicKitPlayer: CatalogPlayer {
     private let player = ApplicationMusicPlayer.shared
@@ -22,8 +19,7 @@ public final class MusicKitPlayer: CatalogPlayer {
         case .paused: .paused
         case .interrupted: .interrupted
         case .stopped: .stopped
-        // seekingForward and seekingBackward are transient and only reachable
-        // through controls this app does not offer.
+        // Transient; only reachable through controls this app doesn't offer.
         default: .playing
         }
     }
@@ -32,26 +28,17 @@ public final class MusicKitPlayer: CatalogPlayer {
         max(0, player.playbackTime)
     }
 
-    /// The player's own word for what it is doing, unmapped. ``status`` folds the
-    /// unrecognised into `playing` — right for a button, which must not flicker,
-    /// and wrong for working out why a track did not advance; two of the five
-    /// states here have no ``PlaybackStatus`` case. Diagnostic only: nothing decides on it.
+    /// Diagnostic only — unmapped states fold to playing, avoiding flicker.
     public var rawStatus: String {
         String(describing: player.state.playbackStatus)
     }
 
-    /// The player's identifier for the queue entry it sits on — what
-    /// `playbackStatus` cannot answer. Anything that moves it off the one queued
-    /// song (track end, or the lock screen's next button, which bypasses the app)
-    /// has run the queue out; which status results is a detail. `nil` when exhausted.
+    /// Queue-entry id; nil once exhausted, even via the lock screen's next button.
     public var currentEntryID: String? {
         player.queue.currentEntry?.id
     }
 
-    /// Heard before the current stretch began. Everything since is `playbackTime
-    /// - stretchStart`, so nothing has to be sampled on a timer: a seek is the
-    /// only event that breaks the correspondence between position and listening,
-    /// and a seek is something this type is told about.
+    /// Banked time before this stretch; a seek is the only break in listening.
     private var heardBeforeStretch: TimeInterval = 0
     private var stretchStart: TimeInterval = 0
 
@@ -60,42 +47,32 @@ public final class MusicKitPlayer: CatalogPlayer {
     }
 
     public func seek(to seconds: TimeInterval) async {
-        // Bank the stretch that ends here before moving, or a kid who drags back
-        // to the start erases the minute they just listened to.
+        // Banks the ending stretch first, or dragging back erases minutes heard.
         heardBeforeStretch += max(0, playbackTime - stretchStart)
         let target = max(0, seconds)
         stretchStart = target
         player.playbackTime = target
     }
 
-    /// The song most recently fetched ahead of time, and which item it is for.
-    /// Exactly one, and a cache rather than a queue: nothing plays from here
-    /// without ``play(_:)`` asking for that item by name. A stale one — the kid
-    /// tapped something else — is never matched and the next preload replaces it.
+    /// One-slot cache, not queue; play(_:) asks by id, else stale goes unused.
     private var preloaded: (id: CatalogID, song: Song)?
 
     public func preload(_ item: CatalogItem) async {
         guard item.id.kind == .song, preloaded?.id != item.id else { return }
-        // Failure is silence, not an error: the worst case is the gap this was
-        // trying to close, and the real fetch in `play(_:)` will report anything
-        // that is actually wrong at the moment it matters.
+        // Failure is silent here; play(_:)'s real fetch reports what matters.
         guard let song = try? await Self.fetch(item) else { return }
         preloaded = (item.id, song)
     }
 
     public func play(_ item: CatalogItem) async throws {
         guard item.id.kind == .song else {
-            // The slice plays songs. Albums and playlists become queues, which
-            // is a policy question (every track judged, blocked ones skipped
-            // rather than stopped on) and not a mechanical one.
+            // Songs only here; albums/playlists become queues — a policy question.
             throw CatalogError.underlying(
                 "Only songs can be played directly; \(item.id.kind.rawValue) needs a queue."
             )
         }
 
-        // The preloaded song when it is the one being asked for, which is the
-        // whole saving: a track that follows another in a queue has had its
-        // round trip made while the previous one was still playing.
+        // Preload used only if matched — the round trip already ran last track.
         let song: Song
         if let preloaded, preloaded.id == item.id {
             song = preloaded.song
@@ -106,8 +83,7 @@ public final class MusicKitPlayer: CatalogPlayer {
 
         try await mapErrors { try await Self.start(song) }
         nowPlaying = item
-        // The queue was replaced wholesale, so anything that was behind the old
-        // track went with it.
+        // Queue replaced wholesale; whatever was behind the old track is gone too.
         nextUp = nil
         heardBeforeStretch = 0
         stretchStart = 0
@@ -115,24 +91,17 @@ public final class MusicKitPlayer: CatalogPlayer {
 
     // MARK: - The second entry
 
-    /// What is queued behind ``nowPlaying`` — at most one, only ever a song the
-    /// caller just judged. The single place `ApplicationMusicPlayer` may advance by
-    /// itself, and the length is the whole price of that permission: two entries
-    /// hand over gaplessly, and when the second ends there is nothing to wander into.
+    /// One at most, just-judged — caps the queue at two, nothing unvetted follows.
     public private(set) var nextUp: CatalogItem?
 
-    /// Puts a judged song directly behind the one playing. The caller is expected
-    /// to have asked ``FilteredCatalog/verdict(for:)`` immediately beforehand, as
-    /// for ``play(_:)`` — and, unlike ``play(_:)``, to keep asking while this sits
-    /// here: a verdict at insertion is taken early, and ``cancelNext()`` takes it back.
+    /// Caller re-judges while queued; cancelNext() pulls back a changed verdict.
     public func enqueueNext(_ item: CatalogItem) async throws {
         guard item.id.kind == .song else {
             throw CatalogError.underlying(
                 "Only songs can be queued; \(item.id.kind.rawValue) cannot."
             )
         }
-        // Nothing to queue behind. Inserting `afterCurrentEntry` with no current
-        // entry would be a queue of one that starts by itself.
+        // No current entry means insert would start a queue of one by itself.
         guard nowPlaying != nil else { return }
         guard nextUp == nil else { return }
 
@@ -154,20 +123,14 @@ public final class MusicKitPlayer: CatalogPlayer {
         )
     }
 
-    /// Takes the queued song back out, leaving what is playing alone — what a
-    /// verdict changed since insertion turns into. Everything but the current
-    /// entry goes, not "the one we added": the queue must hold nothing unjudged,
-    /// and keeping only the *playing* entry is true even when our bookkeeping is wrong.
+    /// Drops everything but current — safe even if our bookkeeping is wrong.
     public func cancelNext() {
         nextUp = nil
         guard let current = player.queue.currentEntry else { return }
         player.queue.entries = player.queue.entries.filter { $0.id == current.id }
     }
 
-    /// Moves to the queued song immediately — a kid's skip when the next track
-    /// is already judged and buffered. Reaches nothing ``enqueueNext(_:)`` did
-    /// not already put within reach, so it is a shortcut through the same
-    /// handover; the caller still owes the adoption bookkeeping and final verdict.
+    /// A judged skip forward; caller still owes adoption bookkeeping, a verdict.
     public func advanceToNextEntry() async throws {
         guard nextUp != nil else { return }
         try await mapErrors { try await Self.skipForward() }
@@ -177,10 +140,7 @@ public final class MusicKitPlayer: CatalogPlayer {
         try await ApplicationMusicPlayer.shared.skipToNextEntry()
     }
 
-    /// Takes over the song MusicKit has just advanced to by itself. Bookkeeping
-    /// only — audio is already playing, the trade the two-entry queue makes.
-    /// Returns what is now playing so the caller can re-judge and cut it off if
-    /// the answer changed; see `KidPlayerModel.adoptHandover()`.
+    /// Audio already plays; returns the item so the caller can re-judge it.
     @discardableResult
     public func adoptNext() -> CatalogItem? {
         guard let next = nextUp else { return nil }
@@ -191,10 +151,7 @@ public final class MusicKitPlayer: CatalogPlayer {
         return next
     }
 
-    /// One song out of the catalog, ready to be queued. `nonisolated` so a
-    /// preload need not hop to the main actor, and so both callers share one
-    /// "playable" check (`playParameters`) rather than each keeping their own,
-    /// which is how one of them ends up without it.
+    /// nonisolated: preload skips main actor; both share one playable check.
     private nonisolated static func fetch(_ item: CatalogItem) async throws -> Song {
         let request = MusicCatalogResourceRequest<Song>(
             matching: \.id,
@@ -206,8 +163,7 @@ public final class MusicKitPlayer: CatalogPlayer {
             throw CatalogError.itemUnavailable(item.id)
         }
 
-        // No play parameters means the storefront will not play it — a delisted
-        // or region-restricted track. An allow list has to survive this.
+        // No play parameters: delisted or restricted; an allow list must survive.
         guard song.playParameters != nil else {
             throw CatalogError.itemUnavailable(item.id)
         }
@@ -215,10 +171,7 @@ public final class MusicKitPlayer: CatalogPlayer {
         return song
     }
 
-    /// Queues and starts, off any actor. `ApplicationMusicPlayer` predates
-    /// strict concurrency — a non-`Sendable` class with `nonisolated` async
-    /// methods, so calling them on a `@MainActor`-held instance would send it
-    /// across an isolation boundary. Reaching for `shared` here avoids that.
+    /// Off-actor: predates strict concurrency; `shared` avoids an isolation send.
     private nonisolated static func start(_ song: Song) async throws {
         let player = ApplicationMusicPlayer.shared
         player.queue = ApplicationMusicPlayer.Queue(for: [song])
@@ -247,10 +200,7 @@ public final class MusicKitPlayer: CatalogPlayer {
         stretchStart = 0
     }
 
-    /// Turns MusicKit's errors into ones the UI can write a sentence about. Doesn't yet handle
-    /// outside restriction (Screen Time, parental controls): spec wants `restrictedOutsideApp`,
-    /// real error unmeasured without a device, so it lands in ``CatalogError/underlying(_:)``.
-    /// `@MainActor` keeps the closure off the isolation boundary.
+    /// Doesn't detect Screen Time restriction yet; the device error is unmeasured.
     private func mapErrors<T>(_ body: @MainActor () async throws -> T) async throws -> T {
         do {
             return try await body()

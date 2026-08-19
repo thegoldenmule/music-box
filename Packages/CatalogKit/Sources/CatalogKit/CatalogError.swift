@@ -1,12 +1,9 @@
 import Foundation
 
-// Re-exported so callers need no second import for `CatalogID`, `ContentRating`,
-// `Verdict` — every type this layer's public API is written in terms of.
+// Re-exported so callers need no second import for CatalogID/ContentRating.
 @_exported import PolicyEngine
 
-/// Things that go wrong, in terms the UI can act on. Several of these are not
-/// our bug but will be reported as our bug; a raw MusicKit error surfaced to a
-/// parent is a support ticket, a named case is a sentence we can write.
+/// Named cases the UI can act on — a raw MusicKit error just reads as our bug.
 public enum CatalogError: Error, Sendable, Hashable {
     /// The user has not granted access to Apple Music, or revoked it in Settings.
     case notAuthorized(AuthorizationStatus)
@@ -14,18 +11,13 @@ public enum CatalogError: Error, Sendable, Hashable {
     /// No active Apple Music subscription, so nothing will play.
     case noSubscription
 
-    /// iCloud Music Library is off, so library reads return nothing. Distinct
-    /// from an empty library, and the fix is in Settings.
+    /// Library off, not empty — distinct cases, and the fix is in Settings.
     case cloudLibraryDisabled
 
-    /// No network. There is no download story under the MusicKit terms, so this
-    /// means the app does not work rather than degrading.
+    /// No network means the app doesn't work — MusicKit has no download story.
     case offline
 
-    /// Playback was refused by something outside this app — Screen Time's music
-    /// restriction, or Apple Music's parental controls. Its own case because a
-    /// restriction set elsewhere, possibly months ago, surfaces here confusingly;
-    /// explain it and point at the setting rather than reading as our refusal.
+    /// Blocked outside (Screen Time, parental controls) — explain, don't own it.
     case restrictedOutsideApp
 
     /// The item is gone from the catalog. Allow lists have to survive this.

@@ -47,8 +47,7 @@ struct ArtistVoteTests {
             Seed.song(1, by: Seed.band),
             Seed.song(2, by: Seed.guest),
         ]
-        // Strictly more than half, so two-two is nobody. A suggestion grants
-        // reach, and a coin flip is not a basis for handing a kid a catalogue.
+        // Strict majority; a coin flip is no basis for a kid's catalogue.
         #expect(ArtistVote.winner(among: songs) == nil)
     }
 
@@ -70,8 +69,7 @@ struct ArtistVoteTests {
             Seed.song(2, by: Seed.band),
             CatalogItem(id: CatalogID(.song, "song-3"), title: "Orphan", rating: .clean),
         ]
-        // Two of two voters agree, not two of three — an unresolvable song must
-        // not be able to drag a real majority below the line.
+        // Unresolvable songs aren't voters, so they can't drag a majority down.
         #expect(ArtistVote.winner(among: songs) == Seed.band)
     }
 
@@ -84,9 +82,7 @@ struct ArtistVoteTests {
             Seed.song(3, by: empty),
             Seed.song(4, by: Seed.band),
         ]
-        // A relationship can arrive with no identifier in it. Counting those
-        // together collapses every affected artist onto one bogus winner, which
-        // would then be suggested — and allowed.
+        // Empty-id relationships would collapse artists onto one bogus winner.
         #expect(ArtistVote.winner(among: songs) == Seed.band)
     }
 
@@ -186,9 +182,7 @@ struct PlaylistSnapshotTests {
         let imported = try await source.resolveToCatalog(tracks)
 
         #expect(imported.resolved.map(\.id) == [Seed.song(1, by: Seed.band).id, Seed.song(2, by: Seed.band).id])
-        // Shown to the parent before they commit, with the reason on each —
-        // "34 of 39 matched" is the only honest thing to put in front of someone
-        // who is about to hand their kid a playlist.
+        // Shown before commit, with reasons — "34 of 39" is the honest phrasing.
         #expect(imported.discarded.count == 2)
         #expect(imported.discarded.map(\.reason) == [.noIdentifier, .notInAppleMusic])
     }

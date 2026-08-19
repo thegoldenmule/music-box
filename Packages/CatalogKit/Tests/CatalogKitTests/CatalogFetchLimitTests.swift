@@ -3,10 +3,7 @@ import Testing
 import CatalogKit
 import PolicyEngine
 
-/// The caps themselves are Apple's and cannot be asserted from here — no test
-/// without a device can prove that 301 song identifiers are refused. What these
-/// pin down is the half that is ours: that a list longer than the cap is split
-/// rather than sent, and that splitting it loses nothing.
+/// Apple's caps aren't provable here; these pin down our half: nothing is lost.
 @Suite("Catalog fetch limits")
 struct CatalogFetchLimitTests {
     @Test(
@@ -33,8 +30,7 @@ struct CatalogFetchLimitTests {
         #expect(CatalogFetchLimit.batches(ids, for: .song) == [ids])
     }
 
-    /// The Comedy playlist: 316 entries, sixteen over the song cap, which failed
-    /// the whole read and rendered as an empty playlist.
+    /// The real bug: a 316-song playlist failed whole and rendered empty.
     @Test("One over the cap splits rather than fails")
     func justOverCapSplits() {
         let batches = CatalogFetchLimit.batches(Array(1...316), for: .song)
@@ -57,8 +53,7 @@ struct CatalogFetchLimitTests {
         #expect(batches.flatMap { $0 } == ids)
     }
 
-    /// An exact multiple is the off-by-one that produces a trailing empty batch,
-    /// and an empty batch is a request asking for nothing.
+    /// Exact multiples are the off-by-one that leaves a trailing empty batch.
     @Test("An exact multiple of the cap leaves no empty batch behind")
     func exactMultipleLeavesNoRemainder() {
         let batches = CatalogFetchLimit.batches(Array(1...50), for: .artist)

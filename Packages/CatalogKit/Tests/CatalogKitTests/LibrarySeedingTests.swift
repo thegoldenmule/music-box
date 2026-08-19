@@ -125,9 +125,7 @@ struct LibrarySeedingTests {
 
 @Suite("Seeded entries obey the same rules as anything else")
 struct SeededEntryTests {
-    /// The point of resolving to the catalog: a seeded song carries catalog
-    /// ancestry, so a deny on the artist reaches it. A library identifier could
-    /// never have done this — there would be no shared namespace to match on.
+    /// Resolving attaches catalog ancestry, so a deny on the artist reaches it.
     @Test("A deny on the artist reaches a song seeded from the library")
     func denyReachesSeededSong() async throws {
         let seeded = Fix.songItem(0, rating: .clean, ancestors: [Ancestor(id: Fix.artist)])
