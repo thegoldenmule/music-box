@@ -9,11 +9,10 @@ public enum ItemKind: String, Sendable, Codable, Hashable, CaseIterable {
     case song
 }
 
-/// A reference to one item in the Apple Music catalog.
-///
-/// The kind is part of the identity. MusicKit identifiers are only unique
-/// within a type, so matching on the raw string alone would let an album ID
-/// collide with a song ID and quietly widen a parent's allow list.
+/// A reference to one item in the Apple Music catalog. The kind is part of the
+/// identity: MusicKit identifiers are only unique within a type, so matching on
+/// the raw string alone would let an album ID collide with a song ID and
+/// quietly widen a parent's allow list.
 public struct CatalogID: Hashable, Sendable, Codable {
     public let kind: ItemKind
     public let rawValue: String
