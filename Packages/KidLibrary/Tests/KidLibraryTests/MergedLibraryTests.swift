@@ -56,8 +56,7 @@ struct Favoriting {
     @Test("A denied artist reaches a song that arrived without lineage")
     func resolvesAncestryBeforeJudging() async throws {
         let harness = try Harness(entries: [.deny(Fix.band)])
-        // As a search result arrives: no album, no artist, nothing to judge
-        // against until the lineage is fetched.
+        // As a search result arrives — no lineage yet to judge against.
         await #expect(throws: LibraryRefused.self) {
             try await harness.library.addFavorite(Fix.bare(Fix.clean))
         }
@@ -110,8 +109,7 @@ struct TheShelf {
         #expect(shelf.items.map(\.id) == [Fix.other])
         #expect(shelf.blocked.map(\.item.id) == [Fix.clean])
 
-        // The row is still there. Widening the rule brings the tile back with
-        // no re-favoriting, which is the whole point of not storing it filtered.
+        // The row's still there — widening the rule brings the tile back.
         #expect(harness.kid.favorites.count == 2)
     }
 
@@ -182,8 +180,7 @@ struct Offline {
         closed.catalog.isFailing = true
         #expect(try await closed.library.favorites().items.isEmpty)
 
-        // Fails open: the stored copy carries no rating, and `.block` therefore
-        // has nothing to bite on. The player's re-check is what catches it.
+        // Fails open: the stored copy has no rating for `.block` to bite.
         let open = try Harness(mode: .reportOnly)
         try await open.library.addFavorite(Fix.item(Fix.explicit))
         open.catalog.isFailing = true
@@ -391,19 +388,14 @@ struct TwoProviders {
 
     @Test("An edit is never attempted on a playlist we did not create")
     func neverEditsAForeignPlaylist() async throws {
-        // Declining `.editForeignPlaylists` is how a provider says so, and it is
-        // what the Apple Music provider will declare: MusicKit refuses to edit a
-        // playlist the app did not create. The merged store enforces the rule
-        // through the flag rather than by naming MusicKit, so a provider that
-        // genuinely can edit anything is not crippled by a rule about Apple's.
+        // Declining the flag says a provider can't edit a foreign playlist.
         let apple = StubProvider(
             capabilities: LibraryCapabilities.all.subtracting(.editForeignPlaylists)
         )
         let harness = try Harness(extra: [apple])
         let row = try await harness.library.createPlaylist(named: "Bangers")
 
-        // As if it had been read back from Apple Music rather than made here:
-        // an identifier, but no claim that this app created it.
+        // As if read back from Apple Music — an id, no claim this app made it.
         let record = try #require(harness.kid.playlistRecord(for: row.handle.local))
         record.linkToAppleLibrary(id: "p.foreign", createdByUs: false)
         try harness.context.save()
@@ -581,8 +573,7 @@ struct DerivingSharedDevice {
 
     @Test("The hand-me-down is the case a single question kept getting wrong")
     func handMeDown() {
-        // One user, one device, somebody else's library. Asked on its own, "do
-        // you share this device?" answers no and means yes.
+        // One user, one device, somebody else's library — "do you share it" is no.
         let phone = DeviceLibraryState(sharesDeviceWithChild: false, childHasOwnAccount: false)
         #expect(phone.isSharedDevice)
     }
@@ -595,8 +586,7 @@ struct DerivingSharedDevice {
 
     @Test("A stored answer this version cannot read reads back as unasked")
     func unreadableIsUnasked() {
-        // Which is why changing the shape of the questions costs one re-ask
-        // rather than a migration — and re-asking is the safe outcome.
+        // Changing the questions costs one re-ask, not a migration.
         let suite = "aural-sandbox-tests-device-state"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)

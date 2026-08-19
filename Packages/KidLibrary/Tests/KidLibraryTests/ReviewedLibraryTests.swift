@@ -7,11 +7,7 @@ import Testing
 
 @testable import KidLibrary
 
-/// The admin's read of a kid's shelf.
-///
-/// Every test here is the same assertion from a different angle: what the kid's
-/// screens drop, this keeps. The pair of them is the proof that opening the
-/// parent's door did not open the child's.
+/// The admin's read of a kid's shelf: what the kid's screens drop, this keeps.
 @Suite("The shelf, unfiltered")
 @MainActor
 struct Reviewing {
@@ -32,13 +28,11 @@ struct Reviewing {
         #expect(reviewed.blockedFavorites.count == 1)
     }
 
-    /// Stage 4's exit test, from this side: an explicit song that reached the
-    /// store is off the shelf and present, annotated, in the report.
+    /// Stage 4's exit test: off the kid's shelf, present in the parent's report.
     @Test("An explicit row adopted into the store shows as unplayable, not as absent")
     func explicitIsVisibleToTheParent() async throws {
         let harness = try Harness()
-        // Bypasses the engine deliberately — this is a row that arrived from
-        // outside, which is exactly what the Apple provider will do.
+        // Bypasses the engine — arrives from outside, like Apple's provider will.
         harness.kid.addFavorite(
             id: Fix.explicit,
             displayName: "Swearing",
@@ -83,9 +77,7 @@ struct Reviewing {
         #expect(reviewed.favorites.count == 1)
         #expect(reviewed.favorites.first?.fact.displayName == "Sunshine")
         #expect(!reviewed.isResolved)
-        // A library row has no rating column to fall back on, so the level 2
-        // rating check cannot run — and saying nothing beats reporting our own
-        // gap as "they can't play this any more".
+        // No rating to fall back on; silence beats reporting a fake block.
         #expect(reviewed.favorites.first?.confidence == .unknown)
         #expect(reviewed.favorites.first?.now == nil)
     }
@@ -145,8 +137,7 @@ struct ProviderReporting {
         #expect(reviewed.providers[.appleMusic] == .notConfigured(.notYetAsked))
     }
 
-    /// The kid's side swallows this and says nothing. A short shelf and a broken
-    /// read look identical, and only one of them is about the child.
+    /// The kid's side swallows this; a short shelf and a broken read look alike.
     @Test("A provider that throws is reported to the parent")
     func failureIsReported() async throws {
         let provider = StubProvider()

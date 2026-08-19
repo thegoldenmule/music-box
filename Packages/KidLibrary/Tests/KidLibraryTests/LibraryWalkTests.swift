@@ -20,10 +20,7 @@ struct WalkingDown {
 
         let contents = await harness.library.contents()
         #expect(contents.albums.map(\.title) == ["The Record"])
-        // Four tracks were indexed and two of them are drawable. The walk records
-        // what the catalog said — explicit and unrated alike — and the engine has
-        // its say afterwards, which is what lets a parent's edit reach a library
-        // indexed weeks ago.
+        // The walk records the rating; the engine judges after, reaching old rows.
         #expect(contents.songs.count == 2)
         #expect(Set(contents.blocked.map(\.item.id)) == [Fix.explicit, Fix.unrated])
     }
@@ -36,8 +33,7 @@ struct WalkingDown {
 
         let contents = await harness.library.contents()
         #expect(contents.songs.count == 2)
-        // One walk of the record's tracks. An artist would have cost one for the
-        // records and one more per record.
+        // One walk for the record's tracks; an artist costs one more per record.
         #expect(harness.catalog.childrenCalls == 1)
     }
 
@@ -59,8 +55,7 @@ struct WalkingDown {
 
         let contents = await harness.library.contents()
         let onTheRecord = LibraryBrowse.songs(from: contents.songs, on: Fix.record)
-        // "Nobody Rated This" is absent, not missing: `UnratedBehavior.block` is
-        // the default and it never reached the fold.
+        // "Nobody Rated This" is absent — `.block` never let it reach the fold.
         #expect(onTheRecord.map(\.title) == ["Sunshine", "Something Else"])
 
         let byTheBand = LibraryBrowse.albums(from: contents.songs, by: Fix.band)
@@ -86,8 +81,7 @@ struct WalkingDown {
         try await harness.library.addFavorite(Fix.item(Fix.record))
         await harness.library.expand(Fix.item(Fix.record))
 
-        // The fixture's tracks carry no artwork. Every one of them should still
-        // draw something rather than a column of grey squares.
+        // Fixture tracks carry no artwork; each should still draw, not go grey.
         let songs = await harness.library.contents().songs
         #expect(songs.allSatisfy { $0.item.artworkURL == Fix.item(Fix.record).artworkURL })
     }
@@ -120,8 +114,7 @@ struct ChosenSongs {
 
         let contents = await harness.library.contents()
         #expect(contents.songItems.count == 2)
-        // The walk indexed this song as well, and the hand-picked row wins the
-        // duplicate — so keeping the artist does not quietly demote it.
+        // Walk indexed this too; the hand-picked row wins, not demoted.
         #expect(contents.chosenSongItems.map(\.id) == [Fix.clean])
     }
 
@@ -164,8 +157,7 @@ struct ChosenSongs {
         try await hearted.library.addFavorite(Fix.item(Fix.record))
         #expect(await hearted.library.contents().chosenAlbums.map(\.title) == ["The Record"])
 
-        // Hearting a song has put its record on this list since before walks
-        // existed, and that is a fact about the song the kid picked.
+        // Hearting a song put its record on this list before walks existed.
         let viaSong = try Harness()
         try await viaSong.library.addFavorite(Fix.item(Fix.clean))
         #expect(await viaSong.library.contents().chosenAlbums.map(\.title) == ["The Record"])
@@ -180,8 +172,7 @@ struct ChosenSongs {
 
         let contents = await harness.library.contents()
         #expect(contents.songs.isEmpty)
-        // Nothing can fold it out of a song, because there is no song. Reading
-        // the album list rather than folding is what keeps it reachable.
+        // Nothing to fold it from — reading the album list keeps it reachable.
         #expect(LibraryBrowse.albums(contents.albums, by: Fix.band).map(\.title) == ["The Record"])
     }
 }
@@ -200,8 +191,7 @@ struct WalkedOnce {
 
         for _ in 0..<5 { _ = await harness.library.contents() }
 
-        // The whole reason the index exists: an artist is fifty round trips and
-        // opening the library is none of them.
+        // The point of the index: an artist is fifty round trips, a read is none.
         #expect(harness.catalog.childrenCalls == afterWalk)
     }
 
@@ -211,8 +201,7 @@ struct WalkedOnce {
         try await harness.library.addFavorite(Fix.item(Fix.band))
         await harness.library.expand(Fix.item(Fix.band))
 
-        // The rating and the lineage were stored when the walk ran, which is
-        // everything a verdict needs.
+        // Rating and lineage stored at walk time — everything a verdict needs.
         harness.catalog.isFailing = true
 
         let contents = await harness.library.contents()
@@ -257,8 +246,7 @@ struct PartialWalks {
         await harness.library.expand(Fix.item(Fix.duo))
 
         let contents = await harness.library.contents()
-        // The record itself came back with the artist's first request and is
-        // still browsable; only its tracks are missing.
+        // The record came back with the artist's request; only tracks are missing.
         #expect(contents.albums.map(\.title) == ["Antics"])
         #expect(contents.songs.isEmpty)
     }
@@ -273,8 +261,7 @@ struct PartialWalks {
         #expect(await harness.library.contents().albums.map(\.title) == ["The Record"])
         #expect(await harness.library.contents().songs.isEmpty)
 
-        // Nothing had to be undone for the retry to work: the walk adds what is
-        // missing rather than starting from nothing.
+        // Nothing undone for the retry — the walk adds what's missing, no restart.
         harness.catalog.fixChildren(of: Fix.record)
         await harness.library.expand(Fix.item(Fix.band))
 
@@ -351,9 +338,7 @@ struct IndexLifetime {
         harness.kid.deleteHistory()
         try harness.context.save()
 
-        // A parent clearing a month of logs is not asking for their child's
-        // library to shrink. Favorites and playlists already worked this way;
-        // being derived does not change what this follows.
+        // Clearing logs doesn't shrink the library — same as favorites/playlists.
         #expect(await harness.library.contents().songs.count == 2)
     }
 
@@ -395,12 +380,10 @@ struct IndexIsNotAPermission {
         try await harness.library.addFavorite(Fix.item(Fix.band))
         await harness.library.expand(Fix.item(Fix.band))
 
-        // The artist is on the list, so what is under them is reachable — which
-        // is what `allowOnly` means, not something the index decided.
+        // Artist's on the list, so what's under them is reachable — `allowOnly`.
         #expect(await harness.library.contents().songs.isEmpty == false)
 
-        // Taking the artist off the list closes it again, with every row still
-        // sitting in the index. Being indexed is not being allowed.
+        // Off the list closes it again, even with every row still in the index.
         try harness.repolicy { $0.removeEntry($0.entries[0]) }
         #expect(await harness.library.contents().songs.isEmpty)
     }
@@ -411,8 +394,7 @@ struct IndexIsNotAPermission {
         try await harness.library.addFavorite(Fix.item(Fix.band))
         await harness.library.expand(Fix.item(Fix.band))
 
-        // The kid kept the artist. They did not keep three songs, and three
-        // hearts filling in behind them would say they had.
+        // Kid kept the artist, not three songs — hearts shouldn't fill in behind.
         #expect(await harness.library.favoriteIDs() == [Fix.band])
     }
 }

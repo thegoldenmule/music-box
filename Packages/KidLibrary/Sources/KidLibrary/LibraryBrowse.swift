@@ -3,29 +3,12 @@ import FamilyStore
 import Foundation
 import PolicyEngine
 
-/// One song in the kid's library, with what it knows about where it came from.
-///
-/// The pairing exists because the two halves come from different places and both
-/// are needed at once: `item` is resolved against the catalog and judged, while
-/// `ancestry` is the copy made at write time and is the only thing that can name
-/// an album or an artist without a request.
+/// A song plus `ancestry`, the only way to name its album/artist offline.
 public struct LibrarySong: Sendable, Hashable, Identifiable {
     public let item: CatalogItem
     public let ancestry: LibraryAncestry
 
-    /// Whether the kid picked **this song**, rather than getting it because they
-    /// kept the record or the artist it is on.
-    ///
-    /// True for a heart and for anything on one of their own playlists. False for
-    /// everything a walk brought in — which is most of the library once an artist
-    /// has been kept, and is why the distinction has to exist at all: a Songs
-    /// column of everything buries the dozen songs a child chose under the
-    /// thousand that arrived behind them.
-    ///
-    /// It changes what is *listed*, never what is reachable or playable. An
-    /// indexed song is a library song in every other respect: it is judged the
-    /// same way, it is found by drilling into its artist or its record, and it
-    /// queues like any other.
+    /// True if the kid picked this song, not via a kept record or artist.
     public let isChosen: Bool
 
     public var id: CatalogID { item.id }
@@ -37,54 +20,24 @@ public struct LibrarySong: Sendable, Hashable, Identifiable {
     }
 }
 
-/// The whole of the kid's library, resolved and judged once.
-///
-/// **One value rather than five reads.** Every column in the browser — artists,
-/// albums, songs, and each drill-in below them — is a filter of this, computed
-/// with no request and no `await`. That is what lets a filter field narrow a list
-/// as a child types and what lets tapping an artist show their albums instantly
-/// rather than after a spinner.
-///
-/// Everything in `songs` has already been through the policy engine. Nothing here
-/// is a permission: a parent may deny tomorrow what is in this value today, which
-/// is why it is rebuilt on every policy change rather than cached across one.
+/// The library, judged once; nothing here is a permission — rebuilt per policy.
 public struct LibraryContents: Sendable {
-    /// Every kept song the kid may still play.
-    ///
-    /// **Fold order, not display order.** What the kid chose comes first, most
-    /// recent first, and what a walk indexed follows in a stable order behind it
-    /// — which is what makes ``LibraryBrowse/albums(from:)`` take a container's
-    /// artwork from a hand-picked song where there is one. A column showing these
-    /// sorts them itself; see ``LibraryBrowse/sorted(_:)``.
+    /// Kept songs, fold order: chosen first, then indexed — not display order.
     public let songs: [LibrarySong]
 
-    /// Every artist, alphabetical.
-    ///
-    /// No chosen/indexed split here, and none is needed: a walk only ever
-    /// produces records and tracks, so the only artist it can put on this list is
-    /// the one the kid hearted to start it.
+    /// Every artist, alphabetical; a walk can't add one, so no chosen split.
     public let artists: [CatalogItem]
 
     /// Every album in the library, alphabetical. What a drill-in shows.
     public let albums: [CatalogItem]
 
-    /// Only the albums the kid picked out. What the Albums column shows.
-    ///
-    /// The same split ``chosenSongItems`` makes and for the same reason: keeping
-    /// an artist brings their whole catalogue in, and a column holding forty
-    /// records the kid never chose is not a column they can scan.
-    ///
-    /// A record hearted on its own belongs here, and so does one a **chosen**
-    /// song sits on — hearting a song has put its record on this list since
-    /// before walks existed, and that is a fact about the song the kid picked
-    /// rather than about a catalogue that arrived behind an artist.
+    /// Only albums the kid picked, directly or via a chosen song, not a walk.
     public let chosenAlbums: [CatalogItem]
 
     /// What the engine turned down, kept for the report the way it is everywhere.
     public let blocked: [BlockedItem]
 
-    /// False when the catalog did not answer and the rows were drawn from the
-    /// copies made at write time. See ``LibraryResults/isResolved``.
+    /// False when the catalog didn't answer; rows are write-time copies.
     public let isResolved: Bool
 
     public init(
@@ -115,42 +68,13 @@ public struct LibraryContents: Sendable {
     /// Every song, as the player wants them. What a drill-in shows.
     public var songItems: [CatalogItem] { songs.map(\.item) }
 
-    /// Only the songs the kid picked out. What the Songs column shows.
-    ///
-    /// The two lists are deliberately different, and this is the one place in the
-    /// browser where the library is not shown whole: everything a walk indexed is
-    /// still there, still judged, still playable, and reached by opening the
-    /// artist or the record it came in under — where a child looking for it would
-    /// go anyway.
+    /// Only songs the kid picked; indexed ones stay reachable under their artist.
     public var chosenSongItems: [CatalogItem] { songs.lazy.filter(\.isChosen).map(\.item) }
 }
 
-/// Turns the kid's kept songs into the artist and album columns above them.
-///
-/// Pure — no I/O, no clock, no throwing path — for the same reason
-/// ``PolicyEngine`` is: it is the part worth testing exhaustively, and the whole
-/// point of copying ancestry onto the stored row was to make this computable
-/// with nothing but rows already in hand.
-///
-/// **A container here is a folder, not a catalog item, and is deliberately never
-/// judged on its own.** The songs it is folded from have already been through the
-/// engine carrying their real lineage and their real rating, so an album the
-/// parent denied — or an explicit one — has no surviving songs to be folded from
-/// and no row appears. Judging the folded row instead would mean judging a
-/// synthesised `CatalogItem` whose rating is `nil` because nobody asked the
-/// catalog, and with ``UnratedBehavior/block`` as the default that would empty
-/// the Albums column for every kid in the ordinary case. The asymmetry is the
-/// point: this fold cannot reach anything its input did not already allow.
+/// Folds kept songs into containers; pure, never re-judges — can't allow more.
 public enum LibraryBrowse {
-    /// The same container from several places, as one row, alphabetical.
-    ///
-    /// **Earlier tiers win**, and the order callers pass them in is the order of
-    /// how much a row knows about itself: something the kid hearted was resolved
-    /// against the catalog and carries its real rating and the catalog's own
-    /// artwork; something the walk indexed carries what the catalog said then;
-    /// something folded out of a song carries only a name copied at write time.
-    /// Hearting *25*, hearting a song from *25*, and hearting the artist is one
-    /// row, and it is the hearted one.
+    /// Merges tiers by id; earlier tiers win — hearted beats indexed beats folded.
     public static func merged(_ tiers: [CatalogItem]...) -> [CatalogItem] {
         var seen: Set<CatalogID> = []
         var out: [CatalogItem] = []
@@ -162,12 +86,7 @@ public enum LibraryBrowse {
         return sorted(out)
     }
 
-    /// Every distinct album across these songs, alphabetical.
-    ///
-    /// A song contributes an album only when the ancestry names one. A row that
-    /// has not been topped up yet contributes nothing rather than an untitled
-    /// placeholder — a column of blanks is worse than a shorter column, and the
-    /// next read fixes it.
+    /// Distinct albums from songs; a row without lineage yet contributes nothing.
     public static func albums(from songs: [LibrarySong]) -> [CatalogItem] {
         sorted(
             fold(songs) { song in
@@ -177,12 +96,9 @@ public enum LibraryBrowse {
                 return CatalogItem(
                     id: id,
                     title: name,
-                    // The artist, so an album row reads the way it does everywhere
-                    // else in the app.
+                    // The artist as subtitle, matching every other row in the app.
                     subtitle: song.ancestry.artistName,
-                    // An album's artwork is its songs' artwork in Apple Music, so
-                    // the first surviving song's is the album's and no second URL
-                    // has to be stored.
+                    // An album's artwork comes from its first surviving song.
                     artworkURL: song.item.artworkURL,
                     ancestors: song.ancestry.artist.map { [Ancestor(id: $0)] } ?? []
                 )
@@ -200,8 +116,7 @@ public enum LibraryBrowse {
                 return CatalogItem(
                     id: id,
                     title: name,
-                    // `nil` on purpose: an artist's subtitle would repeat the
-                    // title. See `CatalogItem.subtitle`.
+                    // nil on purpose: an artist's subtitle would repeat the title.
                     artworkURL: song.ancestry.artistArtworkURL
                 )
             }
@@ -213,27 +128,12 @@ public enum LibraryBrowse {
         albums(from: songs.filter { $0.ancestry.artist == artist })
     }
 
-    /// The records in a list of albums that belong to one artist.
-    ///
-    /// Over albums rather than over songs, and the artist column needs both. A
-    /// record indexed by a walk whose tracks never loaded — the network went, or
-    /// that one request failed — has no songs to be folded from and would be
-    /// invisible to a fold, while being plainly present in the library. This
-    /// finds it.
-    ///
-    /// Every album this browser produces carries its artist: one the kid hearted
-    /// had ancestry resolved before it was judged, one a walk indexed was handed
-    /// the artist it was walked from, and one folded from a song was built with
-    /// it.
+    /// Albums by artist over albums, not songs — catches tracks that never loaded.
     public static func albums(_ albums: [CatalogItem], by artist: CatalogID) -> [CatalogItem] {
         albums.filter { album in album.ancestors.contains { $0.id == artist } }
     }
 
-    /// The songs on one album, in track order where the catalog numbered them.
-    ///
-    /// Track order and not alphabetical: a record has an order, and it is the one
-    /// thing about an album a kid already knows. Anything unnumbered sorts to the
-    /// end by title rather than to the front by accident.
+    /// Songs on an album, track order; unnumbered tracks sort to end by title.
     public static func songs(from songs: [LibrarySong], on album: CatalogID) -> [CatalogItem] {
         songs
             .filter { $0.ancestry.album == album }
@@ -255,15 +155,7 @@ public enum LibraryBrowse {
 
     // MARK: - Filtering
 
-    /// The filter field's predicate: case- and diacritic-insensitive, over what
-    /// is actually on the row.
-    ///
-    /// Title **and** subtitle, so typing an artist's name narrows a list of
-    /// songs — which is most of what a child types. Substring rather than prefix
-    /// for the same reason: a kid who remembers one word of a title should find
-    /// it wherever the word sits.
-    ///
-    /// An empty term is the whole list, not nothing.
+    /// Filters title and subtitle, substring match; empty term returns all.
     public static func filter(_ items: [CatalogItem], by term: String) -> [CatalogItem] {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return items }
@@ -276,30 +168,18 @@ public enum LibraryBrowse {
 
     // MARK: - Ordering
 
-    /// Alphabetical the way a person reading a list means it.
-    ///
-    /// **The one read on this type that is not most-recent-first.** Every other
-    /// list in the library is ordered by `favoritedAt` or `modifiedAt` descending,
-    /// because a shelf is about what the kid just did. A column you scan for a
-    /// name is about the name.
+    /// Alphabetical — the one list here not most-recent-first.
     public static func sorted(_ items: [CatalogItem]) -> [CatalogItem] {
         items.sorted { left, right in
             let a = sortKey(left.title)
             let b = sortKey(right.title)
-            // Falls back to the identifier so the order is total: two records
-            // with the same name must not swap places between two reads of the
-            // same data.
+            // Falls back to id so equal-named rows don't swap between reads.
             if a != b { return a < b }
             return left.id.rawValue < right.id.rawValue
         }
     }
 
-    /// Case- and diacritic-folded, with a leading article dropped.
-    ///
-    /// So *The Beatles* files under B, *Ólafur* next to *Olafur*, and *the xx*
-    /// does not lead the column. Folding is `.current` locale on purpose — this
-    /// orders a list a child is reading, not a stored key anything compares
-    /// across devices.
+    /// Folds case/diacritics, drops a leading article — orders what a kid reads.
     public static func sortKey(_ title: String) -> String {
         let folded = title
             .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
@@ -308,27 +188,18 @@ public enum LibraryBrowse {
 
         for article in Self.articles where folded.hasPrefix(article) {
             let stripped = String(folded.dropFirst(article.count))
-            // "The The" keeps its article rather than becoming empty, and so does
-            // a band actually called "A".
+            // "The The" keeps its article rather than becoming empty.
             if !stripped.isEmpty { return stripped }
         }
         return folded
     }
 
-    /// English only, and knowingly so. Apple Music's catalog is international and
-    /// this is a guess that happens to be right for most of what a kid in a US
-    /// storefront will keep — the same class of assumption as the storefront
-    /// itself. Worth revisiting when there is a second storefront to be wrong in.
+    /// English articles only, a deliberate guess — revisit with storefront two.
     private static let articles = ["the ", "a ", "an "]
 
     // MARK: -
 
-    /// First one wins, keyed by identifier.
-    ///
-    /// Which matters: the first is the earliest in whatever order the caller
-    /// handed over, and callers hand songs over most-recent-first, so the artwork
-    /// and subtitle on a folded row come from the most recently kept song on that
-    /// record rather than from an arbitrary one.
+    /// First wins, keyed by id — most-recent-first callers, so it wins artwork.
     private static func fold(
         _ songs: [LibrarySong],
         _ container: (LibrarySong) -> CatalogItem?

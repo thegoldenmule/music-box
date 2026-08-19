@@ -4,43 +4,23 @@ import Foundation
 import PolicyEngine
 import SwiftData
 
-/// The kid's library as our own records.
-///
-/// **Always live.** Every operation therefore has at least one provider, and the
-/// feature is complete with Apple Music absent, missing a subscription, offline,
-/// or switched off by the shared-device toggle. Everything a kid does in this
-/// app lands here first.
-///
-/// Named for the zone it belongs to rather than for SwiftData, because the store
-/// being local today and synced in v2 is not a difference callers see.
-///
-/// Main-actor bound on purpose. It writes on the **same context that holds the
-/// kid**, so a heart filled here is visible to the screen that filled it without
-/// a refetch — the opposite arrangement to ``EventLog``, which owns its own
-/// context precisely so logging never blocks playback. The contracts differ for
-/// the same reason: a dropped log line is acceptable, and a heart that fills
-/// over a write that did not land is a lie.
+/// Always live: our own records, so every operation has a working provider.
 @MainActor
 public final class CloudKitLibraryProvider: LibraryProvider {
     public nonisolated let id = LibraryProviderID.cloudKit
 
-    /// Everything. Our own store has no primitive it lacks — the gaps in
-    /// ``LibraryCapabilities`` are Apple's.
+    /// Everything — our own store has no primitive it lacks; the gaps are Apple's.
     public nonisolated let capabilities = LibraryCapabilities.all
 
     public enum Failure: Error, Equatable {
-        /// No playlist with that local identifier belongs to this kid. Deleted
-        /// on another device, or on another screen a moment ago.
+        /// No playlist with that local id belongs to this kid — deleted elsewhere.
         case unknownPlaylist(UUID)
     }
 
     private let kid: Kid
     private let context: ModelContext
 
-    /// - Parameters:
-    ///   - kid: the kid whose library this is. One provider per kid; switching
-    ///     kids builds a new one, the way switching kids rebuilds the engine.
-    ///   - context: the context `kid` was fetched on.
+    /// One provider per kid; switching kids builds a new one, like the engine.
     public init(kid: Kid, context: ModelContext) {
         self.kid = kid
         self.context = context
@@ -48,8 +28,7 @@ public final class CloudKitLibraryProvider: LibraryProvider {
 
     // MARK: - Favorites
 
-    /// Most recent first. Rows this version cannot read are dropped — a favorite
-    /// is not a permission, so losing one costs a tile and costs safety nothing.
+    /// Most recent first; unreadable rows drop — a favorite isn't a permission.
     public func favorites() async throws -> [FavoriteRow] {
         kid.favorites
             .compactMap(\.row)
@@ -73,14 +52,7 @@ public final class CloudKitLibraryProvider: LibraryProvider {
         try context.save()
     }
 
-    /// Fills in lineage on rows written before the catalog could be asked.
-    ///
-    /// Touches both tables, because a song can be in the library twice — hearted
-    /// and on a playlist — and a top-up that reached only one of them would leave
-    /// the other asking again on every read.
-    ///
-    /// One save for the whole batch. Nothing here is a fresh fact about the kid,
-    /// so a failure is dropped by the caller and retried on the next read.
+    /// Tops up lineage on favorites and entries, one save; failures just retry.
     public func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws {
         guard !ancestry.isEmpty else { return }
 
@@ -112,22 +84,14 @@ public final class CloudKitLibraryProvider: LibraryProvider {
 
     // MARK: - The library index
 
-    /// Sorted, because a relationship is not.
-    ///
-    /// SwiftData makes no promise about the order of `kid.libraryIndex`, and two
-    /// reads of the same rows really do come back differently. That order is not
-    /// cosmetic here: the fold above takes the *first* row for a container as the
-    /// one whose artwork and subtitle it keeps, so an unsorted read makes a
-    /// column that changes under a kid who did nothing. By identifier rather than
-    /// by name because it is the one field that cannot be absent.
+    /// Sorted explicitly — SwiftData's relationship order isn't stable.
     public func indexed() async throws -> [LibraryIndexRow] {
         kid.libraryIndex
             .compactMap(\.row)
             .sorted { $0.catalogID.rawValue < $1.catalogID.rawValue }
     }
 
-    /// Written as the walk finds things rather than once at the end, so an app
-    /// closed halfway through an artist keeps what it got.
+    /// Written as the walk finds things, so a closed app keeps what it got.
     public func appendIndex(from source: CatalogID, rows: [LibraryIndexRow]) async throws {
         guard !rows.isEmpty else { return }
         kid.appendIndex(from: source, with: rows)
@@ -145,8 +109,7 @@ public final class CloudKitLibraryProvider: LibraryProvider {
 
     // MARK: - Playlists
 
-    /// Most recently touched first, which is the order a shelf wants: the one a
-    /// kid just added a song to is the one they are working on.
+    /// Most recently touched first — the shelf shows what the kid is working on.
     public func playlists() async throws -> [PlaylistRow] {
         kid.playlists
             .map(\.row)
@@ -205,9 +168,7 @@ public final class CloudKitLibraryProvider: LibraryProvider {
         try context.save()
     }
 
-    /// Looked up by the **local** identifier, never the Apple one. `local` is
-    /// ours and stable; `appleLibraryID` is absent on every playlist made while
-    /// the Apple provider was not live.
+    /// Looked up by our stable `local` id, never Apple's, which may be absent.
     private func playlist(_ handle: PlaylistHandle) throws -> PlaylistRecord {
         guard let record = kid.playlistRecord(for: handle.local) else {
             throw Failure.unknownPlaylist(handle.local)

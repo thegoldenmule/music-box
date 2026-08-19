@@ -177,8 +177,7 @@ struct FoldingSongs {
             LibraryBrowse.albums(from: [kept(Fix.clean)])
         )
         #expect(merged.count == 1)
-        // The hearted one: it was resolved against the catalog and knows its
-        // rating, where the folded one only knows a name copied at write time.
+        // The hearted one has a real rating; the folded one only a copied name.
         #expect(merged.first?.rating == .clean)
     }
 

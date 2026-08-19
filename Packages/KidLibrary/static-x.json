@@ -30,21 +30,13 @@
       }
     },
     "push": {
-      "novelty": "baseline",
+      "novelty": "none",
       "tools": {
-        "swift/comments/long": "warn",
-        "swift/comments/llm-tells": "warn",
-        "swift/comments/stale-refs": "warn"
+        "swift/comments/long": "block",
+        "swift/comments/llm-tells": "block",
+        "swift/comments/stale-refs": "block"
       }
     }
-  },
-  "todo": {
-    "codes": [
-      "comment.long",
-      "comment.llm-tell",
-      "comment.stale-ref",
-      "comment.stale-param"
-    ]
   },
   "swift": {
     "comments": {
@@ -53,6 +45,21 @@
           "maxLines": 1,
           "maxChars": 83
         }
+      },
+      "stale-refs": {
+        "ignore": [
+          "CloudKit",
+          "MusicKit",
+          "iCloud",
+          "iPad",
+          "FilteredCatalog",
+          "MusicLibrarySearchRequest",
+          "EventLog",
+          "addedAt",
+          "LibraryIndexRecord",
+          "KidPlayerModel",
+          "KidPlayerModel.switchedKid()"
+        ]
       }
     }
   }

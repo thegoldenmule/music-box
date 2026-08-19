@@ -47,8 +47,7 @@ struct QueueValue {
         #expect(trimmed.entries.map(\.item.id) == [Fix.unrated])
         #expect(trimmed.index == 0)
         #expect(trimmed.current?.item.id == Fix.unrated)
-        // The playhead survives the rebase — it belongs to the song, not the
-        // position in the list.
+        // Playhead survives the rebase — it belongs to the song, not the position.
         #expect(trimmed.elapsed == 30)
     }
 
@@ -68,8 +67,7 @@ struct QueueValue {
         }
         let trimmed = PlayQueue(entries: many, index: 10).trimmed()
         #expect(trimmed.entries.count == PlayQueue.maxEntries)
-        // Kept from where the kid is, not from the top: the cap must never cost
-        // them the song that is loaded.
+        // Kept from where the kid is, not the top — never costs the loaded song.
         #expect(trimmed.entries.first?.item.id == CatalogID(.song, "song-10"))
     }
 }
@@ -131,8 +129,7 @@ struct QueueCoding {
 
 @Suite("Keeping a queue between launches")
 struct QueueStorage {
-    /// A defaults domain of its own, so a test never reads or writes the real
-    /// one — and so two tests cannot see each other's writes.
+    /// A defaults domain of its own, so tests never see each other's writes.
     private func store(_ name: String = UUID().uuidString) -> UserDefaultsPlayQueueStore {
         UserDefaultsPlayQueueStore(defaults: UserDefaults(suiteName: name)!)
     }

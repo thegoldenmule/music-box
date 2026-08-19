@@ -3,11 +3,7 @@ import FamilyStore
 import Foundation
 import PolicyEngine
 
-/// What a shelf actually draws, after the engine has had its say.
-///
-/// Blocked items are **kept, never dropped**: a parent may have denied something
-/// their kid favorited last week, and that is a line in the report rather than a
-/// silent disappearance.
+/// What a shelf draws; blocked items are kept, never dropped, for the report.
 public struct LibraryResults: Sendable, Hashable {
     /// What the kid may see, in the order the shelf wants them.
     public let items: [CatalogItem]
@@ -15,26 +11,10 @@ public struct LibraryResults: Sendable, Hashable {
     /// What the engine turned down, with its reason.
     public let blocked: [BlockedItem]
 
-    /// Whether the catalog answered at all.
-    ///
-    /// False means the rows were drawn from the copies stored at write time and
-    /// judged on bare identifiers with no rating and no lineage — a provisional
-    /// verdict, in the sense the whole codebase uses the word. Not shown to a
-    /// kid; the player's re-check is what makes it safe.
+    /// False: a provisional verdict from stored copies; the recheck makes it safe.
     public let isResolved: Bool
 
-    /// Rows this answer has not looked at yet.
-    ///
-    /// **Zero means finished, and that is the only claim it makes.** A read is
-    /// delivered a page at a time so the top of a long list can be on screen
-    /// while the rest is still coming, which means a caller can be handed an
-    /// answer that is complete as far as it goes and short of the whole. Without
-    /// this there is no way to tell that from a list that has genuinely ended —
-    /// and a playlist that stops at thirty of three hundred, with nothing saying
-    /// more is on its way, is the same lie as one that reads as empty.
-    ///
-    /// Always counted from the *end*: pages are settled as a prefix, so what is
-    /// pending is always the tail. See ``MergedLibrary``'s paged reads.
+    /// Rows not yet judged; zero means the read is complete, not merely paused.
     public let pending: Int
 
     public init(
@@ -52,12 +32,7 @@ public struct LibraryResults: Sendable, Hashable {
     public static let empty = LibraryResults(items: [], blocked: [], isResolved: true)
 }
 
-/// The write the policy engine refused.
-///
-/// A kid may only favorite, or add to a playlist, what they may currently play.
-/// This is what that refusal looks like to a caller — which is expected to log
-/// the block and say nothing to the kid, because the item was never on their
-/// screen in the first place.
+/// A kid may only keep what they may play; caller logs it, tells the kid nothing.
 public struct LibraryRefused: Error, Hashable, Sendable {
     public let item: CatalogItem
     public let reason: Reason
@@ -68,27 +43,12 @@ public struct LibraryRefused: Error, Hashable, Sendable {
     }
 }
 
-/// No provider was there to do the work.
-///
-/// Only reachable by breaking the invariant that our own store is always live —
-/// which is what makes every other failure in this file survivable. Kept as a
-/// real error rather than a crash because a store that will not open is a device
-/// problem, not a programming one.
+/// Reachable only if our own store fails to open — a device problem, not a crash.
 public struct LibraryUnavailable: Error, Hashable, Sendable {
     public init() {}
 }
 
-/// The kid's library, across every provider holding part of it.
-///
-/// **This is the only thing callers talk to.** No surface names a provider, asks
-/// which one something lives in, or learns that one of them failed. What a
-/// provider cannot do, another carries; what a provider does not have, another
-/// supplies; and if every provider but ours is gone, the shelf is still right,
-/// because ours is always live.
-///
-/// Rebuilt when the kid or their policy changes, the way `FilteredCatalog` is:
-/// the engine indexes a kid's lists once, and holding it here keeps every read
-/// on this screen judged by the same policy.
+/// The kid's library across every provider; callers never name one.
 @MainActor
 public final class MergedLibrary {
     private let providers: [any LibraryProvider]
@@ -110,43 +70,26 @@ public final class MergedLibrary {
 
     // MARK: - Which providers are live
 
-    /// `isSharedDevice` is the **only** input. False, the default: both. True:
-    /// CloudKit alone. There is no other gate and no derived trust state.
+    /// `isSharedDevice` alone: false is both providers, true is CloudKit only.
     private var liveProviders: [any LibraryProvider] {
         let isShared = device.state.isSharedDevice
         return providers.filter { $0.id == .cloudKit || !isShared }
     }
 
-    /// The live providers that may be **read from** on this pass.
-    ///
-    /// A second, narrower list rather than a condition folded into liveness,
-    /// because the two rules are about different moments. Liveness is
-    /// `isSharedDevice` and nothing else. This is the separate invariant that
-    /// the Apple provider's first read waits for onboarding to put the question
-    /// — a read is what adopts an unvetted library onto a child's shelf, and a
-    /// write is not.
+    /// Read-live providers, narrower still: a read waits on onboarding's ask.
     private var readableProviders: [any LibraryProvider] {
         let hasBeenAsked = device.state.hasBeenAsked
         return liveProviders.filter { $0.id == .cloudKit || hasBeenAsked }
     }
 
-    /// Providers that will be written to for this kind of favorite.
-    ///
-    /// A provider without the capability is skipped, not failed. An artist
-    /// favorite that Apple Music has no primitive for is still a favorite in our
-    /// records, and the kid sees no difference.
+    /// Providers written for this favorite; a missing capability skips it.
     private func writers(favoriting kind: ItemKind) -> [any LibraryProvider] {
         liveProviders.filter { $0.canFavorite(kind) }
     }
 
     // MARK: - Reading
 
-    /// Every favorite this kid may still see, most recent first.
-    ///
-    /// The shelf is built the way Recent is: resolved from stored identifiers in
-    /// one batched request and **filtered at render time**, never stored
-    /// pre-filtered. A parent may deny tomorrow what the kid favorited today —
-    /// the row survives, the tile does not.
+    /// Every favorite the kid may see, filtered at render time, not pre-filtered.
     public func favorites() async throws -> LibraryResults {
         let rows = await mergedFavoriteRows()
         return await judge(
@@ -154,25 +97,16 @@ public final class MergedLibrary {
         )
     }
 
-    /// Identifiers of everything favorited, unfiltered and unresolved.
-    ///
-    /// What the heart reads: a local set lookup against rows already in memory,
-    /// costing nothing and needing no request. Deliberately **not** policy
-    /// filtered — this answers "is this favorited", and a blocked item never
-    /// reaches a screen that could ask.
+    /// Unfiltered favorite IDs; a blocked item never reaches a screen to ask.
     public func favoriteIDs() async -> Set<CatalogID> {
         Set(await mergedFavoriteRows().map(\.catalogID))
     }
 
-    /// Every playlist, most recently touched first.
-    ///
-    /// Not filtered: a playlist is not a catalog item and the engine has no
-    /// opinion on one. Its *songs* are judged, when they are asked for.
+    /// Every playlist, unfiltered — the engine has no opinion on a playlist.
     public func playlists() async -> [PlaylistRow] {
         var merged: [UUID: PlaylistRow] = [:]
         for provider in readableProviders {
-            // A provider that throws contributes nothing to this pass and is not
-            // an error. There is nothing to tell a kid and nothing to retry.
+            // A provider that throws contributes nothing; nothing to retry.
             guard let rows = try? await provider.playlists() else { continue }
             for row in rows where merged[row.handle.local] == nil {
                 merged[row.handle.local] = row
@@ -185,23 +119,14 @@ public final class MergedLibrary {
         await playlists().first { $0.handle.local == handle.local }
     }
 
-    /// The songs in one playlist, in order, filtered.
-    ///
-    /// Order is the content, so this preserves it rather than sorting by
-    /// anything of its own. A blocked track is absent from `items` and present in
-    /// `blocked` — which is what the player skips over rather than stopping on.
+    /// Songs in order; a blocked track moves to `blocked`, for the player to skip.
     public func songs(in handle: PlaylistHandle) async throws -> LibraryResults {
         var latest = LibraryResults.empty
         for await snapshot in songsIncrementally(in: handle) { latest = snapshot }
         return latest
     }
 
-    /// The same playlist, delivered top-first as each page of it resolves.
-    ///
-    /// What a screen showing a long list should read. The first snapshot covers
-    /// the rows that are actually on screen; the rest arrive underneath. See
-    /// ``judged(_:)`` for the ordering guarantee, and
-    /// ``LibraryResults/pending`` for how a caller knows more is coming.
+    /// The same playlist, top-first as pages resolve — see ``judged(_:)``.
     public func songsIncrementally(
         in handle: PlaylistHandle
     ) -> AsyncStream<LibraryResults> {
@@ -222,23 +147,12 @@ public final class MergedLibrary {
         }
     }
 
-    /// Search the kid's own library.
-    ///
-    /// A local predicate over rows already in hand — favorites plus every
-    /// playlist entry, deduplicated. `MusicLibrarySearchRequest` is deliberately
-    /// **not** used: it searches the whole signed-in library rather than the
-    /// kid's own records, which is the door this feature is careful not to open.
-    ///
-    /// Reached from the shelf rather than from the main search field. A kid with
-    /// forty favorites does not need it; a kid with four hundred does, and that
-    /// kid exists a year in.
+    /// Searches only the kid's own records, never the whole signed-in library.
     public func searchLibrary(_ term: String) async throws -> LibraryResults {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .empty }
 
-        // Filter first, match second. Matching on the resolved item means the
-        // subtitle — the artist name — is searchable, which is most of what a kid
-        // types, and the copied `displayName` is only ever the title.
+        // Filter first, match second — the artist subtitle stays searchable too.
         let judged = await judge(await mergedRows())
         return LibraryResults(
             items: LibraryBrowse.filter(judged.items, by: trimmed),
@@ -249,36 +163,14 @@ public final class MergedLibrary {
 
     // MARK: - Reading, for the browser
 
-    /// The whole library, resolved and judged once, ready to be filtered.
-    ///
-    /// **The browser's only request.** Everything the four columns and their
-    /// drill-ins show is computed from this one value, which is what makes
-    /// filtering as a child types synchronous and tapping an artist instant.
-    ///
-    /// Three passes over the catalog at most, and usually one: the batch that
-    /// resolves the rows, the batch that names any ancestors the rows do not
-    /// already carry, and the write that records those names so the second batch
-    /// does not happen again. Steady state is the first alone.
+    /// The whole library, judged once; the browser's only request.
     public func contents() async -> LibraryContents {
         var latest = LibraryContents.empty
         for await snapshot in contentsIncrementally() { latest = snapshot }
         return latest
     }
 
-    /// The same library, delivered as each page of it resolves.
-    ///
-    /// The browser's four columns and every drill-in below them are computed
-    /// from one value, which is what makes filtering as a kid types synchronous
-    /// — and it is also why this one read was worth the wait for the whole
-    /// library before anything could be shown. In this family's store that is
-    /// 470 song identifiers.
-    ///
-    /// Two passes rather than one, and the second is why this is not simply
-    /// ``judged(_:)`` forwarded. The lineage top-up names albums and artists the
-    /// stored rows did not carry, and doing it per page would ask for the same
-    /// names over and over. So each page yields contents built from the lineage
-    /// already written down, and one final snapshot carries the top-up — which
-    /// is the same single naming request the batched version made.
+    /// The same library, paged; a final snapshot tops up lineage once.
     public func contentsIncrementally() -> AsyncStream<LibraryContents> {
         AsyncStream { continuation in
             let task = Task { @MainActor in
@@ -301,8 +193,7 @@ public final class MergedLibrary {
                     )
                 }
 
-                // Once, at the end. A page-by-page top-up would ask for the same
-                // artist's name as many times as they have songs in the library.
+                // Once, at the end — per-page would repeat the artist's name.
                 let ancestry = await toppedUpAncestry(for: stored, judged: latest)
                 continuation.yield(assemble(judged: latest, indexed: indexed, ancestry: ancestry))
                 continuation.finish()
@@ -311,11 +202,7 @@ public final class MergedLibrary {
         }
     }
 
-    /// The browser's value, built from one judgement and one lineage table.
-    ///
-    /// Split out of ``contents()`` when the read became progressive: it runs
-    /// once per page rather than once per read, so it must stay free of I/O.
-    /// Everything it needs is already in hand.
+    /// The browser's value; runs per page, so it must stay free of I/O.
     private func assemble(
         judged: LibraryResults,
         indexed: [LibraryIndexRow],
@@ -331,17 +218,12 @@ public final class MergedLibrary {
             case .song: songs.append(LibrarySong(item: item, ancestry: ancestry[item.id] ?? .none))
             case .album: favoritedAlbums.append(item)
             case .artist: favoritedArtists.append(item)
-            // Not reachable: a playlist is owned, never favorited, and never a
-            // playlist entry. Dropped rather than asserted on — an unreadable row
-            // costs a tile and costs safety nothing.
+            // Unreachable: a playlist is never favorited — dropped, not asserted.
             case .playlist: break
             }
         }
 
-        // The index comes second so that anything the kid kept **by hand** wins
-        // the duplicate. A song they hearted and that also arrived under its
-        // artist is one row, and it is the resolved one — which carries the
-        // catalog's rating rather than the copy taken when the walk ran.
+        // Index comes second so a hand-kept favorite wins the resolved rating.
         var indexedAlbums: [CatalogItem] = []
         for row in indexed where seen.insert(row.catalogID).inserted {
             switch engine.evaluate(row.policyItem) {
@@ -367,10 +249,7 @@ public final class MergedLibrary {
                 indexedAlbums,
                 LibraryBrowse.albums(from: songs)
             ),
-            // Neither the records a walk brought in nor the ones folded out of
-            // the tracks it brought with them. What is left is what the kid
-            // pointed at: a record they hearted, or one a song they hearted sits
-            // on.
+            // chosenAlbums: only what the kid pointed at directly.
             chosenAlbums: LibraryBrowse.merged(
                 favoritedAlbums,
                 LibraryBrowse.albums(from: songs.filter(\.isChosen))
@@ -380,13 +259,7 @@ public final class MergedLibrary {
         )
     }
 
-    /// Everything the index holds, from whichever provider keeps it.
-    ///
-    /// **Judged locally and never resolved.** This table is unbounded — one
-    /// hearted artist can be a thousand songs — and putting a thousand-item
-    /// request in front of the library would undo the whole reason the walk
-    /// happens at insert. Every row carries the rating and the lineage the
-    /// catalog gave at index time, which is everything a verdict needs.
+    /// Everything the index holds; judged from rating and lineage at index time.
     private func indexedRows() async -> [LibraryIndexRow] {
         for provider in readableProviders {
             guard let rows = try? await provider.indexed(), !rows.isEmpty else { continue }
@@ -397,21 +270,7 @@ public final class MergedLibrary {
 
     // MARK: - Walking down
 
-    /// Indexes everything underneath something the kid just kept.
-    ///
-    /// **Long, and deliberately not part of the write.** ``addFavorite(_:origin:)``
-    /// returns as soon as the heart is safe; this is what the caller starts
-    /// afterwards and does not wait for. An artist is fifty round trips and the
-    /// app stays usable throughout — each step is saved as it lands, so what is
-    /// already indexed is browsable while the rest arrives.
-    ///
-    /// Idempotent by identifier within a source, so a walk re-run after being
-    /// interrupted adds what is missing rather than duplicating what is there.
-    ///
-    /// Failure is silent on purpose. Nothing here is something the kid asked for
-    /// by name — they hearted an artist and that worked — so there is no message
-    /// to show and nothing for them to do about it. The next heart of the same
-    /// thing walks again.
+    /// Indexes underneath a kept item, started after the write returns.
     public func expand(_ item: CatalogItem) async {
         guard item.id.kind == .album || item.id.kind == .artist else { return }
 
@@ -424,10 +283,7 @@ public final class MergedLibrary {
         }
     }
 
-    /// Whether this favorite has already been walked by the current walk.
-    ///
-    /// What a caller checks before spending fifty requests re-deriving something
-    /// it already has.
+    /// Whether already walked, so a caller skips fifty redundant requests.
     public func isIndexed(_ id: CatalogID) async -> Bool {
         for provider in readableProviders where await provider.isIndexed(id) { return true }
         return false
@@ -435,23 +291,7 @@ public final class MergedLibrary {
 
     // MARK: - Reading, for the admin
 
-    /// The whole shelf, unfiltered, with today's verdict on every row.
-    ///
-    /// **The one read on this type that keeps what the engine turns down.**
-    /// Everywhere else in this file a blocked row is separated out so a screen
-    /// can drop it; here it stays in place with its verdict attached, because
-    /// the parent's report is the surface that exists to show it. There is no
-    /// variant of this method that filters.
-    ///
-    /// Resolution is best-effort and never a precondition for drawing. Offline,
-    /// every row still renders from the copies made at write time — and every
-    /// verdict that would have turned on a rating we do not hold comes back as
-    /// ``AncestryConfidence/unknown`` rather than as a confident block, because
-    /// a report full of "they can't play this any more" that is really "we did
-    /// not ask" is worse than a report that says less.
-    ///
-    /// Never reachable from a kid screen: see ``ProviderHealth``, which is
-    /// admin-facing by construction.
+    /// Unfiltered, verdicts attached — unresolved reads as unknown, not blocked.
     public func reviewed() async -> ReviewedLibrary {
         var health: [LibraryProviderID: ProviderHealth] = [:]
         let live = Set(liveProviders.map(\.id))
@@ -478,9 +318,7 @@ public final class MergedLibrary {
                     playlistRows[row.handle.local] = row
                 }
             } catch {
-                // The kid's side swallows this; the admin is told. A short shelf
-                // and a broken read look identical and only one is about the
-                // child.
+                // Swallowed for the kid — a short shelf looks like a broken read.
                 health[provider.id] = .failed(String(describing: error))
             }
         }
@@ -488,8 +326,7 @@ public final class MergedLibrary {
         let favorites = favoriteRows.values.sorted { $0.favoritedAt > $1.favoritedAt }
         let playlists = playlistRows.values.sorted { $0.modifiedAt > $1.modifiedAt }
 
-        // One batch for everything on the screen, favorites and playlist entries
-        // together — lineage before judgement, as everywhere else.
+        // One batch for favorites and playlist entries — lineage before judgement.
         var wanted: [CatalogID] = favorites.map(\.catalogID)
         var seen = Set(wanted)
         for playlist in playlists {
@@ -525,12 +362,7 @@ public final class MergedLibrary {
         )
     }
 
-    /// Judges one stored row on whatever the catalog gave back for it.
-    ///
-    /// A row that resolved carries a real rating and real lineage, so its
-    /// verdict is exact. One that did not carries neither — and a library row,
-    /// unlike an event row, has no rating column to fall back on, which is the
-    /// whole reason ``AncestryConfidence/unknown`` exists.
+    /// Judges a row on what came back; a library row has no rating fallback.
     private func annotate<Row: Sendable>(
         _ row: Row,
         _ id: CatalogID,
@@ -560,25 +392,14 @@ public final class MergedLibrary {
 
     // MARK: - Writing
 
-    /// Marks one item, in every live provider that has a primitive for its kind.
-    ///
-    /// **Asks the engine first and refuses a blocked item.** A favorite is not a
-    /// permission and never becomes one; what a kid may keep is a subset of what
-    /// they may play, decided by the same authority.
-    ///
-    /// Our own store is awaited and its failure is surfaced. Every other provider
-    /// is fire-and-forget and its failure is dropped: the item lives in CloudKit,
-    /// the union puts it on the shelf anyway, and the only cost is that it is not
-    /// in the kid's Apple Music library.
+    /// A favorite is never a permission: only what a kid may currently play.
     public func addFavorite(_ item: CatalogItem, origin: LibraryOrigin = .kid) async throws {
         let resolved = try await withAncestry(item)
         if case .blocked(let reason) = engine.evaluate(resolved.policyItem) {
             throw LibraryRefused(item: resolved, reason: reason)
         }
 
-        // Named here rather than on the way back out: this is the one moment the
-        // kid is waiting on a network call anyway, and doing it now is what keeps
-        // it out of every subsequent library open.
+        // Named now, while the kid already waits on a call — no later open pays.
         let lineage = await ancestry(for: resolved)
 
         for provider in writers(favoriting: item.id.kind) {
@@ -594,24 +415,14 @@ public final class MergedLibrary {
         }
     }
 
-    /// Unmarking is never refused.
-    ///
-    /// The engine is not asked, and deliberately: a kid taking something off
-    /// their own shelf is not reaching for anything, and refusing it would strand
-    /// a favorite the parent has since denied on a screen where it cannot be
-    /// removed.
+    /// Unmarking is never refused — it would strand a since-denied favorite.
     public func removeFavorite(_ id: CatalogID) async throws {
         for provider in liveProviders where provider.canFavorite(id.kind) {
             try await write(to: provider) { try await $0.removeFavorite(id) }
         }
     }
 
-    /// Makes a playlist out of whatever survives the engine.
-    ///
-    /// Blocked songs are dropped rather than refused — a kid selecting six songs
-    /// where one has been denied since should get a playlist of five, not an
-    /// error. If **nothing** survives there is no playlist to make, and that is
-    /// the one refusal.
+    /// Makes a playlist from what survives; blocked songs drop, not refuse.
     @discardableResult
     public func createPlaylist(named name: String, songs: [CatalogItem] = []) async throws
         -> PlaylistRow
@@ -625,9 +436,7 @@ public final class MergedLibrary {
         for provider in liveProviders where provider.capabilities.contains(.createPlaylists) {
             try await write(to: provider) {
                 let row = try await $0.createPlaylist(named: name, songs: allowed)
-                // Ours is the one whose handle callers keep: `local` is stable and
-                // survives everything, and a provider that failed has no handle
-                // to offer.
+                // Ours is the handle callers keep: `local` is stable and survives.
                 if $0.id == .cloudKit { created = row }
             }
         }
@@ -636,9 +445,7 @@ public final class MergedLibrary {
         return created
     }
 
-    /// **Playlist entries are always songs.** An album or an artist is silently
-    /// not added rather than refused: what would play is ambiguous, the player
-    /// queues songs, and no screen offers the gesture in the first place.
+    /// Playlist entries are always songs; an album or artist is silently skipped.
     public func addToPlaylist(_ handle: PlaylistHandle, song: CatalogItem) async throws {
         guard song.id.kind == .song else { return }
 
@@ -669,20 +476,7 @@ public final class MergedLibrary {
 
     // MARK: - Applying a write
 
-    /// Runs one edit on every provider entitled to make it.
-    ///
-    /// **An edit is never attempted on a playlist we did not create.** MusicKit
-    /// refuses one and exposes no way to ask which those are, so `appleIsOurs` —
-    /// written at creation, never inferred — is what decides.
-    ///
-    /// Expressed through ``LibraryCapabilities/editForeignPlaylists`` rather
-    /// than by naming MusicKit here. The rule belongs to that provider, and the
-    /// provider declares it; a store that hard-coded it would make the flag dead
-    /// and would cripple any future provider that genuinely can edit anything.
-    ///
-    /// A playlist that fails this test still shows and still plays; our copy is
-    /// edited and Apple's is not, which is stated to the parent in the admin and
-    /// never to the kid.
+    /// Never edits a playlist we did not create — `appleIsOurs` decides.
     private func edit(
         _ handle: PlaylistHandle,
         _ body: (any LibraryProvider) async throws -> Void
@@ -703,12 +497,7 @@ public final class MergedLibrary {
         return provider.capabilities.contains(.editForeignPlaylists)
     }
 
-    /// **Our store is awaited and surfaced; every other provider is dropped.**
-    ///
-    /// A heart must not fill on a write that did not land, and a copy that did
-    /// not reach Apple must never block the kid. There is no retry and no queue:
-    /// the divergence that leaves is real, known, and made invisible where it
-    /// matters by the read being a union.
+    /// Our store is awaited; other providers are dropped, the union hides the gap.
     private func write(
         to provider: any LibraryProvider,
         _ body: (any LibraryProvider) async throws -> Void
@@ -722,17 +511,7 @@ public final class MergedLibrary {
 
     // MARK: - Merging and judging
 
-    /// Every provider's favorites, unioned by identifier, most recent first.
-    ///
-    /// A union, and **CloudKit only ever expands it**: nothing here prunes what
-    /// another provider returned, contradicts it, or writes back into it. An item
-    /// in our store and absent from Apple Music simply appears — which is why a
-    /// failed Apple write costs the kid nothing visible.
-    ///
-    /// What Stage 3 adds here, and deliberately not yet: resolving Apple rows
-    /// from library identifiers to catalog ones by ISRC and UPC, dropping
-    /// whatever will not resolve, and adopting anything absent from our store as
-    /// an `appleLibrary` row so it survives the provider going away.
+    /// Favorites unioned by id — a failed Apple write costs nothing visible.
     private func mergedFavoriteRows() async -> [FavoriteRow] {
         var merged: [CatalogID: FavoriteRow] = [:]
         for provider in readableProviders {
@@ -750,25 +529,16 @@ public final class MergedLibrary {
         let name: String
         let artworkURL: URL?
 
-        /// Copied at write time like the other two, and for the same reason: the
-        /// artist and album columns are folded from it without a request. See
-        /// ``LibraryAncestry``.
+        /// Copied at write time so artist and album columns fold with no request.
         var ancestry: LibraryAncestry = .none
 
-        /// The copy made at write time. What a shelf draws when the catalog is
-        /// not reachable — `displayName` and `artworkURL` are copied for exactly
-        /// this, so a list renders offline.
+        /// Write-time copy; what a shelf draws when the catalog can't answer.
         var fallback: CatalogItem {
             CatalogItem(id: id, title: name, artworkURL: artworkURL)
         }
     }
 
-    /// Every row in the library, favorites and playlist entries together, deduped.
-    ///
-    /// The union ``searchLibrary(_:)`` was already building, lifted out because
-    /// the browser needs the same one. Favorites lead, so the fold's
-    /// first-one-wins keeps a container's artwork from the most recently hearted
-    /// song on it.
+    /// Every library row deduped; favorites first, so their artwork wins.
     private func mergedRows() async -> [Stored] {
         var stored: [Stored] = []
         var seen: Set<CatalogID> = []
@@ -797,54 +567,15 @@ public final class MergedLibrary {
         return stored
     }
 
-    /// Resolves stored rows against the catalog and applies the kid's policy.
-    ///
-    /// Order is the caller's throughout — a shelf is most-recent-first and a
-    /// playlist is in the order the kid put it in, and neither survives being
-    /// reshuffled by whatever came back from a batch request.
-    ///
-    /// **A catalog that will not answer does not empty the shelf.** The rows are
-    /// judged on their bare identifiers instead, which is the same provisional
-    /// verdict the rest of the app computes on unresolved ancestry: a deny still
-    /// bites, `allowOnly` still fails closed, and only the rating check — the one
-    /// thing that genuinely needs the catalog — cannot run. The player asks again
-    /// immediately before playback, which is what makes that safe rather than
-    /// merely convenient.
+    /// Resolves and judges rows; an unreachable catalog judges bare identifiers.
     private func judge(_ stored: [Stored]) async -> LibraryResults {
-        // The last snapshot of the paged read, so the batched answer and the
-        // progressive one cannot drift — the same trick ``FilteredCatalog``
-        // plays with its two searches, and for the same reason.
+        // Last snapshot of the paged read, so batched and progressive can't drift.
         var latest = LibraryResults.empty
         for await snapshot in judged(stored) { latest = snapshot }
         return latest
     }
 
-    /// The same judgement, delivered a page at a time, top first.
-    ///
-    /// **Three hundred identifiers in one request is a screen that shows nothing
-    /// until all of them are back.** The kid is looking at the first ten. So the
-    /// rows are split into pages of ``CatalogFetchLimit/pageSize``, and a
-    /// snapshot goes out every time one lands.
-    ///
-    /// Every element is a **complete answer over a prefix**, not a delta: the
-    /// rows settled so far, in the caller's order, with
-    /// ``LibraryResults/pending`` counting the tail still out. A caller replaces
-    /// its state with each element and never accumulates.
-    ///
-    /// **Only ever a prefix, which is the whole point of the ordering.** Pages
-    /// are started in order and ``CatalogFetchLimit/inFlight`` of them run at
-    /// once, so they can land out of order — page three before page two happens
-    /// routinely. Publishing a snapshot with the gap filled in from below would
-    /// make a list a reader is looking at reorder under them. So a page that
-    /// arrives early waits, and the visible list only ever grows downward.
-    ///
-    /// A page whose request fails is judged on bare identifiers exactly as the
-    /// whole read used to be, and drops `isResolved` for every snapshot after
-    /// it. One page failing does not abandon the others: the tail of a long
-    /// playlist going missing should not empty the top of it.
-    ///
-    /// Cancellation propagates — dropping the stream cancels the requests still
-    /// out, which matters because a kid leaves a screen while it is filling.
+    /// Paged, top first, a growing prefix — an early page waits, never reorders.
     private func judged(_ stored: [Stored]) -> AsyncStream<LibraryResults> {
         AsyncStream { continuation in
             guard !stored.isEmpty else {
@@ -881,9 +612,7 @@ public final class MergedLibrary {
                         }
                         start()
 
-                        // Advance the settled prefix as far as it will go, which
-                        // may be nowhere: a page that landed early sits until the
-                        // ones above it have.
+                        // Advances the settled prefix — maybe nowhere yet.
                         var grew = false
                         while settled < pages.count, arrived[settled] {
                             judgedRows += pages[settled].count
@@ -909,14 +638,7 @@ public final class MergedLibrary {
         }
     }
 
-    /// One page: the lookup, then the lineage it did not already carry.
-    ///
-    /// `nil` rather than a throw, because a failed page is survivable and the
-    /// caller has to keep going for the others. Lineage before judgement, as
-    /// everywhere else — a song cannot be judged against a denied artist without
-    /// knowing who its artist is. In practice the second call is free: the song
-    /// lookup already asks for `.albums` and `.artists`, and `resolveAncestry`
-    /// skips anything that arrived with ancestry attached.
+    /// One page: lookup then lineage; `nil`, not a throw, so failure isn't fatal.
     private func resolvePage(_ page: [Stored]) async -> [CatalogItem]? {
         do {
             let items = try await catalog.items(for: page.map(\.id))
@@ -926,11 +648,7 @@ public final class MergedLibrary {
         }
     }
 
-    /// The engine's answer for every row, in the caller's order.
-    ///
-    /// Static and pure so the paging above it has nothing to get wrong: given
-    /// the same rows and the same resolutions it is the same answer, whether it
-    /// was reached in one request or eleven.
+    /// The engine's answer per row; static and pure, so paging can't change it.
     private static func verdicts(
         over stored: [Stored],
         resolved: [CatalogID: CatalogItem],
@@ -941,9 +659,7 @@ public final class MergedLibrary {
         var allowed: [CatalogItem] = []
         var blocked: [BlockedItem] = []
         for row in stored {
-            // A resolved item that came back is judged on everything it knows.
-            // One that did not — delisted, or its page failed — is judged on its
-            // identifier alone.
+            // A resolved item is judged fully; one that isn't, by id alone.
             let item = resolved[row.id] ?? row.fallback
             switch engine.evaluate(item.policyItem) {
             case .allowed:
@@ -957,10 +673,7 @@ public final class MergedLibrary {
         )
     }
 
-    /// Everything in this batch the kid may currently play, lineage named.
-    ///
-    /// One naming request for the whole playlist rather than one per song — the
-    /// same batch-before-judge shape everything else in this file keeps.
+    /// What the kid may play in this batch; one naming request, not per song.
     private func allowedSongs(_ songs: [CatalogItem]) async throws -> [LibrarySong] {
         guard !songs.isEmpty else { return [] }
         let resolved = try await catalog.resolveAncestry(for: songs)
@@ -980,13 +693,7 @@ public final class MergedLibrary {
         }
     }
 
-    /// Lineage for one item, if it arrived without any.
-    ///
-    /// A tile from a search result carries none, and the engine cannot see a
-    /// denied artist through a song that does not know who its artist is. A
-    /// lookup that fails leaves the item as it came: the verdict is then
-    /// provisional, which for a *write* means a deny may fail open — and the
-    /// render-time filter catches it on the way back out.
+    /// Lineage for an item with none; a failed lookup lets a deny fail open.
     private func withAncestry(_ item: CatalogItem) async throws -> CatalogItem {
         guard item.ancestors.isEmpty else { return item }
         guard let resolved = try? await catalog.resolveAncestry(for: [item]).first else {
@@ -997,31 +704,14 @@ public final class MergedLibrary {
 
     // MARK: - Naming lineage
 
-    /// The lineage to write down beside an item, names and all.
-    ///
-    /// `Ancestor` carries `{id, rating}` and no title, so naming the parents is a
-    /// second lookup — one that happens **here, at the moment the kid keeps
-    /// something**, rather than every time they open their library. That is the
-    /// whole trade ``LibraryAncestry`` exists to make.
-    ///
-    /// A failure returns nothing and the write still happens. A heart must not
-    /// fail because the network did; ``toppedUpAncestry(for:judged:)`` fills the
-    /// gap on a later read.
+    /// Names lineage once, at the keep; a failed lookup still lets it land.
     private func ancestry(for item: CatalogItem) async -> LibraryAncestry {
         let ids = item.ancestors.map(\.id).filter { $0.kind == .album || $0.kind == .artist }
         guard !ids.isEmpty else { return .none }
         return Self.ancestry(from: ids, naming: await named(ids))
     }
 
-    /// Lineage for every row on this pass, topping up whatever has none.
-    ///
-    /// **Only rows the catalog answered for are candidates.** An artist favorite
-    /// has no ancestors and must never look like a row waiting to be filled, or
-    /// every read would ask about it again forever.
-    ///
-    /// The write back is deliberately not the kid's: it carries no new fact about
-    /// them, so a provider that cannot store it declines by default and one that
-    /// fails is simply asked again next time.
+    /// Tops up missing lineage; an artist favorite must never look unfilled.
     private func toppedUpAncestry(
         for stored: [Stored],
         judged: LibraryResults
@@ -1063,17 +753,7 @@ public final class MergedLibrary {
         return Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// **An identifier is only recorded together with its name.**
-    ///
-    /// A lineage of bare identifiers would satisfy ``LibraryAncestry/isEmpty`` and
-    /// so never be topped up again, while the fold — which needs a name to draw a
-    /// row — would skip it. The column would be permanently short and nothing
-    /// would ever try to fix it.
-    ///
-    /// Nearest first, so the first album and the first artist win. That is the
-    /// order `resolveAncestry` builds and the order the engine reads for
-    /// ``UnratedBehavior/inheritFromAncestor``; relying on kind rather than
-    /// position keeps this correct if that ever changes.
+    /// An identifier is recorded only with its name, or it's never topped up.
     private static func ancestry(
         from ids: [CatalogID],
         naming names: [CatalogID: CatalogItem]

@@ -23,18 +23,13 @@ struct BrowsingTheLibrary {
         #expect(contents.artists.map(\.title) == ["Café Band"])
     }
 
-    /// Level 3, for the reason `Offline.provisionalVerdictsCutBothWays` spells
-    /// out: an unresolved row carries no rating, so at level 2 the engine blocks
-    /// it before the fold ever sees it. What is under test here is that the fold
-    /// itself needs no catalog — not the rating rule, which is older than this
-    /// feature and unchanged by it.
+    /// Tests the fold needs no catalog — not the rating rule, which predates this.
     @Test("Lineage is written at insert, so the columns need no catalog to draw")
     func columnsDrawOffline() async throws {
         let harness = try Harness(mode: .reportOnly)
         try await harness.library.addFavorite(Fix.item(Fix.clean))
 
-        // Everything the columns need was copied onto the row when the kid
-        // hearted it. This is the whole point of storing it there.
+        // Everything the columns need was copied onto the row at heart time.
         harness.catalog.isFailing = true
 
         let contents = await harness.library.contents()
@@ -68,8 +63,7 @@ struct BrowsingTheLibrary {
 
         let contents = await harness.library.contents()
         #expect(contents.songs.isEmpty)
-        // The kid kept the record itself. Nothing about removing a song from
-        // their library asks for that to go.
+        // The kid kept the record itself; unhearting a song doesn't touch that.
         #expect(contents.albums.map(\.title) == ["The Record"])
     }
 
@@ -119,8 +113,7 @@ struct BrowsingTheLibrary {
         let contents = await harness.library.contents()
         // "Antics" before "The Record", which files under R.
         #expect(contents.albums.map(\.title) == ["Antics", "The Record"])
-        // "Café Band" under C, "The Duo" under D — and the accent is not what
-        // decides, which is the point of folding the key.
+        // "Café Band" under C, "The Duo" under D — the accent doesn't decide.
         #expect(contents.artists.map(\.title) == ["Café Band", "The Duo"])
     }
 
@@ -179,8 +172,7 @@ struct TheBrowserObeysTheEngine {
 
         let contents = await harness.library.contents()
         #expect(contents.songs.isEmpty)
-        // The fold runs over survivors, so nothing is left to fold from — which
-        // is also why a synthesised container is never judged on its own.
+        // Fold runs over survivors; nothing's left once the song is gone.
         #expect(contents.albums.isEmpty)
         #expect(contents.artists.isEmpty)
     }
@@ -194,9 +186,7 @@ struct TheBrowserObeysTheEngine {
         try await harness.library.addFavorite(Fix.item(Fix.clean))
 
         let contents = await harness.library.contents()
-        // The album is not on the allow list and is not being reached: it is a
-        // folder over a song the parent did allow. Judging the folded row would
-        // have hidden the one thing this kid can play.
+        // Album isn't on the allow list — it's a folder over a song that is.
         #expect(contents.songs.map(\.id) == [Fix.clean])
         #expect(contents.albums.map(\.title) == ["The Record"])
     }
@@ -207,8 +197,7 @@ struct TheBrowserObeysTheEngine {
 @Suite("Rows written before lineage was stored")
 @MainActor
 struct TopUp {
-    /// A favorite written straight to the store, the way one already on disk
-    /// looks: name and artwork copied, no lineage at all.
+    /// A favorite written straight to the store — name and artwork, no lineage.
     private func writeBareRow(_ harness: Harness, _ id: CatalogID) throws {
         harness.kid.addFavorite(id: id, displayName: "Sunshine", at: Fix.t0)
         try harness.context.save()
@@ -248,8 +237,7 @@ struct TopUp {
 
         let contents = await harness.library.contents()
         #expect(contents.artists.map(\.title) == ["Café Band"])
-        // An artist has no ancestors. If that read as "not topped up yet" the
-        // catalog would be asked about it again on every single open.
+        // An artist has no ancestors; reading that as unfilled would ask forever.
         #expect(harness.kid.favorites.first?.ancestry.isEmpty == true)
     }
 
@@ -297,8 +285,7 @@ struct CapturingLineage {
     @Test("A heart still fills when the catalog cannot name the lineage")
     func writeSurvivesAFailedNaming() async throws {
         let harness = try Harness()
-        // Lineage is on the item already, so judging succeeds; naming it is the
-        // part that needs the network, and the heart must not wait on that.
+        // Lineage's already there; naming needs the net, hearting doesn't wait.
         let item = Fix.item(Fix.clean)
         harness.catalog.isFailing = true
 

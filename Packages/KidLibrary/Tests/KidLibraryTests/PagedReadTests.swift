@@ -7,8 +7,7 @@ import PolicyEngine
 
 @testable import KidLibrary
 
-/// A playlist long enough that the paging matters, built through the provider
-/// rather than the library so the setup is not itself three hundred judgements.
+/// A playlist long enough that paging matters, built without judging 300 rows.
 @MainActor
 private func longPlaylist(_ harness: Harness, count: Int) async throws -> PlaylistHandle {
     let songs = (0..<count).map {
@@ -17,9 +16,7 @@ private func longPlaylist(_ harness: Harness, count: Int) async throws -> Playli
     return try await harness.cloudKit.createPlaylist(named: "Long", songs: songs).handle
 }
 
-/// **The size of a request was invisible to every double in this package**, and
-/// a whole playlist's worth of songs rode in on that. These are the assertions
-/// that were not possible before `StubCatalog` recorded what it was asked for.
+/// Request size was invisible to every double — these needed `StubCatalog`.
 @Suite("Reading a long list a page at a time")
 @MainActor
 struct PagedReads {
@@ -36,9 +33,7 @@ struct PagedReads {
         #expect(sizes.reduce(0, +) == 316, "every row was asked for exactly once")
     }
 
-    /// The ceiling that started all of this. A page size below every cap in the
-    /// table means no read can breach one however long the list is — this is
-    /// that claim, made against the requests rather than against the arithmetic.
+    /// A page size below every cap means no read can breach one, however long.
     @Test("No request ever approaches Apple's cap")
     func noRequestNearsTheCap() async throws {
         let harness = try Harness()
@@ -64,10 +59,7 @@ struct PagedReads {
         #expect(harness.catalog.itemRequestSizes == [12])
     }
 
-    /// **The ordering guarantee, which is the reason to page at all.** Pages run
-    /// concurrently and land out of order; what a screen is shown must not. Every
-    /// snapshot has to be a prefix of the final list — never a longer list with a
-    /// hole in it, and never a reordering of what was already drawn.
+    /// Pages land out of order, but every snapshot must still be a prefix.
     @Test("Every snapshot is a prefix of the one after it")
     func snapshotsOnlyGrowDownward() async throws {
         let harness = try Harness()
@@ -105,8 +97,7 @@ struct PagedReads {
         #expect(opening.items.last?.id == Fix.bulk(CatalogFetchLimit.pageSize - 1))
     }
 
-    /// Zero has to mean finished and nothing else, or a list that stops short is
-    /// indistinguishable from one that ended.
+    /// Zero must mean finished, or a short stop looks like the end.
     @Test("Pending counts the tail, and reaches zero exactly once at the end")
     func pendingCountsTheTail() async throws {
         let harness = try Harness()
@@ -123,9 +114,7 @@ struct PagedReads {
         #expect(pendings == pendings.sorted(by: >), "pending only ever falls")
     }
 
-    /// **A page failing must not empty the ones above it.** The old read was one
-    /// request, so a failure took the whole list; now the tail of a long playlist
-    /// going missing has to leave the top of it on screen.
+    /// A failed page mustn't empty pages above it, unlike the old one request.
     @Test("One page failing keeps the rest of the list")
     func oneFailedPageKeepsTheRest() async throws {
         let harness = try Harness()
@@ -139,18 +128,12 @@ struct PagedReads {
         #expect(results.items.count == 300, "the ten pages that answered are still here")
         #expect(results.items.first?.id == Fix.bulk(0))
         #expect(results.pending == 0, "finished, even though one page failed")
-        // The sixteen that did not resolve are blocked rather than dropped, and
-        // blocked as *unrated* — which is the same verdict the whole read used to
-        // collapse to when the single request failed. The difference is that it
-        // is now sixteen rows instead of three hundred and sixteen.
+        // The sixteen that didn't resolve are blocked as unrated, not dropped.
         #expect(results.blocked.count == 16)
         #expect(results.blocked.allSatisfy { $0.reason == .unrated })
     }
 
-    /// The batched read is the last snapshot of the paged one, by construction.
-    /// Asserted rather than assumed, because the day they diverge is the day a
-    /// caller that awaits the whole list sees something different from the screen
-    /// beside it.
+    /// Batched must equal the paged read's last snapshot, or two callers disagree.
     @Test("The batched answer is the paged one's last snapshot")
     func batchedMatchesPaged() async throws {
         let harness = try Harness()
@@ -165,8 +148,7 @@ struct PagedReads {
         #expect(batched.isResolved == last.isResolved)
     }
 
-    /// The browser reads every favorite and every playlist entry as one value,
-    /// which in the store this was written against is 470 song identifiers.
+    /// The browser reads every favorite and entry as one value — 470 ids here.
     @Test("The library browser pages too, and its last snapshot is the whole library")
     func browserPagesAsWell() async throws {
         let harness = try Harness()
@@ -180,8 +162,7 @@ struct PagedReads {
         #expect(snapshots.count > 1)
         #expect(harness.catalog.itemRequestSizes.allSatisfy { $0 <= CatalogFetchLimit.pageSize })
         #expect(snapshots.last?.songs.count == 316)
-        // Growing downward here as well: a column being filtered as a kid types
-        // must not reorder under them either.
+        // Grows downward here too — filtering as a kid types must not reorder it.
         for (earlier, later) in zip(snapshots, snapshots.dropFirst()) {
             #expect(later.songs.count >= earlier.songs.count)
         }

@@ -3,29 +3,16 @@ import FamilyStore
 import Foundation
 import PolicyEngine
 
-/// Which store something lives in.
-///
-/// Callers never name one of these. It exists so ``MergedLibrary`` can decide
-/// which providers are live and which write is awaited — nothing above the seam
-/// asks where a favorite came from.
+/// Which store something lives in; only `MergedLibrary` ever asks.
 public enum LibraryProviderID: String, Sendable, Hashable, CaseIterable {
-    /// Ours. **Always live**, which is what makes the feature complete with
-    /// Apple Music absent.
+    /// Ours, always live — the feature works with Apple Music absent.
     case cloudKit
 
-    /// The account's real Apple Music library. Live when `isSharedDevice` is
-    /// false, which is the default.
+    /// The real library; live when `isSharedDevice` is false, the default.
     case appleMusic
 }
 
-/// What a provider can actually do.
-///
-/// **Absence is not failure** — it is a provider sitting one operation out while
-/// the others carry it. Two of the gaps are Apple's and permanent: an artist has
-/// no "add to library" form, and MusicKit edits only playlists this app created.
-///
-/// Nothing about any of this is ever shown to a kid. A capability gap is
-/// admin-facing, and the shelf reads identically whichever flags came back.
+/// What a provider can do; absence isn't failure, just sitting one out.
 public struct LibraryCapabilities: OptionSet, Sendable, Hashable {
     public let rawValue: Int
 
@@ -40,18 +27,13 @@ public struct LibraryCapabilities: OptionSet, Sendable, Hashable {
     public static let editOwnPlaylists = LibraryCapabilities(rawValue: 1 << 4)
     public static let editForeignPlaylists = LibraryCapabilities(rawValue: 1 << 5)
 
-    /// Everything. What our own store can do, and the yardstick the Apple
-    /// provider will be measured against once it exists.
+    /// Everything our store can do — the bar the Apple provider must meet.
     public static let all: LibraryCapabilities = [
         .favoriteSongs, .favoriteAlbums, .favoriteArtists,
         .createPlaylists, .editOwnPlaylists, .editForeignPlaylists,
     ]
 
-    /// The flag that governs favoriting one kind of thing.
-    ///
-    /// One kid-facing verb, a different Apple primitive per kind: a song or
-    /// album is *added to the library*, an artist has no library form at all.
-    /// Returns `nil` for a playlist, which is not favoritable — it is owned.
+    /// The flag for one favorite kind; nil for a playlist, which is owned.
     public static func favoriting(_ kind: ItemKind) -> LibraryCapabilities? {
         switch kind {
         case .song: .favoriteSongs
@@ -62,15 +44,7 @@ public struct LibraryCapabilities: OptionSet, Sendable, Hashable {
     }
 }
 
-/// The kid's library, whatever is actually holding it.
-///
-/// Callers never ask which provider something lives in; they ask
-/// ``MergedLibrary``. This protocol exists so that the CloudKit store and the
-/// Apple Music library are the same shape to everything above them — and so the
-/// whole feature can be tested against stubs with no network and no device.
-///
-/// Every method may be declined rather than performed: see
-/// ``LibraryCapabilities``. A provider that lacks a capability is never asked.
+/// The kid's library; callers never ask which provider, only `MergedLibrary`.
 public protocol LibraryProvider: Sendable {
     var id: LibraryProviderID { get }
     var capabilities: LibraryCapabilities { get }
@@ -85,22 +59,11 @@ public protocol LibraryProvider: Sendable {
     ) async throws
     func removeFavorite(_ id: CatalogID) async throws
 
-    /// Records lineage for rows that were written without it.
-    ///
-    /// Separate from every other write because it is not something the kid did:
-    /// it is a row catching up. Defaulted to a no-op, because a provider may have
-    /// nowhere to put this — MusicKit's library has no field for it — and a
-    /// provider that cannot store lineage is not a broken provider, it is one
-    /// whose rows get folded from whatever ``MergedLibrary`` resolves on the pass.
+    /// Lineage for rows without it; a no-op if a provider has no field for it.
     func recordAncestry(_ ancestry: [CatalogID: LibraryAncestry]) async throws
 
     // MARK: - The library index
-    //
-    // Defaulted to nothing, because this is **our** projection and not a thing
-    // any other provider holds. Apple Music has nowhere to put "these four
-    // hundred tracks are here because a child kept the artist", and asking it to
-    // would mean writing four hundred rows into a real person's music library.
-    // The CloudKit provider implements these; everything else declines.
+        // Defaulted to nothing — our projection, not something Apple Music holds.
 
     /// Everything the index holds for this kid.
     func indexed() async throws -> [LibraryIndexRow]
@@ -119,12 +82,7 @@ public protocol LibraryProvider: Sendable {
     func addToPlaylist(_ handle: PlaylistHandle, song: LibrarySong) async throws
     func removeFromPlaylist(_ handle: PlaylistHandle, song: CatalogID) async throws
 
-    /// Reorders a playlist to exactly this sequence.
-    ///
-    /// Not in the spec's method list, which names create, add, remove, rename
-    /// and delete — but the stage that ships those ships drag-to-reorder too,
-    /// and expressing a drag as a remove and an add would lose `addedAt` and
-    /// make one gesture two writes.
+    /// Reorders to this sequence; a drag as remove-then-add would lose `addedAt`.
     func reorderPlaylist(_ handle: PlaylistHandle, to order: [CatalogID]) async throws
     func renamePlaylist(_ handle: PlaylistHandle, to name: String) async throws
     func deletePlaylist(_ handle: PlaylistHandle) async throws

@@ -16,10 +16,7 @@ enum Fix {
     static let unrated = CatalogID(.song, "song-unrated")
     static let other = CatalogID(.song, "song-other")
 
-    // A second act, so the fold has two of everything to keep apart. Named to
-    // sort before the first once its article is dropped — "The Record" files
-    // under R and "Antics" under A — which is what makes the ordering tests
-    // about the sort key rather than about insertion order.
+    // Second act so the fold has two to keep apart; sorts first alphabetically.
     static let duo = CatalogID(.artist, "artist-duo")
     static let sophomore = CatalogID(.album, "album-sophomore")
     static let ballad = CatalogID(.song, "song-ballad")
@@ -54,14 +51,7 @@ enum Fix {
         song(encore, "Applause", rating: .clean, track: 2, on: sophomore, by: duo, named: "The Duo"),
     ]
 
-    /// An identifier for one of arbitrarily many interchangeable clean songs.
-    ///
-    /// **A three-hundred-entry playlist cannot be written out by hand**, and it
-    /// is exactly the length the paging exists for — the bug it was written
-    /// after needed 316 rows to appear at all. What these tests assert is sizes
-    /// and ordering, not anything about a particular song, so the rows are
-    /// generated and numbered: `bulk(7)` is the eighth of them and stays the
-    /// eighth, which is what makes "the top arrived first" a testable claim.
+    /// Songs generated and numbered so bulk(7) stays the eighth.
     static func bulk(_ index: Int) -> CatalogID { CatalogID(.song, "song-bulk-\(index)") }
 
     /// The item behind ``bulk(_:)``, minted on demand rather than listed.
@@ -114,10 +104,7 @@ enum Fix {
 
 // MARK: - A catalog that answers, or does not
 
-/// Serves ``Fix/catalog`` and can be told to stop answering.
-///
-/// The failing mode is not decoration: a shelf is built from stored identifiers,
-/// and what it does when the network is gone is a real branch with a real rule.
+/// Serves Fix.catalog and can be told to stop — offline is a real branch here.
 final class StubCatalog: CatalogSource, @unchecked Sendable {
     struct Down: Error {}
 
@@ -148,18 +135,11 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
         return Fix.catalog.first { $0.id == id } ?? Fix.bulkItem(id)
     }
 
-    /// The size of every batch lookup, in the order the requests were made.
-    ///
-    /// **The one thing no double in this repo could see, and the bug rode in on
-    /// it.** A three-hundred-song playlist was sent as one request, one over
-    /// Apple's cap, and nothing in any test could tell that from three hundred
-    /// requests or from eleven. Recorded as sizes rather than counts because the
-    /// question is now "how big was each one", not "how many were there".
+    /// Batch sizes, in order — the bug no double could see: one 300-song request.
     private var itemRequests: [Int] = []
     var itemRequestSizes: [Int] { lock.withLock { itemRequests } }
 
-    /// Identifiers whose *page* fails — one batch of a long read going down
-    /// while the rest of it lands.
+    /// Identifiers whose page fails — one batch of a long read going down.
     private var failingIDs: Set<CatalogID> = []
 
     func failLookup(of id: CatalogID) {
@@ -176,8 +156,7 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
         }
     }
 
-    /// Identifiers whose children will not load — one record on an artist that
-    /// fails while the rest of the walk carries on.
+    /// Identifiers whose children won't load — one record fails, artist's fine.
     private var brokenChildren: Set<CatalogID> = []
 
     func breakChildren(of id: CatalogID) {
@@ -188,8 +167,7 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
         lock.withLock { _ = brokenChildren.remove(id) }
     }
 
-    /// How many times the walk asked. What tells "indexed once" from "indexed on
-    /// every read", which is the whole reason the index exists.
+    /// How many times the walk asked — tells indexed-once from indexed-every-read.
     private var childrenCallCount = 0
     var childrenCalls: Int { lock.withLock { childrenCallCount } }
 
@@ -197,9 +175,7 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
         try check()
         lock.withLock { childrenCallCount += 1 }
         if lock.withLock({ brokenChildren.contains(id) }) { throw Down() }
-        // An album's children are its tracks; an artist's are their records —
-        // which is what makes ancestry the right thing to filter on, since a song
-        // names both.
+        // Album children are tracks, artist ones are records — ancestry decides.
         return Fix.catalog.filter { item in
             item.ancestors.contains { $0.id == id }
                 && (id.kind == .artist ? item.id.kind == .album : item.id.kind == .song)
@@ -221,11 +197,7 @@ final class StubCatalog: CatalogSource, @unchecked Sendable {
 
 // MARK: - A second provider
 
-/// Stands in for the Apple Music provider that Stage 2 will bring.
-///
-/// Everything a real second provider can do to the merged store is here:
-/// declining a capability, failing an operation it claims to support, and
-/// holding rows nothing else has.
+/// Stands in for Stage 2's Apple Music provider: decline, fail, or hold rows.
 @MainActor
 final class StubProvider: LibraryProvider {
     nonisolated let id: LibraryProviderID
@@ -233,9 +205,7 @@ final class StubProvider: LibraryProvider {
 
     struct Boom: Error {}
 
-    /// Every operation throws. Stands for no subscription, iCloud Music Library
-    /// off, no network, or authorization revoked mid-session — all the same
-    /// shape to the merged store.
+    /// Every call throws — no subscription, no network, or revoked auth alike.
     var isFailing = false
 
     private(set) var favoriteRows: [FavoriteRow] = []
@@ -342,12 +312,7 @@ final class StubProvider: LibraryProvider {
 }
 
 extension DeviceLibraryState {
-    /// The pair of answers that lands on a given `isSharedDevice`, for tests
-    /// that care about the derived value rather than how it was reached.
-    ///
-    /// "Shared" here is the whole-device-and-account question, so the false case
-    /// has to say both things: nobody else uses it *and* the account is the
-    /// kid's. Saying only the first is the hand-me-down phone, which is shared.
+    /// The pair of answers for isSharedDevice — false means neither is true.
     static func asked(shared: Bool) -> DeviceLibraryState {
         DeviceLibraryState(
             sharesDeviceWithChild: shared,
@@ -408,8 +373,7 @@ struct Harness {
         )
     }
 
-    /// Rebuilds the merged store against the kid's current policy — what the app
-    /// does when a parent edits a list.
+    /// Rebuilds against the kid's current policy — what a parent's edit triggers.
     mutating func repolicy(_ change: (Kid) -> Void) throws {
         change(kid)
         try context.save()
