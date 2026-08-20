@@ -2311,6 +2311,13 @@ final class Session {
         rebuildCatalog()
     }
 
+    /// No ``rebuildCatalog()``: this decides whether a shelf draws, not what any
+    /// verdict is. Every item on it is judged by the engine either way.
+    func setRelatedInNowPlaying(_ enabled: Bool) {
+        kid.setRelatedInNowPlaying(enabled)
+        try? context.save()
+    }
+
     /// Adds a deny, awaited, with the failure returned rather than swallowed.
     ///
     /// The opposite contract to event logging: a parent who denies something and

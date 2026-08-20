@@ -21,6 +21,7 @@ struct ArtistView: View {
 
     @State private var albums: [CatalogItem] = []
     @State private var songs: [CatalogItem] = []
+    @State private var related: [CatalogItem] = []
     @State private var isLoading = true
     @State private var failed = false
 
@@ -125,6 +126,16 @@ struct ArtistView: View {
                     }
                 }
             }
+            // Last, and only under a page that had something on it. An artist
+            // with nothing playable is not a page to hop off — the empty state
+            // above catches that case before this one can draw.
+            if !related.isEmpty {
+                section("Similar artists") {
+                    TileShelf(session: session, items: related, origin: origin) { item in
+                        Task { await play(item, from: related) }
+                    }
+                }
+            }
         }
     }
 
@@ -155,18 +166,29 @@ struct ArtistView: View {
         // anything.
         async let records = session.children(of: artist.id)
         async let known = session.topSongs(of: artist.id)
+        // Decoration, the way an album's credits are: a shelf that fails is a
+        // shelf that does not draw. Letting it throw would turn a page full of
+        // playable records into "That didn't work" over a shelf nobody asked
+        // for.
+        async let adjacent = (try? session.similarArtists(of: artist.id)) ?? .empty
 
         do {
-            let (recordResults, songResults) = try await (records, known)
+            let (recordResults, songResults, relatedResults) = try await (
+                records, known, adjacent
+            )
 
             albums = recordResults.items.filter { !$0.isSingleRelease }
             songs = songResults.items
+            related = relatedResults.items
 
             // Both halves logged, including the singles' worth of blocks. A
             // record filtered out of a surface the kid asked for is still a
             // block the parent's report wants, whether or not the shelf that
             // would have shown it ends up showing anything.
-            session.logBlocked(recordResults.blocked + songResults.blocked, origin: origin)
+            session.logBlocked(
+                recordResults.blocked + songResults.blocked + relatedResults.blocked,
+                origin: origin
+            )
         } catch {
             failed = true
         }

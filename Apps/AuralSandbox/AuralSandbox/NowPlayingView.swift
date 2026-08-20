@@ -134,7 +134,13 @@ struct NowPlayingView: View {
 
             controls(for: entry)
                 .padding(.top, 24)
-                .padding(.bottom, 40)
+                .padding(.bottom, lineage.related.isEmpty ? 40 : 24)
+
+            if !lineage.related.isEmpty {
+                // The song's own origin, like the heart on this screen: it
+                // records where the kid was, and they were here.
+                relatedShelf(origin: entry.origin)
+            }
         }
         // Keyed to the song, so skipping replaces the lineage rather than
         // leaving the last track's record under a new title.
@@ -158,6 +164,39 @@ struct NowPlayingView: View {
         .task(id: entry.item.id) {
             await lineage.load(entry.item, from: session)
         }
+    }
+
+    /// Artists like the one playing, where a parent has asked for them.
+    ///
+    /// **The screen this sits on is the one the old rule refused outright**, and
+    /// the shape here is what makes it a different proposition: these are links,
+    /// not a queue. Nothing plays because this shelf exists, the queue still
+    /// stops where it stopped, and every tile lands on ``ArtistView`` — a screen
+    /// already in the kid's stack, reachable from search, filtered on arrival.
+    /// What it costs is that a tile has cleared the deny list and nothing else,
+    /// because an artist carries no rating; the songs behind it are judged one
+    /// by one, which is where the wall actually is.
+    ///
+    /// Horizontal, so it takes one row and adds no vertical travel beyond its
+    /// own height — the surrounding stack is not a scroll view and the player
+    /// owns a vertical drag.
+    private func relatedShelf(origin: PlaybackOrigin) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Similar artists")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 32)
+            TileShelf(
+                session: session,
+                items: lineage.related,
+                origin: origin
+            ) { _ in
+                // Containers navigate; ``TileCell`` handles that itself. An
+                // artist tile has nothing to play, so this is never called for
+                // one, and there is nothing here to queue by accident.
+            }
+        }
+        .padding(.bottom, 24)
     }
 
     /// The cover, and the way to the record it is a cover of.
@@ -433,6 +472,14 @@ final class Lineage {
     private(set) var album: CatalogItem?
     private(set) var artist: CatalogItem?
 
+    /// Artists adjacent to this one, and empty unless a parent turned them on.
+    ///
+    /// Seeded from the artist rather than the album because that is the only
+    /// similarity edge MusicKit has that is about *who* rather than *which
+    /// record* — and because a tile here leads to ``ArtistView``, which filters
+    /// on arrival, so the hop lands somewhere already judged.
+    private(set) var related: [CatalogItem] = []
+
     func load(_ song: CatalogItem, from session: Session) async {
         let albumID = song.ancestors.first { $0.id.kind == .album }?.id
         let artistID = song.ancestors.first { $0.id.kind == .artist }?.id
@@ -443,6 +490,7 @@ final class Lineage {
         // where the cover opens the previous song's record.
         album = nil
         artist = nil
+        related = []
         guard !ids.isEmpty else { return }
 
         // One batch for both, because ancestry is resolved in batch and two
@@ -450,6 +498,12 @@ final class Lineage {
         let resolved = (try? await session.resolveAllowed(ids)) ?? []
         album = resolved.first { $0.id == albumID }
         artist = resolved.first { $0.id == artistID }
+
+        // Second round trip, and only for the kids whose parent asked for it.
+        // Not folded into the batch above: that one is the header, it blocks
+        // nothing, and it must not wait on a shelf most kids will never have.
+        guard session.showsRelatedInNowPlaying, let seed = artist else { return }
+        related = ((try? await session.similarArtists(of: seed.id)) ?? .empty).items
     }
 }
 

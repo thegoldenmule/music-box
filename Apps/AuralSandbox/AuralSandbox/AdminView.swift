@@ -238,12 +238,34 @@ struct AdminView: View {
                 Text("Allow").tag(UnratedBehavior.allow)
                 Text("Follow the album").tag(UnratedBehavior.inheritFromAncestor)
             }
+            // Absent at level 1 rather than shown and doing nothing: there is no
+            // related shelf anywhere in that level, so a switch offering one
+            // would be a promise the sandbox does not keep.
+            if session.kid.effectiveMode != .allowOnly {
+                Toggle("Similar artists while playing", isOn: relatedBinding)
+            }
         } header: {
             Text("\(session.kid.name)'s sandbox")
         } footer: {
-            // The spec is explicit that level 2 copy must never imply the
-            // explicit tag covers themes. It covers lyrics, and only lyrics.
-            Text(explanation(for: session.kid.effectiveMode))
+            VStack(alignment: .leading, spacing: 8) {
+                // The spec is explicit that level 2 copy must never imply the
+                // explicit tag covers themes. It covers lyrics, and only lyrics.
+                Text(explanation(for: session.kid.effectiveMode))
+                // Said out loud because it widens what a kid can *reach*, and a
+                // parent who set a level in a build that had no related shelves
+                // did not agree to these. The second sentence is the honest half:
+                // an artist carries no rating, so only a deny keeps one off the
+                // shelf — the songs behind it are still filtered one by one.
+                if session.kid.effectiveMode != .allowOnly {
+                    Text(
+                        """
+                        Album and artist pages also show similar records and \
+                        artists. Anything you have denied stays off them, and \
+                        every song is still checked before it plays.
+                        """
+                    )
+                }
+            }
         }
     }
 
@@ -399,6 +421,13 @@ struct AdminView: View {
 
     private var modeBinding: Binding<SandboxMode> {
         Binding(get: { session.kid.effectiveMode }, set: { session.setMode($0) })
+    }
+
+    private var relatedBinding: Binding<Bool> {
+        Binding(
+            get: { session.kid.effectiveRelatedInNowPlaying },
+            set: { session.setRelatedInNowPlaying($0) }
+        )
     }
 
     private var unratedBinding: Binding<UnratedBehavior> {

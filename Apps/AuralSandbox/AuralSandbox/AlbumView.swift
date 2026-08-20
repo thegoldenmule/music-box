@@ -23,6 +23,9 @@ struct AlbumView: View {
     /// land, and empty for good if the request failed — the header falls back to
     /// the artist name the album already carries.
     @State private var credits: [CatalogItem] = []
+    /// Adjacent records. Decoration like ``credits``, and empty for the same two
+    /// reasons: the request failed, or the level has no related shelf at all.
+    @State private var related: [CatalogItem] = []
     @State private var isLoading = true
     @State private var failed = false
     /// How wide the credits row is allowed to be, so a short one can be centered
@@ -74,6 +77,21 @@ struct AlbumView: View {
             }
         } else {
             trackList
+            // Under the track list, never above it: the record the kid opened is
+            // the screen, and a shelf of other records over the top of it would
+            // answer a question they did not ask.
+            if !related.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Similar albums")
+                        .font(.title2.bold())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                    TileShelf(session: session, items: related, origin: origin) { item in
+                        Task { await play(item) }
+                    }
+                }
+                .padding(.top, 8)
+            }
         }
     }
 
@@ -212,6 +230,7 @@ struct AlbumView: View {
         // Started before the tracks are awaited, so the two requests overlap.
         // The header can fill in behind the list either way.
         async let credited = fetchCredits()
+        async let adjacent = fetchRelated()
 
         do {
             let results = try await session.children(of: album.id)
@@ -225,6 +244,12 @@ struct AlbumView: View {
 
         isLoading = false
         credits = await credited
+
+        let relatedResults = await adjacent
+        related = relatedResults.items
+        // A record turned down on a shelf the kid was shown is still a block the
+        // report wants, the same as one filtered out of the track list.
+        session.logBlocked(relatedResults.blocked, origin: origin)
     }
 
     /// Credits are decoration; the track list is the screen.
@@ -234,6 +259,12 @@ struct AlbumView: View {
     /// under the cover instead of a link.
     private func fetchCredits() async -> [CatalogItem] {
         (try? await session.artists(of: album.id)) ?? []
+    }
+
+    /// Adjacent albums, or nothing. See ``fetchCredits()`` — same rule, and the
+    /// level gate on top of it: at level 1 this is empty without a request.
+    private func fetchRelated() async -> FilteredResults {
+        (try? await session.relatedAlbums(of: album.id)) ?? .empty
     }
 
     private func play(_ item: CatalogItem) async {
