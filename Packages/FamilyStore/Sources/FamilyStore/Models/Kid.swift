@@ -131,6 +131,25 @@ public final class Kid {
         modifiedAt = at
     }
 
+    /// No column backs this one, so the rows are the whole story.
+    public func setRelatedInNowPlaying(
+        _ enabled: Bool,
+        decidedByGrownUpID: UUID? = nil,
+        decidedByAccountRecordName: String? = nil,
+        originatingDeviceID: UUID? = nil,
+        at: Date = .now
+    ) {
+        decide(
+            .relatedInNowPlaying,
+            rawValue: String(enabled),
+            decidedByGrownUpID: decidedByGrownUpID,
+            decidedByAccountRecordName: decidedByAccountRecordName,
+            originatingDeviceID: originatingDeviceID,
+            at: at
+        )
+        modifiedAt = at
+    }
+
     private func decide(
         _ key: SandboxSettingKey,
         rawValue: String,
@@ -177,6 +196,19 @@ public final class Kid {
             parse: UnratedBehavior.init(rawValue:),
             narrower: SandboxSettingResolution.narrower
         ) ?? unratedBehavior
+    }
+
+    /// Whether Now Playing shows a related shelf. Off until somebody says so.
+    ///
+    /// No column backs this one, so the fallback is the literal default rather
+    /// than a stored attribute: a kid nobody has decided for has not opted in.
+    public var effectiveRelatedInNowPlaying: Bool {
+        SandboxSettingResolution.resolve(
+            sandboxSettings,
+            key: .relatedInNowPlaying,
+            parse: Bool.init(_:),
+            narrower: SandboxSettingResolution.narrower
+        ) ?? false
     }
 
     // MARK: - Lists

@@ -187,3 +187,66 @@ struct SandboxSettings {
         #expect(try context.fetch(FetchDescriptor<SandboxSettingRecord>()).isEmpty)
     }
 }
+
+// MARK: -
+
+@Suite("Whether Now Playing shows a related shelf")
+@MainActor
+struct RelatedInNowPlaying {
+    /// The one setting with no column behind it, so the default is the literal.
+    @Test("Nobody has decided, so it is off")
+    func defaultsToOff() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+
+        #expect(kid.sandboxSettings.isEmpty)
+        #expect(kid.effectiveRelatedInNowPlaying == false)
+    }
+
+    @Test("A decision turns it on, and a later one turns it back off")
+    func decisionWins() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+
+        kid.setRelatedInNowPlaying(true, at: Fix.t0 + Fix.beyond)
+        #expect(kid.effectiveRelatedInNowPlaying)
+
+        kid.setRelatedInNowPlaying(false, at: Fix.t0 + Fix.beyond * 2)
+        #expect(kid.effectiveRelatedInNowPlaying == false)
+        // Append-only, like every other decision.
+        #expect(kid.sandboxSettings.count == 2)
+    }
+
+    /// The asymmetry that matters when two parents disagree inside the window.
+    @Test("Concurrent decisions resolve to off")
+    func concurrentResolvesOff() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+        let half = PolicyEntryRecord.clockSkewWindow / 2
+
+        // Whichever order the clocks report, the no is what stands.
+        kid.setRelatedInNowPlaying(false, at: Fix.t0 + Fix.beyond)
+        kid.setRelatedInNowPlaying(true, at: Fix.t0 + Fix.beyond + half)
+
+        #expect(kid.effectiveRelatedInNowPlaying == false)
+    }
+
+    /// A future build's value must read back as unrecognised, never as a yes.
+    @Test("An unparseable value is not a decision")
+    func garbageIsNotAVote() throws {
+        let context = try newStore()
+        let kid = insertKid(context)
+
+        kid.setRelatedInNowPlaying(true, at: Fix.t0 + Fix.beyond)
+        let record = SandboxSettingRecord(
+            key: .relatedInNowPlaying,
+            rawValue: "sometimes",
+            at: Fix.t0 + Fix.beyond * 2
+        )
+        context.insert(record)
+        kid.attach(record)
+
+        // The newest row parses to nothing, so the last real decision stands.
+        #expect(kid.effectiveRelatedInNowPlaying)
+    }
+}

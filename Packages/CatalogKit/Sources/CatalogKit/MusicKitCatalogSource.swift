@@ -197,6 +197,36 @@ public struct MusicKitCatalogSource: CatalogSource {
         }
     }
 
+    // MARK: - Related
+
+    /// One request, like ``topSongs(of:)``. Empty ids are dropped, not stored.
+    public func similarArtists(of id: CatalogID) async throws -> [CatalogItem] {
+        guard id.kind == .artist, !id.rawValue.isEmpty else { return [] }
+
+        var request = MusicCatalogResourceRequest<Artist>(
+            matching: \.id,
+            equalTo: MusicItemID(id.rawValue)
+        )
+        request.properties = [.similarArtists]
+
+        let response = try await mapErrors { try await request.response() }
+        guard let artist = response.items.first else { return [] }
+        return (artist.similarArtists ?? [])
+            .map(item(from:))
+            .filter { !$0.id.rawValue.isEmpty }
+    }
+
+    /// Albums carry a rating, so these are judged before they are ever drawn.
+    public func relatedAlbums(of id: CatalogID) async throws -> [CatalogItem] {
+        guard id.kind == .album, !id.rawValue.isEmpty else { return [] }
+
+        guard let album = try await fetchAlbum(MusicItemID(id.rawValue)) else { return [] }
+        let detailed = try await mapErrors { try await album.with([.relatedAlbums]) }
+        return (detailed.relatedAlbums ?? [])
+            .map(item(from:))
+            .filter { !$0.id.rawValue.isEmpty }
+    }
+
     // MARK: - Ancestry
 
     /// Batched: search results arrive with no relationships to judge against.

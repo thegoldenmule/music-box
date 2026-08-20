@@ -41,6 +41,12 @@ public struct FilteredResults: Sendable, Hashable {
         self.gaveUpEarly = gaveUpEarly
         self.requestCount = requestCount
     }
+
+    /// Nothing, asked for nothing — `reachedEnd`, so a caller stops rather than pages.
+    public static let empty = FilteredResults(
+        items: [], blocked: [], reachedEnd: true,
+        gaveUpEarly: false, requestCount: 0
+    )
 }
 
 /// Kinds separate: Apple pages limit/offset per type, breaking hasMore if merged.
@@ -145,12 +151,7 @@ public struct FilteredCatalog: Sendable {
         kinds: Set<ItemKind>,
         limit: Int
     ) async throws -> FilteredResults {
-        guard limit > 0, !term.isEmpty, !kinds.isEmpty else {
-            return FilteredResults(
-                items: [], blocked: [], reachedEnd: true,
-                gaveUpEarly: false, requestCount: 0
-            )
-        }
+        guard limit > 0, !term.isEmpty, !kinds.isEmpty else { return .empty }
 
         let pageSize = min(limit * configuration.overFetchMultiplier, configuration.maxPageSize)
 
@@ -272,6 +273,17 @@ public struct FilteredCatalog: Sendable {
     /// Top songs, filtered like albums: a denied track is absent, not refused.
     public func topSongs(of id: CatalogID) async throws -> FilteredResults {
         try await judge(source.topSongs(of: id))
+    }
+
+    /// Adjacent artists, filtered. A tile only clears the deny list — see
+    /// ``PolicyEngine``, where a container skips the rating gate entirely.
+    public func similarArtists(of id: CatalogID) async throws -> FilteredResults {
+        try await judge(source.similarArtists(of: id))
+    }
+
+    /// Adjacent albums, filtered. Rated at both ends, unlike similar artists.
+    public func relatedAlbums(of id: CatalogID) async throws -> FilteredResults {
+        try await judge(source.relatedAlbums(of: id))
     }
 
     /// Resolves ancestry first — can't judge against a denied artist blind.

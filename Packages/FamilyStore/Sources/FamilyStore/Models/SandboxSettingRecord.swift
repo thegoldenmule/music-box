@@ -6,6 +6,9 @@ import SwiftData
 public enum SandboxSettingKey: String, Sendable, CaseIterable {
     case mode
     case unratedBehavior
+
+    /// The one related shelf a parent opts into. Browsing shelves ride the mode.
+    case relatedInNowPlaying
 }
 
 /// Decision rows, not Kid attributes — a merge can't silently revert them.
@@ -68,6 +71,11 @@ public enum SandboxSettingResolution {
         let ia = modeOrder.firstIndex(of: a) ?? 0
         let ib = modeOrder.firstIndex(of: b) ?? 0
         return ia <= ib ? a : b
+    }
+
+    /// Off is narrower than on, so one parent's no outlasts the other's yes.
+    static func narrower(_ a: Bool, _ b: Bool) -> Bool {
+        a && b
     }
 
     static func narrower(_ a: UnratedBehavior, _ b: UnratedBehavior) -> UnratedBehavior {

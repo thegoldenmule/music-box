@@ -1894,6 +1894,55 @@ final class Session {
         try await catalog.artists(of: id)
     }
 
+    // MARK: - Related
+    //
+    // Level 1 is not a screen that hides these shelves, it is a level that has
+    // none: `allowOnly` turns down anything a parent did not hand-pick, so a
+    // related shelf there is a heading over nothing on every page it appears.
+    // The gate is here rather than in the views for the reason
+    // ``grownUpItems()`` records — which level shows a shelf is a question about
+    // the sandbox — and because four screens asking it would answer it four
+    // times.
+
+    /// Whether related shelves draw at all. Levels 2 and 3; never level 1.
+    var showsRelated: Bool {
+        kid.effectiveMode != .allowOnly
+    }
+
+    /// Whether Now Playing gets one too. A separate, per-kid, opt-in decision.
+    ///
+    /// Two gates rather than one because the screens are not alike. A related
+    /// shelf on an artist or an album page sits under a page the kid navigated
+    /// to and can leave; Now Playing is the screen a child is left alone with
+    /// the longest, and it is the one place the old rule refused outright. So it
+    /// stays refused until a parent says otherwise, per kid, and one parent's no
+    /// beats the other's yes — see ``SandboxSettingResolution``.
+    var showsRelatedInNowPlaying: Bool {
+        showsRelated && kid.effectiveRelatedInNowPlaying
+    }
+
+    /// Artists adjacent to this one, filtered. Empty where the level has none.
+    ///
+    /// **A tile here has cleared the deny list and nothing else.** Artists carry
+    /// no rating, so ``PolicyEngine`` allows them at level 2 without a rating
+    /// check — the same treatment an artist row already gets from search, which
+    /// is why this widens what a kid can reach without widening what they can
+    /// *play*: every song behind the tile is judged on arrival, one by one.
+    func similarArtists(of id: CatalogID) async throws -> FilteredResults {
+        guard showsRelated else { return .empty }
+        return try await catalog.similarArtists(of: id)
+    }
+
+    /// Albums adjacent to this one, filtered. Empty where the level has none.
+    ///
+    /// Rated at both ends, unlike ``similarArtists(of:)``: the album carries a
+    /// rating and so does every track on it, so an explicit record never becomes
+    /// a tile in the first place.
+    func relatedAlbums(of id: CatalogID) async throws -> FilteredResults {
+        guard showsRelated else { return .empty }
+        return try await catalog.relatedAlbums(of: id)
+    }
+
     // MARK: - The kid's library
     //
     // Everything here goes through ``MergedLibrary``. Nothing on this side names

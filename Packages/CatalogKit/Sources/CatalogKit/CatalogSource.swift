@@ -25,6 +25,12 @@ public protocol CatalogSource: Sendable {
     /// Every credited artist as items — ancestry keeps only one, for the engine.
     func artists(of id: CatalogID) async throws -> [CatalogItem]
 
+    /// Adjacent artists — the only similarity edge MusicKit has. Artist only.
+    func similarArtists(of id: CatalogID) async throws -> [CatalogItem]
+
+    /// Adjacent albums. Rated at both ends, unlike ``similarArtists(of:)``.
+    func relatedAlbums(of id: CatalogID) async throws -> [CatalogItem]
+
     /// Batched: search returns no relationships, but the engine needs lineage.
     func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem]
 }
@@ -51,6 +57,16 @@ extension CatalogSource {
 
     /// Empty here falls back to the artist name already on hand, minus the link.
     public func artists(of id: CatalogID) async throws -> [CatalogItem] {
+        []
+    }
+
+    /// Empty is a shelf that does not draw, never an error a screen reports.
+    public func similarArtists(of id: CatalogID) async throws -> [CatalogItem] {
+        []
+    }
+
+    /// Empty is a shelf that does not draw. See ``similarArtists(of:)``.
+    public func relatedAlbums(of id: CatalogID) async throws -> [CatalogItem] {
         []
     }
 }

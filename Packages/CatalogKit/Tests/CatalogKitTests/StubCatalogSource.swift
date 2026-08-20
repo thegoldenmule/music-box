@@ -19,6 +19,8 @@ actor StubCatalogSource: CatalogSource {
     private var items: [CatalogID: CatalogItem]
     private var artists: [CatalogID: [CatalogItem]]
     private var topSongs: [CatalogID: [CatalogItem]]
+    private var similarArtists: [CatalogID: [CatalogItem]]
+    private var relatedAlbums: [CatalogID: [CatalogItem]]
 
     private(set) var searchCalls: [SearchCall] = []
     private(set) var ancestryCallCount = 0
@@ -33,7 +35,9 @@ actor StubCatalogSource: CatalogSource {
         children: [CatalogID: [CatalogItem]] = [:],
         items: [CatalogID: CatalogItem] = [:],
         artists: [CatalogID: [CatalogItem]] = [:],
-        topSongs: [CatalogID: [CatalogItem]] = [:]
+        topSongs: [CatalogID: [CatalogItem]] = [:],
+        similarArtists: [CatalogID: [CatalogItem]] = [:],
+        relatedAlbums: [CatalogID: [CatalogItem]] = [:]
     ) {
         self.pages = pages
         self.pagesByKind = pagesByKind
@@ -42,6 +46,8 @@ actor StubCatalogSource: CatalogSource {
         self.items = items
         self.artists = artists
         self.topSongs = topSongs
+        self.similarArtists = similarArtists
+        self.relatedAlbums = relatedAlbums
     }
 
     func search(
@@ -83,6 +89,14 @@ actor StubCatalogSource: CatalogSource {
 
     func topSongs(of id: CatalogID) async throws -> [CatalogItem] {
         topSongs[id] ?? []
+    }
+
+    func similarArtists(of id: CatalogID) async throws -> [CatalogItem] {
+        similarArtists[id] ?? []
+    }
+
+    func relatedAlbums(of id: CatalogID) async throws -> [CatalogItem] {
+        relatedAlbums[id] ?? []
     }
 
     func resolveAncestry(for items: [CatalogItem]) async throws -> [CatalogItem] {

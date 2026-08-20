@@ -521,6 +521,79 @@ struct ChildrenTests {
         #expect(results.blocked.first?.reason == .deniedByParent(Fix.artist))
     }
 
+    // MARK: - Related
+
+    @Test("A deny reaches an adjacent artist, and only a deny can")
+    func similarArtistsRespectDeny() async throws {
+        let source = StubCatalogSource(
+            similarArtists: [
+                Fix.artist: [Fix.artistItem(1), Fix.artistItem(2), Fix.artistItem(3)]
+            ]
+        )
+        let sut = FilteredCatalog(
+            source: source,
+            engine: Fix.engine(.denyPlusAuto, [.deny(CatalogID(.artist, "artist-2"))])
+        )
+
+        let results = try await sut.similarArtists(of: Fix.artist)
+
+        #expect(results.items.count == 2)
+        #expect(results.blocked.first?.reason == .deniedByParent(CatalogID(.artist, "artist-2")))
+    }
+
+    /// The asymmetry a related shelf has to be read against: artists carry no
+    /// rating, so `unratedBehavior` cannot turn a tile down. What keeps the
+    /// shelf honest is that every song *behind* the tile is judged on arrival —
+    /// see the album case below, where the rating does bite.
+    @Test("Blocking unrated items does not empty a shelf of artists")
+    func similarArtistsAreNotRated() async throws {
+        let source = StubCatalogSource(
+            similarArtists: [Fix.artist: [Fix.artistItem(1), Fix.artistItem(2)]]
+        )
+        let sut = FilteredCatalog(
+            source: source,
+            engine: Fix.engine(.denyPlusAuto, [], unrated: .block)
+        )
+
+        let results = try await sut.similarArtists(of: Fix.artist)
+
+        // Every one of them has a nil rating and every one of them is here.
+        #expect(results.items.count == 2)
+        #expect(results.blocked.isEmpty)
+    }
+
+    @Test("An explicit related album never becomes a tile")
+    func relatedAlbumsAreRated() async throws {
+        let source = StubCatalogSource(
+            relatedAlbums: [
+                Fix.album: (0..<4).map {
+                    Fix.albumItem($0, rating: $0.isMultiple(of: 2) ? .clean : .explicit)
+                }
+            ]
+        )
+        let sut = FilteredCatalog(source: source, engine: Fix.engine())
+
+        let results = try await sut.relatedAlbums(of: Fix.album)
+
+        #expect(results.items.count == 2)
+        #expect(results.blocked.count == 2)
+    }
+
+    /// Level 1 has no related shelf at all — the gate for that lives in
+    /// `Session.showsRelated`, but the engine is what makes it moot here.
+    @Test("At level 1 an adjacent album is not on the allow list")
+    func relatedAlbumsAreEmptyAtLevelOne() async throws {
+        let source = StubCatalogSource(
+            relatedAlbums: [Fix.album: [Fix.albumItem(1), Fix.albumItem(2)]]
+        )
+        let sut = FilteredCatalog(source: source, engine: Fix.engine(.allowOnly, []))
+
+        let results = try await sut.relatedAlbums(of: Fix.album)
+
+        #expect(results.items.isEmpty)
+        #expect(results.blocked.allSatisfy { $0.reason == .notOnAllowList })
+    }
+
     @Test("Album credits come back whole when nothing is denied")
     func creditsAreReturned() async throws {
         let source = StubCatalogSource(
