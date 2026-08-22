@@ -168,6 +168,28 @@ Every command takes `--json`: one object on stdout, all prose and subprocess
 output on stderr. Exit codes are 0 ok, 1 failed, 2 usage, and **3 blocked on a
 human** — a step no tool can perform, which a caller must not retry.
 
+**`release` bumps, but it will not rescue a starting number Apple already
+holds.** The bump above is real and runs every time — the archive is one past
+whatever is committed — but it happens *inside* a pipeline that a preflight
+guards, and that preflight refuses a `CURRENT_PROJECT_VERSION` already uploaded
+for this marketing version. So a stale number stops the run before the step
+that would have fixed it, which reads like the bump does not exist. Clear it
+with `Tools/ship fix build_number`, commit that, and run `release` again; the
+build it uploads is one further on, and wants committing too.
+
+**Do not read a piped exit code as `ship`'s.** `Tools/ship release 2>&1 | tail`
+reports `tail`'s status, so a preflight refusal arrives looking like a clean
+run. Use `set -o pipefail`, or do not pipe.
+
+**`release` runs `swift test` across the packages before it archives**, so a
+flaky test is a release blocker rather than a nuisance. One was: `KidLibrary`'s
+`theTopComesFirst` asserted a paged read's first snapshot held exactly one
+page, which is a race — `judged` starts `CatalogFetchLimit.inFlight` pages at
+once and yields only when the settled prefix grows, so pages 1 and 2 beating
+page 0 settles three at once and the first snapshot is ninety rows. Three runs
+in ten. When a package test fails only in a full-suite run and passes under
+`--filter`, suspect the assertion before the code.
+
 Four facts it encodes that are expensive to rediscover, all measured on this
 project rather than read somewhere:
 
