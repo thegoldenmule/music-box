@@ -92,9 +92,21 @@ struct PagedReads {
         }
 
         let opening = try #require(first)
-        #expect(opening.items.count == CatalogFetchLimit.pageSize)
-        #expect(opening.items.first?.id == Fix.bulk(0))
-        #expect(opening.items.last?.id == Fix.bulk(CatalogFetchLimit.pageSize - 1))
+
+        // A contiguous prefix from the very top, which is the whole claim in the
+        // name. **Not one page**, which is what this used to assert and is a
+        // race rather than a rule: `judged` runs `inFlight` pages at once and
+        // yields only when the settled prefix grows, so pages 1 and 2 landing
+        // before page 0 settles all three and makes the first snapshot 90 rows.
+        // That is the design working — the guarantee is that nothing arrives
+        // with a hole in it, not that the pages resolve in the order they were
+        // asked for. Asserting the tighter thing failed about a third of the
+        // time on this machine and had nothing to do with the code under test.
+        #expect(opening.items.count >= CatalogFetchLimit.pageSize)
+        #expect(
+            opening.items.map(\.id) == (0..<opening.items.count).map(Fix.bulk),
+            "the first snapshot is not the top of the list, in order"
+        )
     }
 
     /// Zero must mean finished, or a short stop looks like the end.
