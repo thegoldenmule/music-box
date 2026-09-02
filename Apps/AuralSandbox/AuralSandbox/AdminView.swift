@@ -306,7 +306,7 @@ struct AdminView: View {
             Text(
                 session.deviceLibrary.isSharedDevice
                     ? "Their favorites and playlists live in this app only. Nothing is read from the Apple Music library on this device and nothing is written to it."
-                    : "Their favorites and playlists become real items in your child's Apple Music library, and whatever is already in it shows up on their shelf — filtered by their level, like everything else. What they keep is sent to Apple under your family's account and nowhere else."
+                    : "Whatever is already in your child's Apple Music library shows up on their shelf — filtered by their level, like everything else. Their favorites and playlists live in this app; nothing is written to the Apple Music library."
             )
         }
     }

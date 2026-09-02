@@ -112,6 +112,9 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await session.syncPass() }
+            // The kid's own Apple Music library, for the same reason: what they
+            // added in the Music app while this was in the background.
+            Task { await session.refreshAppleLibrary() }
         }
     }
 

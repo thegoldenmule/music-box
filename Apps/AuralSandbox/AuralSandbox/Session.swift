@@ -536,7 +536,7 @@ final class Session {
 
     private let family: Family
     private let context: ModelContext
-    private let musicAccess = MusicKitAccess()
+    private let musicAccess: MusicKitAccess
     private let source: any CatalogSource
 
     /// The parent's own Apple Music library, for seeding suggestions.
@@ -544,7 +544,15 @@ final class Session {
     /// Deliberately not a `LibraryProvider` and deliberately not reachable from
     /// anything the kid touches: this is the seeding seam, and what it hands
     /// back is resolved to catalog items before a row is written.
-    private let librarySource: any LibrarySource = MusicKitLibrarySource()
+    private let librarySource: any LibrarySource
+
+    /// The same library as a `LibraryProvider`, for the kid's shelf.
+    ///
+    /// The other door into the account's library, and the gated one: the merge
+    /// reads it only when the device answers say the library is the kid's own.
+    /// One instance for the life of the session, because what it holds is a
+    /// snapshot that a kid switch or a policy edit has no reason to throw away.
+    let appleLibrary: AppleMusicLibraryProvider
 
     /// Where the shared-device answer is kept. Device-local, never synced.
     private let deviceLibraryStore: any DeviceLibraryStateStore = UserDefaultsDeviceLibraryState()
@@ -574,18 +582,30 @@ final class Session {
         self.kid = kid
         householdsMerged = merged
 
+        // One cache, shared: the library provider puts what it matched here so
+        // the shelf's own lookup finds it warm rather than paying a request per
+        // page of rows it already had in hand.
+        let cache = InMemoryItemCache()
         let source = CachingCatalogSource(
             wrapping: MusicKitCatalogSource(),
-            cache: InMemoryItemCache()
+            cache: cache
         )
         self.source = source
+        let musicAccess = MusicKitAccess()
+        self.musicAccess = musicAccess
+        let librarySource = MusicKitLibrarySource()
+        self.librarySource = librarySource
+        let appleLibrary = AppleMusicLibraryProvider(
+            source: librarySource,
+            access: musicAccess,
+            cache: cache
+        )
+        self.appleLibrary = appleLibrary
         let engine = kid.makeEngine()
         self.engine = engine
         catalog = FilteredCatalog(source: source, engine: engine)
         library = MergedLibrary(
-            // One provider, and it is always live. The Apple Music provider is
-            // the next stage; nothing above this line changes when it arrives.
-            providers: [CloudKitLibraryProvider(kid: kid, context: context)],
+            providers: [CloudKitLibraryProvider(kid: kid, context: context), appleLibrary],
             catalog: source,
             engine: engine,
             device: deviceLibraryStore
@@ -1021,7 +1041,7 @@ final class Session {
     /// same one would tie a parent's reading to whoever is playing.
     func reviewLibrary(for kid: Kid) -> MergedLibrary {
         MergedLibrary(
-            providers: [CloudKitLibraryProvider(kid: kid, context: context)],
+            providers: [CloudKitLibraryProvider(kid: kid, context: context), appleLibrary],
             catalog: source,
             engine: kid.makeEngine(),
             device: deviceLibraryStore
@@ -1227,10 +1247,36 @@ final class Session {
 
         access = .ready
 
+        // Behind the app, like the subscription check below it, and gated the
+        // same way the shelf is: a device whose library is a grown-up's reads
+        // nothing, and one that hasn't been asked yet waits for the answer.
+        Task { await refreshAppleLibrary() }
+
         guard let subscription = try? await musicAccess.subscriptionState() else { return }
         hasCloudLibrary = subscription.hasCloudLibraryEnabled
         guard !subscription.canPlayCatalogContent else { return }
         access = .cannotPlay(subscription)
+    }
+
+    /// Reads the Apple Music library again and puts what it found on the shelf.
+    ///
+    /// Run on launch, on foreground, and when the device answers change; the
+    /// provider serves a snapshot in between, so nothing on the kid's side ever
+    /// waits on this. **Gated on the same table the merge reads**, because the
+    /// provider itself doesn't know whose library it is looking at: on a shared
+    /// device this is a grown-up's library and it must not be read into memory
+    /// at all, whether or not anything would draw it.
+    func refreshAppleLibrary() async {
+        let status = LibraryLiveness.status(
+            of: .appleMusic,
+            device: deviceLibraryStore.state,
+            audience: .kid
+        )
+        guard status.isReadable else { return }
+        // A failure is the provider's to report — the admin's health line and
+        // `lastFailure` — and the shelf simply keeps what it had.
+        try? await appleLibrary.refresh()
+        await refreshLibrary()
     }
 
     /// Whether Sync Library is on for the signed-in account.
@@ -1976,8 +2022,12 @@ final class Session {
         )
         deviceLibraryStore.save(deviceLibrary)
         // Which providers are live may have just changed, so what the shelves
-        // draw from has too.
-        Task { await refreshLibrary() }
+        // draw from has too — and if the library just became the kid's own,
+        // this is its first read.
+        Task {
+            await refreshLibrary()
+            await refreshAppleLibrary()
+        }
     }
 
     /// Fills or empties the heart. Returns a message on failure, `nil` on
@@ -2621,7 +2671,7 @@ final class Session {
         policyGeneration += 1
         catalog = FilteredCatalog(source: source, engine: engine)
         library = MergedLibrary(
-            providers: [CloudKitLibraryProvider(kid: kid, context: context)],
+            providers: [CloudKitLibraryProvider(kid: kid, context: context), appleLibrary],
             catalog: source,
             engine: engine,
             device: deviceLibraryStore

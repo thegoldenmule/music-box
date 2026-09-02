@@ -96,7 +96,7 @@ struct SharedDeviceOnboardingView: View {
     /// being discovered later. It appears only in the case where it is true.
     private var outcome: String {
         isKidsOwnLibrary
-            ? "Their favorites and playlists will live in your child's Apple Music library too, and whatever is already in it shows up here. What they keep is sent to Apple under your family's account and nowhere else."
+            ? "Whatever is already in your child's Apple Music library shows up here, filtered by their level like everything else. Their favorites and playlists live in this app; nothing is written to the Apple Music library."
             : "Their favorites and playlists will live in this app only. Nothing is read from the Apple Music library on this device, and nothing is written to it."
     }
 }
