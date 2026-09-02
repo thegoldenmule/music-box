@@ -308,6 +308,12 @@ struct KidHomeView: View {
         .onChange(of: session.favoriteIDs) { _, _ in
             if isHome { reloadLibraryShelf() }
         }
+        // The Apple library read finishing changes the shelf without touching a
+        // single heart — its rows are kept out of `favoriteIDs` on purpose — so
+        // it announces itself separately.
+        .onChange(of: session.appleLibraryGeneration) { _, _ in
+            if isHome { reloadLibraryShelf() }
+        }
         // Coming back to the root of the stack, after however deep the kid went.
         //
         // The two hooks above are each about one shelf reacting to one thing.
@@ -1701,7 +1707,7 @@ struct GrownUpBand: View {
 
     /// Why the shelf is empty, when it is for a reason a grown-up can act on.
     private var trouble: String? {
-        guard let failure = session.appleLibrary.lastFailure else { return nil }
+        guard let failure = session.appleLibraryFailure else { return nil }
         if failure is AppleLibraryUnavailable {
             return "Sync Library is off for this Apple Music account, so there's nothing to show here."
         }

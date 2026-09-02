@@ -65,6 +65,9 @@ struct LibraryView: View {
         // these columns — unhearting the last song on a record takes the record
         // out of the Albums column with it.
         .onChange(of: session.favoriteIDs) { _, _ in Task { await load() } }
+        // And the Apple library arriving, which fills no heart and changes
+        // every column.
+        .onChange(of: session.appleLibraryGeneration) { _, _ in Task { await load() } }
     }
 
     @ViewBuilder

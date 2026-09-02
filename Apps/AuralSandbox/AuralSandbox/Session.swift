@@ -1350,7 +1350,20 @@ final class Session {
         // `lastFailure` — and the shelf simply keeps what it had.
         try? await appleLibrary.refresh()
         await refreshLibrary()
+        // The shelves reload on `favoriteIDs` changing, and this never changes
+        // it: Apple rows are kept out of the heart on purpose. So the read
+        // announces itself, once, when the snapshot has changed hands — not on
+        // every `refreshLibrary()`, or every heart tap would load the shelf twice.
+        appleLibraryFailure = appleLibrary.lastFailure
+        appleLibraryGeneration += 1
     }
+
+    /// Bumped once per completed Apple library read; what the shelves watch.
+    private(set) var appleLibraryGeneration = 0
+
+    /// Why the last Apple library read failed, mirrored here because the
+    /// provider is not observable and the band has to redraw when it changes.
+    private(set) var appleLibraryFailure: (any Error)?
 
     /// Whether Sync Library is on for the signed-in account.
     ///

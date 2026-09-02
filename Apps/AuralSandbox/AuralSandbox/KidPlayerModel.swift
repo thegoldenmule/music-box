@@ -486,7 +486,9 @@ final class KidPlayerModel {
         save()
         enqueued = nil
         await session.stop()
-        owner = session.kid.id
+        // A sync-driven binding change can switch kids under a grown-up, and
+        // their queue must still belong to nobody.
+        owner = currentOwner
         queue = []
         index = 0
         status = .stopped
