@@ -1,5 +1,6 @@
 import CatalogKit
 import FamilyStore
+import KidLibrary
 import SwiftUI
 
 /// The kid's app. Big tiles, one job, no way out.
@@ -176,7 +177,17 @@ struct KidHomeView: View {
                     // The one route off this screen, and it is a locked door
                     // rather than a link: it opens the gate, not the admin.
                     Button {
-                        showingAdmin = true
+                        // The admin is about a kid — which one, their level,
+                        // their lists — so a grown-up who was listening hands
+                        // the player back on the way in.
+                        if session.isGrownUpMode {
+                            Task {
+                                await player.leaveGrownUpMode()
+                                showingAdmin = true
+                            }
+                        } else {
+                            showingAdmin = true
+                        }
                     } label: {
                         Image(systemName: "lock.fill")
                     }
@@ -383,6 +394,13 @@ struct KidHomeView: View {
     /// screen, for the same reason.
     private var bottomBars: some View {
         VStack(spacing: 0) {
+            // Above everything a grown-up can reach, on every screen, and the
+            // one thing on the kid's side that can't be dismissed: the mode ends
+            // by this button and nothing else, so the band is the whole of what
+            // tells the next person to pick the device up that the walls are down.
+            if session.isGrownUpMode {
+                GrownUpBand(session: session, player: player)
+            }
             // What is playing sits above what to do next.
             NowPlayingBar(session: session, player: player)
             KidSearchBar(canSearch: canSearch, term: $term, onSubmit: runSearch, onHome: goHome)
@@ -1637,5 +1655,56 @@ struct Tile: View {
         var parts = [item.title, item.id.kind.rawValue]
         if let subtitle = item.subtitle { parts.append(subtitle) }
         return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - Grown-up mode
+
+/// The band that says a grown-up has the player, and the one way out.
+///
+/// The admin's colour, for the reason the admin sheet has it: the passcode is a
+/// mode boundary and this is the other side of it, drawn on the kid's screens.
+/// Tinted rather than filled — `AdminAccent` is a foreground colour and there
+/// is no fill variant that would carry a white label in dark mode (see
+/// STYLE.md §3.3), so it sits on the bar material like the bars beneath it.
+///
+/// No passcode to leave. Going back to the kid's side is the safe direction,
+/// and anyone should be able to take it.
+struct GrownUpBand: View {
+    @Bindable var session: Session
+    @Bindable var player: KidPlayerModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label("Grown-up mode", systemImage: "person.fill")
+                    .font(.headline)
+                    .foregroundStyle(.tint)
+                Spacer()
+                Button("Back to kid mode") {
+                    Task { await player.leaveGrownUpMode() }
+                }
+                .buttonStyle(.bordered)
+            }
+            if let trouble {
+                Text(trouble)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .tint(Color(.adminAccent))
+    }
+
+    /// Why the shelf is empty, when it is for a reason a grown-up can act on.
+    private var trouble: String? {
+        guard let failure = session.appleLibrary.lastFailure else { return nil }
+        if failure is AppleLibraryUnavailable {
+            return "Sync Library is off for this Apple Music account, so there's nothing to show here."
+        }
+        return "Your Apple Music library couldn't be read just now."
     }
 }

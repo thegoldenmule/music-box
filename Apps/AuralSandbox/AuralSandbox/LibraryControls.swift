@@ -26,6 +26,13 @@ struct HeartButton: View {
     private var isOn: Bool { session.isFavorite(item.id) }
 
     var body: some View {
+        // Absent, not disabled, for a grown-up: their tap would land nowhere —
+        // see ``Session/canEditLibrary`` — and a heart that fills for nobody is
+        // a lie the kid's heart never tells.
+        if session.canEditLibrary { button }
+    }
+
+    private var button: some View {
         Button {
             // The failure message is discarded on purpose, and the heart is
             // still honest: it draws from rows re-read after the write, so a
@@ -72,6 +79,10 @@ struct FavoriteButton: View {
     private var isOn: Bool { session.isFavorite(item.id) }
 
     var body: some View {
+        if session.canEditLibrary { button }
+    }
+
+    private var button: some View {
         Button {
             Task { _ = await session.toggleFavorite(item, origin: origin) }
         } label: {
@@ -105,6 +116,10 @@ struct AddToPlaylistButton: View {
     @State private var isNaming = false
 
     var body: some View {
+        if session.canEditLibrary { control }
+    }
+
+    private var control: some View {
         Group {
             if session.playlists.isEmpty {
                 Button { isNaming = true } label: { glyph }
@@ -313,7 +328,9 @@ struct PlaylistMenuItems: View {
     let origin: PlaybackOrigin
 
     var body: some View {
-        ForEach(session.playlists) { playlist in
+        // Empty for a grown-up anyway — they have no playlists here — but said
+        // outright so a future provider that has some doesn't reopen this.
+        ForEach(session.canEditLibrary ? session.playlists : []) { playlist in
             Button("Add to \(playlist.name)") {
                 Task { _ = await session.addToPlaylist(playlist.handle, song: item, origin: origin) }
             }

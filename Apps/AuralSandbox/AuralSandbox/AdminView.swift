@@ -300,6 +300,16 @@ struct AdminView: View {
                 // signed in is a grown-up's and the library is theirs whichever
                 // way this points.
                 .disabled(session.deviceLibrary.sharesDeviceWithChild)
+
+            // Only where the library signed in here is a grown-up's. The sheet
+            // closes with it: the admin is about the kid, and the grown-up is
+            // about to stop being one of the two people this screen is for.
+            if session.canListenAsGrownUp {
+                Button("Listen as a grown-up", systemImage: "person.fill") {
+                    session.enterGrownUpMode()
+                    onClose()
+                }
+            }
         } header: {
             Text("This device")
         } footer: {
