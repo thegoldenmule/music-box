@@ -396,18 +396,27 @@ public struct MusicKitLibrarySource: LibrarySource {
         self.artworkSize = artworkSize
     }
 
-    public func libraryItems(kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem] {
+    /// Newest first, paged by `offset` — a library has no total count either.
+    public func libraryItems(
+        kinds: Set<ItemKind>,
+        limit: Int,
+        offset: Int
+    ) async throws -> [LibraryItem] {
         var items: [LibraryItem] = []
 
         if kinds.contains(.song) {
             var request = MusicLibraryRequest<Song>()
             request.limit = limit
+            request.offset = offset
+            request.sort(by: \.libraryAddedDate, ascending: false)
             let response = try await catalog.mapErrors { try await request.response() }
             items += response.items.map(libraryItem(from:))
         }
         if kinds.contains(.album) {
             var request = MusicLibraryRequest<Album>()
             request.limit = limit
+            request.offset = offset
+            request.sort(by: \.libraryAddedDate, ascending: false)
             let response = try await catalog.mapErrors { try await request.response() }
             items += response.items.map(libraryItem(from:))
         }
@@ -509,21 +518,24 @@ public struct MusicKitLibrarySource: LibrarySource {
     public func resolveToCatalog(_ items: [LibraryItem]) async throws -> LibraryImport {
         var resolved: [CatalogItem] = []
         var discarded: [DiscardedItem] = []
+        var matches: [String: CatalogItem] = [:]
 
-        var songsByISRC: [String: LibraryItem] = [:]
-        var albumsByUPC: [String: LibraryItem] = [:]
+        // Arrays, not one item per code: a library holds the same recording
+        // twice more often than you'd think, and both rows want their match.
+        var songsByISRC: [String: [LibraryItem]] = [:]
+        var albumsByUPC: [String: [LibraryItem]] = [:]
 
         for item in items {
             switch item.kind {
             case .song:
                 if let isrc = item.isrc {
-                    songsByISRC[isrc] = item
+                    songsByISRC[isrc, default: []].append(item)
                 } else {
                     discarded.append(DiscardedItem(item: item, reason: .noIdentifier))
                 }
             case .album:
                 if let upc = item.upc {
-                    albumsByUPC[upc] = item
+                    albumsByUPC[upc, default: []].append(item)
                 } else {
                     discarded.append(DiscardedItem(item: item, reason: .noIdentifier))
                 }
@@ -540,8 +552,13 @@ public struct MusicKitLibrarySource: LibrarySource {
             findEquivalentsIfAvailable(&request)
             let response = try await catalog.mapErrors { try await request.response() }
             for song in response.items {
-                if let isrc = song.isrc { matchedISRCs.insert(isrc) }
-                resolved.append(catalogItem(from: song))
+                let item = catalogItem(from: song)
+                resolved.append(item)
+                // The match runs back from the response's code: the catalog
+                // item carries none, and the library id is the caller's handle.
+                guard let isrc = song.isrc else { continue }
+                matchedISRCs.insert(isrc)
+                for library in songsByISRC[isrc] ?? [] { matches[library.id] = item }
             }
         }
 
@@ -553,20 +570,23 @@ public struct MusicKitLibrarySource: LibrarySource {
             findEquivalentsIfAvailable(&request)
             let response = try await catalog.mapErrors { try await request.response() }
             for album in response.items {
-                if let upc = album.upc { matchedUPCs.insert(upc) }
-                resolved.append(catalogItem(from: album))
+                let item = catalogItem(from: album)
+                resolved.append(item)
+                guard let upc = album.upc else { continue }
+                matchedUPCs.insert(upc)
+                for library in albumsByUPC[upc] ?? [] { matches[library.id] = item }
             }
         }
 
         // No match despite a code: delisted, regional, bootleg — discarded, named.
-        for (isrc, item) in songsByISRC where !matchedISRCs.contains(isrc) {
-            discarded.append(DiscardedItem(item: item, reason: .notInAppleMusic))
+        for (isrc, items) in songsByISRC where !matchedISRCs.contains(isrc) {
+            for item in items { discarded.append(DiscardedItem(item: item, reason: .notInAppleMusic)) }
         }
-        for (upc, item) in albumsByUPC where !matchedUPCs.contains(upc) {
-            discarded.append(DiscardedItem(item: item, reason: .notInAppleMusic))
+        for (upc, items) in albumsByUPC where !matchedUPCs.contains(upc) {
+            for item in items { discarded.append(DiscardedItem(item: item, reason: .notInAppleMusic)) }
         }
 
-        return LibraryImport(resolved: resolved, discarded: discarded)
+        return LibraryImport(resolved: resolved, discarded: discarded, matches: matches)
     }
 
     /// Matches equivalent releases on OS 26.4+; older systems match more strictly.
@@ -589,7 +609,9 @@ public struct MusicKitLibrarySource: LibrarySource {
             title: song.title,
             subtitle: song.artistName,
             artworkURL: artworkURL(song.artwork),
-            isrc: song.isrc
+            isrc: song.isrc,
+            albumTitle: song.albumTitle,
+            addedAt: song.libraryAddedDate
         )
     }
 
@@ -600,7 +622,8 @@ public struct MusicKitLibrarySource: LibrarySource {
             title: album.title,
             subtitle: album.artistName,
             artworkURL: artworkURL(album.artwork),
-            upc: album.upc
+            upc: album.upc,
+            addedAt: album.libraryAddedDate
         )
     }
 

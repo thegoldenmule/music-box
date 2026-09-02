@@ -17,6 +17,12 @@ public struct LibraryItem: Sendable, Hashable, Identifiable {
     /// Product code, on albums. The album equivalent of `isrc`.
     public let upc: String?
 
+    /// The album a song sits on, by name; a resolved song carries only the id.
+    public let albumTitle: String?
+
+    /// When the account added it; what a library shelf orders by.
+    public let addedAt: Date?
+
     public init(
         id: String,
         kind: ItemKind,
@@ -24,7 +30,9 @@ public struct LibraryItem: Sendable, Hashable, Identifiable {
         subtitle: String? = nil,
         artworkURL: URL? = nil,
         isrc: String? = nil,
-        upc: String? = nil
+        upc: String? = nil,
+        albumTitle: String? = nil,
+        addedAt: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -33,6 +41,8 @@ public struct LibraryItem: Sendable, Hashable, Identifiable {
         self.artworkURL = artworkURL
         self.isrc = isrc
         self.upc = upc
+        self.albumTitle = albumTitle
+        self.addedAt = addedAt
     }
 }
 
@@ -133,9 +143,19 @@ public struct LibraryImport: Sendable, Hashable {
     /// What could not be matched.
     public let discarded: [DiscardedItem]
 
-    public init(resolved: [CatalogItem], discarded: [DiscardedItem]) {
+    /// The match per library id. `resolved` loses input order and collapses two
+    /// library items sharing a code; this keeps both, for a caller that needs
+    /// to walk its own list and read each item's date off the library side.
+    public let matches: [String: CatalogItem]
+
+    public init(
+        resolved: [CatalogItem],
+        discarded: [DiscardedItem],
+        matches: [String: CatalogItem] = [:]
+    ) {
         self.resolved = resolved
         self.discarded = discarded
+        self.matches = matches
     }
 
     public static let empty = LibraryImport(resolved: [], discarded: [])
@@ -144,7 +164,8 @@ public struct LibraryImport: Sendable, Hashable {
 /// Seeding shortcut, not a bound on allow; a pick becomes an item or is discarded.
 public protocol LibrarySource: Sendable {
     /// Songs and albums only — the only kinds that can match the catalog.
-    func libraryItems(kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem]
+    /// Newest additions first, so a capped read keeps what was added last.
+    func libraryItems(kinds: Set<ItemKind>, limit: Int, offset: Int) async throws -> [LibraryItem]
 
     /// Search within the library.
     func searchLibrary(term: String, kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem]
@@ -166,6 +187,11 @@ public protocol LibrarySource: Sendable {
 }
 
 extension LibrarySource {
+    /// The first page; seeding only ever wanted one.
+    public func libraryItems(kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem] {
+        try await libraryItems(kinds: kinds, limit: limit, offset: 0)
+    }
+
     /// Defaults, not requirements, added later — like `topSongs(of:)` elsewhere.
     public func libraryPlaylists(limit: Int) async throws -> [LibraryPlaylist] { [] }
 

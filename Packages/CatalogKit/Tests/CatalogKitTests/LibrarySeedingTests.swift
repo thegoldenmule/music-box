@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 import CatalogKit
@@ -109,6 +110,60 @@ struct LibrarySeedingTests {
 
         #expect(result.resolved.isEmpty)
         #expect(result.discarded.map(\.reason) == [.unsupportedKind, .unsupportedKind])
+    }
+
+    @Test("Every library row is matched by its own id, in the caller's order")
+    func matchesKeepTheCallersHandle() async throws {
+        let added = Date(timeIntervalSince1970: 1_000)
+        let sut = StubLibrarySource(
+            library: [
+                LibraryItem(
+                    id: "library-song-1", kind: .song, title: "Song 1", isrc: "isrc-1",
+                    addedAt: added
+                ),
+                Fix.librarySong(0, isrc: "isrc-0"),
+            ],
+            catalogMatches: ["isrc-0": Fix.songItem(0), "isrc-1": Fix.songItem(1)]
+        )
+
+        let library = try await sut.libraryItems(kinds: [.song], limit: 10)
+        let result = try await sut.resolveToCatalog(library)
+
+        // Walking the library side keeps its order and its dates; `resolved`
+        // alone could not say which row was added when.
+        let walked = library.filter { result.matches[$0.id] != nil }
+        #expect(walked.compactMap { result.matches[$0.id]?.id } == [Fix.song(1), Fix.song(0)])
+        #expect(walked.map(\.addedAt) == [added, nil])
+    }
+
+    @Test("Two library rows with one recording code both find their match")
+    func duplicateCodesBothMatch() async throws {
+        let sut = StubLibrarySource(
+            library: [Fix.librarySong(0, isrc: "shared"), Fix.librarySong(1, isrc: "shared")],
+            catalogMatches: ["shared": Fix.songItem(0)]
+        )
+
+        let result = try await sut.resolveToCatalog(
+            try await sut.libraryItems(kinds: [.song], limit: 10)
+        )
+
+        #expect(result.resolved.map(\.id) == [Fix.song(0)])
+        #expect(result.matches["library-song-0"]?.id == Fix.song(0))
+        #expect(result.matches["library-song-1"]?.id == Fix.song(0))
+        #expect(result.discarded.isEmpty)
+    }
+
+    @Test("A library reads in pages, by offset")
+    func pagesByOffset() async throws {
+        let sut = StubLibrarySource(
+            library: (0..<5).map { Fix.librarySong($0, isrc: "isrc-\($0)") }
+        )
+
+        let first = try await sut.libraryItems(kinds: [.song], limit: 2, offset: 0)
+        let third = try await sut.libraryItems(kinds: [.song], limit: 2, offset: 4)
+
+        #expect(first.map(\.title) == ["Song 0", "Song 1"])
+        #expect(third.map(\.title) == ["Song 4"])
     }
 
     @Test("Searching the library narrows by title")

@@ -155,8 +155,8 @@ actor StubLibrarySource: LibrarySource {
         return .resolved(CatalogItem(id: winner, title: artist.title))
     }
 
-    func libraryItems(kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem] {
-        Array(library.filter { kinds.contains($0.kind) }.prefix(limit))
+    func libraryItems(kinds: Set<ItemKind>, limit: Int, offset: Int) async throws -> [LibraryItem] {
+        Array(library.filter { kinds.contains($0.kind) }.dropFirst(offset).prefix(limit))
     }
 
     func searchLibrary(term: String, kinds: Set<ItemKind>, limit: Int) async throws -> [LibraryItem] {
@@ -172,6 +172,7 @@ actor StubLibrarySource: LibrarySource {
 
         var resolved: [CatalogItem] = []
         var discarded: [DiscardedItem] = []
+        var matches: [String: CatalogItem] = [:]
 
         for item in items {
             switch item.kind {
@@ -183,14 +184,17 @@ actor StubLibrarySource: LibrarySource {
                     continue
                 }
                 if let match = catalogMatches[code] {
-                    resolved.append(match)
+                    // Like the real one: one catalog row per code, every library
+                    // row that carried it mapped.
+                    if !resolved.contains(where: { $0.id == match.id }) { resolved.append(match) }
+                    matches[item.id] = match
                 } else {
                     discarded.append(DiscardedItem(item: item, reason: .notInAppleMusic))
                 }
             }
         }
 
-        return LibraryImport(resolved: resolved, discarded: discarded)
+        return LibraryImport(resolved: resolved, discarded: discarded, matches: matches)
     }
 }
 
