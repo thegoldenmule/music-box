@@ -136,6 +136,41 @@ final class Session {
     /// authoritative in one place rather than two.
     private(set) var deviceLibrary: DeviceLibraryState = .unasked
 
+    /// Who is at the screen.
+    ///
+    /// A grown-up behind the passcode on a shared device gets their own Apple
+    /// Music library and no walls, and **nothing they do is written anywhere**:
+    /// not to the kid's log, not to the Recent shelf, not to the report. The
+    /// same rule the admin's preview methods keep, enforced here as one switch
+    /// on every path that writes under `kid.id` rather than as a parallel set
+    /// of methods, because the grown-up uses the kid's screens.
+    ///
+    /// It ends only by the button. Not on background, not on a timer: a parent
+    /// listening with the screen off is the case this exists for, and a device
+    /// left on the table stays walls-down until someone taps it — which is why
+    /// the band saying so is the one thing on the kid's screens that can't be
+    /// dismissed.
+    private(set) var audience: LibraryAudience = .kid
+
+    var isGrownUpMode: Bool { audience == .grownUp }
+
+    /// Offered only where the library signed in here is a grown-up's — which
+    /// is what `isSharedDevice` asserts — and not on a definite "Sync Library
+    /// is off", the same tri-state rule the parent's library picker uses.
+    var canListenAsGrownUp: Bool {
+        deviceLibrary.isSharedDevice && hasCloudLibrary != false
+    }
+
+    /// Hearts and playlist edits. A grown-up's would land nowhere: their only
+    /// provider is read-only, and the kid's store is set aside.
+    var canEditLibrary: Bool { audience == .kid }
+
+    /// The level the screens draw for. A grown-up is level 3 in everything but
+    /// the reporting, which is off — see ``audience``.
+    var effectiveMode: SandboxMode {
+        audience == .kid ? kid.effectiveMode : .reportOnly
+    }
+
     /// What each kid was playing when the app last closed.
     ///
     /// Device-local for the reason ``deviceLibraryStore`` is: a queue describes
@@ -847,6 +882,41 @@ final class Session {
 
     func touchAdmin() { gate.touch(at: .now) }
 
+    // MARK: - Grown-up mode
+
+    /// A grown-up takes the player. Only from behind the passcode, and only
+    /// where the library is theirs to take.
+    ///
+    /// The kid's play in progress is **written first**, the way ``switchTo(_:)``
+    /// writes it before the switch: it is theirs, and everything after this
+    /// line refuses to write under their name. The player itself is told by the
+    /// screen — see ``KidPlayerModel/audienceChanged()`` — and the re-check the
+    /// rebuild triggers judges against an engine that allows everything, so
+    /// nothing is refused on the way in.
+    func enterGrownUpMode() {
+        guard isAdminOpen, canListenAsGrownUp, audience == .kid else { return }
+        flushCurrentPlay()
+        audience = .grownUp
+        recentTrail = []
+        rebuildCatalog()
+        Task { await refreshAppleLibrary() }
+    }
+
+    /// The kid gets the player back.
+    ///
+    /// **The grown-up's play is thrown away, never written** — and the screen
+    /// has already cleared the player's queue before calling this, so the
+    /// re-check that the rebuild triggers finds nothing of theirs to judge under
+    /// the kid's name. See ``KidPlayerModel/leaveGrownUpMode()``.
+    func leaveGrownUpMode() async {
+        guard audience == .grownUp else { return }
+        discardCurrentPlay()
+        await stop()
+        audience = .kid
+        rebuildCatalog()
+        await loadRecentTrail()
+    }
+
     func closeAdmin() { gate.close() }
 
     // MARK: - Kids
@@ -872,8 +942,11 @@ final class Session {
     /// On launch and on a kid switch — the only two moments it is not already in
     /// hand, because every visit returns the trail it produced.
     func loadRecentTrail() async {
+        // Reached from a sync pass too, and a grown-up's home has no Recent.
+        guard audience == .kid else { return }
         let kidID = kid.id
         guard let trail = try? await recents.trail(for: kidID), kidID == kid.id else { return }
+        guard audience == .kid else { return }
         recentTrail = trail
     }
 
@@ -1270,7 +1343,7 @@ final class Session {
         let status = LibraryLiveness.status(
             of: .appleMusic,
             device: deviceLibraryStore.state,
-            audience: .kid
+            audience: audience
         )
         guard status.isReadable else { return }
         // A failure is the provider's to report — the admin's health line and
@@ -1394,6 +1467,7 @@ final class Session {
     /// a search nobody waited out. A row with slightly low counts is worth far
     /// more to a parent than no row at all.
     private func logSearch(term: String, results: KindedResults) {
+        guard audience == .kid else { return }
         eventLog.log(
             SearchEvent(
                 term: term,
@@ -1477,6 +1551,7 @@ final class Session {
     /// On failure the trail is left alone rather than guessed at. The next
     /// arrival converges; a shelf that disagrees with the store would not.
     func noteVisit(_ item: CatalogItem, manner: VisitManner) async {
+        guard audience == .kid else { return }
         let kidID = kid.id
         let visit = VisitEvent(
             itemID: item.id,
@@ -1634,6 +1709,7 @@ final class Session {
     /// history behind it: a denied artist near the front of the trail ate one of
     /// the twenty-four slots and nothing topped it up.
     func homeItems(limit: Int = 24) async throws -> [CatalogItem] {
+        guard audience == .kid else { return [] }
         let allowed = try await resolveAllowed(recentTrail.map(\.catalogID))
         return Array(allowed.prefix(limit))
     }
@@ -1671,7 +1747,7 @@ final class Session {
     /// all three of its fetches together — a branch in the caller would have to
     /// be resolved before any of them began.
     func grownUpItems() async throws -> [CatalogItem] {
-        kid.effectiveMode == .allowOnly ? try await allowListItems() : []
+        effectiveMode == .allowOnly ? try await allowListItems() : []
     }
 
     /// What each grown-up picked out, one shelf per adult.
@@ -1696,6 +1772,8 @@ final class Session {
     /// to Mum's shelf must not leave Dad's allow of the same album drawing it
     /// again underneath.
     func grownUpShelves() async throws -> [GrownUpShelf] {
+        // What a parent picked for a kid; a grown-up's home shows none of it.
+        guard audience == .kid else { return [] }
         async let suggested = attributedSuggestionTiles()
         async let allowed = grownUpItems()
 
@@ -1952,7 +2030,7 @@ final class Session {
 
     /// Whether related shelves draw at all. Levels 2 and 3; never level 1.
     var showsRelated: Bool {
-        kid.effectiveMode != .allowOnly
+        effectiveMode != .allowOnly
     }
 
     /// Whether Now Playing gets one too. A separate, per-kid, opt-in decision.
@@ -2079,6 +2157,11 @@ final class Session {
 
     /// Re-reads the suggestion rows. Synchronous — they are ours and local.
     func refreshSuggestions() {
+        guard audience == .kid else {
+            suggestions = []
+            dismissedSuggestions = []
+            return
+        }
         suggestions = kid.liveSuggestions
         dismissedSuggestions = kid.dismissedSuggestions
     }
@@ -2289,6 +2372,9 @@ final class Session {
         guard !currentPlayLogged, let item = player.nowPlaying, let origin = playingOrigin
         else { return }
         currentPlayLogged = true
+        // Marked written either way: a grown-up's play is thrown away, and it
+        // must not sit there waiting for the next flush after the switch back.
+        guard audience == .kid else { return }
 
         eventLog.log(
             PlayEvent(
@@ -2313,6 +2399,7 @@ final class Session {
     /// most useful line in a parent's report: they are how a parent finds out
     /// what their kid went looking for.
     func logBlocked(_ blocked: [BlockedItem], origin: PlaybackOrigin) {
+        guard audience == .kid else { return }
         for item in blocked {
             log(item.item, blockedFor: BlockReason(item.reason), reach: .unseen, origin: origin)
         }
@@ -2333,6 +2420,7 @@ final class Session {
         reach: BlockReach,
         origin: PlaybackOrigin
     ) {
+        guard audience == .kid else { return }
         eventLog.log(
             BlockEvent(
                 itemID: item.id,
@@ -2666,15 +2754,31 @@ final class Session {
         // `Kid`, so one left running past a kid switch would keep filing one
         // child's artist into whichever library is open now.
         cancelWalks()
-        let engine = kid.makeEngine()
+        // **The one builder, and it asks who is looking.** Every policy edit,
+        // kid switch, dismissal and sync-driven clear comes through here, and
+        // one that rebuilt for the kid while a grown-up was listening would put
+        // the walls back up under a band still saying they are down.
+        let engine: PolicyEngine
+        let providers: [any LibraryProvider]
+        switch audience {
+        case .kid:
+            engine = kid.makeEngine()
+            providers = [CloudKitLibraryProvider(kid: kid, context: context), appleLibrary]
+        case .grownUp:
+            // Level 3 with no entries allows everything before a rating is ever
+            // looked at, so `unratedBehavior` is never consulted here.
+            engine = PolicyEngine(policy: Policy(mode: .reportOnly))
+            providers = [appleLibrary]
+        }
         self.engine = engine
         policyGeneration += 1
         catalog = FilteredCatalog(source: source, engine: engine)
         library = MergedLibrary(
-            providers: [CloudKitLibraryProvider(kid: kid, context: context), appleLibrary],
+            providers: providers,
             catalog: source,
             engine: engine,
-            device: deviceLibraryStore
+            device: deviceLibraryStore,
+            audience: audience
         )
     }
 

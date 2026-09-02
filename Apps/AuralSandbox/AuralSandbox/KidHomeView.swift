@@ -89,7 +89,7 @@ struct KidHomeView: View {
         _player = State(initialValue: KidPlayerModel(session: session))
     }
 
-    private var canSearch: Bool { session.kid.effectiveMode != .allowOnly }
+    private var canSearch: Bool { session.effectiveMode != .allowOnly }
 
     /// Whether the home screen is what is underneath — as opposed to a search,
     /// running or finished. Reloading recents out from under a set of results
@@ -321,6 +321,14 @@ struct KidHomeView: View {
                 await player.revalidate()
             }
         }
+        // A grown-up taking the player, or handing it back. Either way the
+        // audio stops and the queue is not the one that was there.
+        .onChange(of: session.audience) { _, _ in
+            Task {
+                await player.audienceChanged()
+                await player.revalidate()
+            }
+        }
         // A parent who clears the logs must not find the bar still holding what
         // their child was listening to. The stored queue is already gone; this
         // is the copy on screen.
@@ -545,7 +553,7 @@ struct KidHomeView: View {
         } else if isHomeEmpty {
             ContentUnavailableView {
                 Label(
-                    session.kid.effectiveMode == .allowOnly
+                    session.effectiveMode == .allowOnly
                         ? "Nothing here yet"
                         : "Pick something to listen to",
                     systemImage: "music.note.list"

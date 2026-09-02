@@ -160,7 +160,15 @@ final class KidPlayerModel {
     /// album under the other's name. Keeping the owner beside the queue means
     /// the answer travels with what is being written rather than with the app's
     /// idea of who is using it.
-    private var owner: UUID
+    ///
+    /// `nil` while a grown-up has the player: their queue is nobody's to keep,
+    /// so it is neither written to a kid's slot nor put back on the next launch.
+    private var owner: UUID?
+
+    /// Whose queue a queue made now would be.
+    private var currentOwner: UUID? {
+        session.isGrownUpMode ? nil : session.kid.id
+    }
 
     init(session: Session) {
         self.session = session
@@ -194,7 +202,7 @@ final class KidPlayerModel {
         enqueued = nil
         // A queue made now belongs to whoever is playing now. Nothing else moves
         // this, which is what keeps a switch from rewriting the old kid's slot.
-        owner = session.kid.id
+        owner = currentOwner
 
         if let start = entries.firstIndex(where: { $0.item.id == item.id }) {
             self.queue = entries
@@ -354,7 +362,7 @@ final class KidPlayerModel {
     /// actually at — and a later drag on the scrubber replaces it outright,
     /// because that one is a choice they just made.
     private func restore() {
-        guard let saved = session.playQueues.queue(for: owner) else { return }
+        guard let owner, let saved = session.playQueues.queue(for: owner) else { return }
         queue = saved.entries.map { Entry(item: $0.item, origin: $0.origin) }
         index = saved.index
 
@@ -451,6 +459,7 @@ final class KidPlayerModel {
     /// because the cost of a queue that did not save is an app that opens empty,
     /// and there is nothing a kid could do with the news.
     private func save() {
+        guard let owner else { return }
         session.playQueues.save(
             PlayQueue(
                 entries: queue.map { PlayQueue.Entry(item: $0.item, origin: $0.origin) },
@@ -486,6 +495,48 @@ final class KidPlayerModel {
         // Not `save()` — the other child's queue is still theirs and stays on
         // disk. This reads the new kid's.
         restore()
+    }
+
+    /// A grown-up takes the player, or gives it back.
+    ///
+    /// Not ``switchedKid()``, though it looks like one: that saves the outgoing
+    /// queue under its owner and restores the incoming owner's, and a grown-up
+    /// has no slot. Reused, it would put the kid's queue on the grown-up's bar
+    /// on the way in and write the grown-up's queue into the kid's slot on the
+    /// way out. Here the kid's queue is saved on the way in and restored on the
+    /// way out, and the grown-up's is simply dropped.
+    ///
+    /// Called by the screen when ``Session/audience`` changes, either way.
+    func audienceChanged() async {
+        await clearForAudienceChange()
+        owner = currentOwner
+        restore()
+    }
+
+    /// The way out, from the band's button.
+    ///
+    /// The queue is cleared **before** the session rebuilds the kid's engine,
+    /// because that rebuild triggers ``revalidatePlaying()``, which would find
+    /// the grown-up's track at `index`, judge it under the kid's policy, and
+    /// write a block in the kid's name for a song the kid never heard.
+    func leaveGrownUpMode() async {
+        await clearForAudienceChange()
+        await session.leaveGrownUpMode()
+    }
+
+    private func clearForAudienceChange() async {
+        watchdog?.cancel()
+        watchdog = nil
+        // The kid's, under their name; a no-op for a grown-up's, which has none.
+        save()
+        enqueued = nil
+        await session.stop()
+        owner = nil
+        queue = []
+        index = 0
+        status = .stopped
+        message = nil
+        resetTrackState()
     }
 
     // MARK: - The re-check
