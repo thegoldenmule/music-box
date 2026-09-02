@@ -376,6 +376,23 @@ library as a *seeding input* for a parent building lists is untouched — that i
 still `LibrarySource`, still ISRC/UPC matching, and no part of it runs through
 `KidLibrary`.
 
+**There is a second exception, and it is the grown-up's, not the kid's.** On a
+shared device — `isSharedDevice == true`, hand-me-downs included — a grown-up
+behind the passcode can take the player: **grown-up mode** reads their own
+Apple Music library and nothing of the kid's, judges against an engine that
+allows everything, and writes nothing to any kid's log, Recent shelf or report.
+`Session.audience` is the switch and `LibraryLiveness` is the one table that
+turns the device answers and the audience into which providers open; the
+merge and the admin's health line both read it, so they cannot disagree. The
+mode ends only by the band's button — not on background, not on a timer — so a
+device left on a table stays walls-down until someone taps it, and the band is
+what says so. Reading the library is all this stage does: **nothing is written
+to Apple Music and nothing read from it is adopted into our store**, so an
+Apple row lives exactly as long as the account keeps the item, and the heart
+means "kept in this app" — an Apple-only song shows with the heart open until
+the kid taps it. Songs and albums are read, newest first up to a cap;
+artists are derived from song lineage, as they are for our own rows.
+
 **Containment fails open.** Screen Time, Guided Access and Family Controls all
 live outside our process and can be off without telling us. The app must work
 correctly with none of them, and onboarding says so out loud: this app controls
