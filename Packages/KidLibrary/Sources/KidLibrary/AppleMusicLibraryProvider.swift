@@ -20,6 +20,9 @@ public struct AppleLibraryLimits: Sendable, Hashable {
     public var songs = 500
     public var albums = 200
 
+    /// The account holder's own playlists; each costs a request for its tracks.
+    public var playlists = 25
+
     /// How long a snapshot is served before a read is started behind it.
     public var freshFor: TimeInterval = 10 * 60
 
@@ -34,6 +37,7 @@ public struct AppleLibraryRead: Sendable, Hashable {
     public let at: Date
     public let songs: Int
     public let albums: Int
+    public let playlists: Int
 
     /// Library rows with no catalog match — research question 2, measured.
     public let unresolved: Int
@@ -145,13 +149,16 @@ public final class AppleMusicLibraryProvider: LibraryProvider {
 
             let songs = try await read(.song, page: limits.songPage, cap: limits.songs)
             let albums = try await read(.album, page: limits.albumPage, cap: limits.albums)
+            let playlists = try await readPlaylists()
 
             favoriteRows = (songs.rows + albums.rows).sorted { $0.favoritedAt > $1.favoritedAt }
+            playlistRows = playlists.rows
             lastRead = AppleLibraryRead(
                 at: now(),
                 songs: songs.rows.count,
                 albums: albums.rows.count,
-                unresolved: songs.unresolved + albums.unresolved
+                playlists: playlists.rows.count,
+                unresolved: songs.unresolved + albums.unresolved + playlists.unresolved
             )
             lastFailure = nil
         } catch {
@@ -186,6 +193,61 @@ public final class AppleMusicLibraryProvider: LibraryProvider {
 
             if items.count < wanted { break }
             offset += items.count
+        }
+        return (rows, unresolved)
+    }
+
+    /// The account holder's own playlists, snapshotted track by track.
+    ///
+    /// Apple's — mixes, stations' playlists, anything with a `kind` — are left
+    /// out: they are recommendations wearing a playlist's clothes, and the
+    /// catalogue they reach is nobody's choice. A playlist has no code, so the
+    /// same handle on every read comes from its library id, hashed; without
+    /// that the merge would see a new playlist each time. Not ours, ever —
+    /// `appleIsOurs` is written only at creation, and this app created none.
+    private func readPlaylists() async throws -> (rows: [PlaylistRow], unresolved: Int) {
+        var rows: [PlaylistRow] = []
+        var unresolved = 0
+        let playlists = try await source.libraryPlaylists(limit: limits.playlists)
+        for playlist in playlists where playlist.isPersonal {
+            let tracks = try await source.tracks(of: playlist)
+            let matched = try await source.resolveToCatalog(tracks)
+            await cache?.store(Array(matched.matches.values))
+
+            var entries: [PlaylistEntryRow] = []
+            for track in tracks {
+                guard let match = matched.matches[track.id] else {
+                    unresolved += 1
+                    continue
+                }
+                // Position, not the track: the same song twice is two rows.
+                entries.append(
+                    PlaylistEntryRow(
+                        id: Self.stableID(for: "\(playlist.id)#\(entries.count)"),
+                        catalogID: match.id,
+                        displayName: match.title,
+                        artworkURL: match.artworkURL ?? track.artworkURL,
+                        position: entries.count,
+                        addedAt: track.addedAt ?? .distantPast,
+                        ancestry: learned[match.id] ?? Self.ancestry(of: match, named: track)
+                    )
+                )
+            }
+            rows.append(
+                PlaylistRow(
+                    handle: PlaylistHandle(
+                        local: Self.stableID(for: "playlist:\(playlist.id)"),
+                        appleLibraryID: playlist.id
+                    ),
+                    name: playlist.name,
+                    // The library gives no dates for a playlist; none are invented.
+                    createdAt: .distantPast,
+                    modifiedAt: .distantPast,
+                    appleIsOurs: false,
+                    origin: .appleLibrary,
+                    entries: entries
+                )
+            )
         }
         return (rows, unresolved)
     }

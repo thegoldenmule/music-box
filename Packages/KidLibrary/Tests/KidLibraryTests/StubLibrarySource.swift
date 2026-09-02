@@ -6,14 +6,31 @@ import PolicyEngine
 actor StubLibrarySource: LibrarySource {
     private let library: [LibraryItem]
     private let catalogMatches: [String: CatalogItem]
+    private let playlists: [LibraryPlaylist]
+    private let playlistTracks: [String: [LibraryItem]]
 
     /// Every page asked for, as (kind, limit, offset).
     private(set) var pages: [(ItemKind, Int, Int)] = []
     private(set) var resolveCallCount = 0
 
-    init(library: [LibraryItem] = [], catalogMatches: [String: CatalogItem] = [:]) {
+    init(
+        library: [LibraryItem] = [],
+        catalogMatches: [String: CatalogItem] = [:],
+        playlists: [LibraryPlaylist] = [],
+        playlistTracks: [String: [LibraryItem]] = [:]
+    ) {
         self.library = library
         self.catalogMatches = catalogMatches
+        self.playlists = playlists
+        self.playlistTracks = playlistTracks
+    }
+
+    func libraryPlaylists(limit: Int) async throws -> [LibraryPlaylist] {
+        Array(playlists.prefix(limit))
+    }
+
+    func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryItem] {
+        playlistTracks[playlist.id] ?? []
     }
 
     func libraryItems(kinds: Set<ItemKind>, limit: Int, offset: Int) async throws -> [LibraryItem] {

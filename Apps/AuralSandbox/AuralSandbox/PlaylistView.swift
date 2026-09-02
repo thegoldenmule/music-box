@@ -88,8 +88,11 @@ struct PlaylistView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
                     }
-                    .onMove(perform: move)
-                    .onDelete(perform: remove)
+                    // Nil, not a no-op, for a grown-up: their playlists are the
+                    // Apple library's, read and never edited, so the gestures
+                    // aren't there rather than there and doing nothing.
+                    .onMove(perform: moveIfEditable)
+                    .onDelete(perform: removeIfEditable)
 
                     if pending > 0 {
                         HStack(spacing: 12) {
@@ -112,16 +115,7 @@ struct PlaylistView: View {
         }
         .navigationTitle(playlist?.name ?? "Playlist")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button("Play all") { Task { await playAll() } }
-                        .disabled(songs.isEmpty)
-                    Button("Rename…") { isRenaming = true }
-                    Button("Delete playlist", role: .destructive) { isConfirmingDelete = true }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-            }
+            ToolbarItem(placement: .primaryAction) { actions }
         }
         .sheet(isPresented: $isRenaming) {
             NamePlaylistSheet(
@@ -146,6 +140,33 @@ struct PlaylistView: View {
         }
         .task { await load() }
         .onChange(of: playlist?.modifiedAt) { _, _ in Task { await load() } }
+    }
+
+    /// Typed here so the body's type-check has nothing to infer; an untyped
+    /// ternary on these surfaced as an ambiguous `toolbar(content:)`.
+    private var moveIfEditable: ((IndexSet, Int) -> Void)? {
+        session.canEditLibrary ? { move(from: $0, to: $1) } : nil
+    }
+
+    private var removeIfEditable: ((IndexSet) -> Void)? {
+        session.canEditLibrary ? { remove($0) } : nil
+    }
+
+    /// Its own property because a branch inside a menu inside a toolbar item
+    /// leaves `toolbar(content:)` unable to pick an overload.
+    private var actions: some View {
+        Menu {
+            Button("Play all") { Task { await playAll() } }
+                .disabled(songs.isEmpty)
+            // Absent for a grown-up: their playlists are the Apple library's,
+            // read and never edited.
+            if session.canEditLibrary {
+                Button("Rename…") { isRenaming = true }
+                Button("Delete playlist", role: .destructive) { isConfirmingDelete = true }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
     }
 
     /// Reads the playlist a page at a time, drawing each one as it lands.

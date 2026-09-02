@@ -56,10 +56,17 @@ struct AppleMusicLibraryProviderTests {
         init(
             library: [LibraryItem],
             matches: [String: CatalogItem],
+            playlists: [LibraryPlaylist] = [],
+            playlistTracks: [String: [LibraryItem]] = [:],
             cloudLibrary: Bool = true,
             limits: AppleLibraryLimits = AppleLibraryLimits()
         ) {
-            source = StubLibrarySource(library: library, catalogMatches: matches)
+            source = StubLibrarySource(
+                library: library,
+                catalogMatches: matches,
+                playlists: playlists,
+                playlistTracks: playlistTracks
+            )
             access = StubAccess(hasCloudLibrary: cloudLibrary)
             let clock = self.clock
             provider = AppleMusicLibraryProvider(
@@ -235,6 +242,46 @@ struct AppleMusicLibraryProviderTests {
         let songPages = await wired.source.pages.filter { $0.0 == .song }.map { ($0.1, $0.2) }
         #expect(songPages.map(\.0) == [2, 1])
         #expect(songPages.map(\.1) == [0, 2])
+    }
+
+    @Test("The account's own playlists come back in order, under the same handle every read")
+    func playlistsAreSnapshotted() async throws {
+        let mine = LibraryPlaylist(id: "pl-mine", name: "Road Trip", isPersonal: true)
+        let apples = LibraryPlaylist(id: "pl-mix", name: "Favorites Mix", isPersonal: false)
+        let wired = Wired(
+            library: [],
+            matches: ["isrc-1": Self.match(1), "isrc-2": Self.match(2)],
+            playlists: [apples, mine],
+            playlistTracks: [
+                "pl-mine": [
+                    Self.song(2, isrc: "isrc-2"),
+                    Self.song(3, isrc: "isrc-missing"),
+                    Self.song(1, isrc: "isrc-1"),
+                    Self.song(2, isrc: "isrc-2"),
+                ],
+                "pl-mix": [Self.song(1, isrc: "isrc-1")],
+            ]
+        )
+
+        try await wired.provider.refresh()
+        let rows = try await wired.provider.playlists()
+        let row = try #require(rows.first)
+
+        #expect(rows.count == 1)
+        #expect(row.name == "Road Trip")
+        #expect(row.origin == .appleLibrary)
+        #expect(row.appleIsOurs == false)
+        #expect(row.handle.appleLibraryID == "pl-mine")
+        // Order kept, the unmatched dropped, positions contiguous, a repeat twice.
+        #expect(row.entries.map(\.catalogID) == [Self.match(2).id, Self.match(1).id, Self.match(2).id])
+        #expect(row.entries.map(\.position) == [0, 1, 2])
+        #expect(Set(row.entries.map(\.id)).count == 3)
+        #expect(wired.provider.lastRead?.playlists == 1)
+        #expect(wired.provider.lastRead?.unresolved == 1)
+
+        wired.clock.now += 3600
+        try await wired.provider.refresh()
+        #expect(try await wired.provider.playlists().first?.handle == row.handle)
     }
 
     @Test("What the merge names after the fact sticks to the rows")
