@@ -437,11 +437,115 @@ struct TwoProviders {
     }
 }
 
+// MARK: - Who is looking
+
+@Suite("Who is looking")
+@MainActor
+struct Audience {
+    /// The whole table, as the gate and the admin's health line both read it.
+    @Test(
+        "Which providers open for whom",
+        arguments: [
+            (LibraryAudience.kid, DeviceLibraryState.asked(shared: false), true, true),
+            (.kid, .asked(shared: true), true, false),
+            (.kid, .unasked, true, false),
+            (.grownUp, .asked(shared: false), false, true),
+            (.grownUp, .asked(shared: true), false, true),
+            (.grownUp, .unasked, false, true),
+        ]
+    )
+    func table(
+        audience: LibraryAudience,
+        device: DeviceLibraryState,
+        cloudKitReadable: Bool,
+        appleReadable: Bool
+    ) {
+        let cloudKit = LibraryLiveness.status(of: .cloudKit, device: device, audience: audience)
+        let apple = LibraryLiveness.status(of: .appleMusic, device: device, audience: audience)
+        #expect(cloudKit.isReadable == cloudKitReadable)
+        #expect(apple.isReadable == appleReadable)
+    }
+
+    @Test("Before the ask, the Apple library is written to but not read")
+    func unaskedIsWriteOnly() {
+        let status = LibraryLiveness.status(of: .appleMusic, device: .unasked, audience: .kid)
+        #expect(status == .notReadable(.notYetAsked))
+        #expect(status.isLive)
+    }
+
+    @Test("A grown-up's shelf is their library and none of the kid's rows")
+    func grownUpSeesOnlyTheAppleLibrary() async throws {
+        let apple = StubProvider(
+            favorites: [
+                FavoriteRow(
+                    id: UUID(),
+                    catalogID: Fix.other,
+                    displayName: "Something Else",
+                    favoritedAt: Fix.t0,
+                    origin: .appleLibrary
+                )
+            ]
+        )
+        // The kid's own row, written while it was the kid looking.
+        let kid = try Harness(extra: [apple], device: .asked(shared: true))
+        try await kid.library.addFavorite(Fix.item(Fix.clean))
+
+        // Shared and unasked — the answers that keep a kid out of the library
+        // are not what keeps a grown-up out of their own.
+        let grownUp = try Harness(
+            extra: [apple],
+            device: .unasked,
+            audience: .grownUp,
+            container: kid.container
+        )
+
+        #expect(try await grownUp.library.favorites().items.map(\.id) == [Fix.other])
+        #expect(try await kid.library.favorites().items.map(\.id) == [Fix.clean])
+    }
+
+    @Test("A grown-up's heart tap lands nowhere, and says nothing")
+    func grownUpWritesGoNowhere() async throws {
+        let apple = StubProvider(capabilities: [])
+        let harness = try Harness(extra: [apple], device: .asked(shared: true), audience: .grownUp)
+
+        try await harness.library.addFavorite(Fix.item(Fix.clean))
+
+        #expect(apple.calls.contains { $0.hasPrefix("addFavorite") } == false)
+        #expect(await harness.library.favoriteIDs().isEmpty)
+        #expect(try await harness.library.favorites().items.isEmpty)
+    }
+}
+
 // MARK: - The shared-device toggle
 
 @Suite("The shared-device toggle")
 @MainActor
 struct SharedDevice {
+    @Test("A row read from the Apple library alone is on the shelf, heart empty")
+    func appleOnlyRowsDoNotFillTheHeart() async throws {
+        let apple = StubProvider(
+            capabilities: [],
+            favorites: [
+                FavoriteRow(
+                    id: UUID(),
+                    catalogID: Fix.other,
+                    displayName: "Something Else",
+                    favoritedAt: Fix.t0,
+                    origin: .appleLibrary
+                )
+            ]
+        )
+        let harness = try Harness(extra: [apple], device: .asked(shared: false))
+
+        #expect(try await harness.library.favorites().items.map(\.id) == [Fix.other])
+        #expect(await harness.library.favoriteIDs().isEmpty)
+
+        // The tap makes it a kept one, in our store, and the heart fills.
+        try await harness.library.addFavorite(Fix.item(Fix.other))
+        #expect(await harness.library.favoriteIDs() == [Fix.other])
+        #expect(try await harness.library.favorites().items.map(\.id) == [Fix.other])
+    }
+
     @Test("On: the other provider is neither read from nor written to")
     func sharedDeviceIsCloudKitOnly() async throws {
         let apple = StubProvider(

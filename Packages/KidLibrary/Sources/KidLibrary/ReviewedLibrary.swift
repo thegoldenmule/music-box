@@ -80,5 +80,8 @@ public enum ProviderHealth: Sendable, Hashable {
 
         /// Onboarding hasn't asked, so nothing reads from an adult's library.
         case notYetAsked
+
+        /// A grown-up is at the screen; the kid's own rows stay theirs.
+        case grownUpMode
     }
 }

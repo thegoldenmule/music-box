@@ -130,6 +130,18 @@ struct ProviderReporting {
         #expect(reviewed.providers[.appleMusic] == .notConfigured(.sharedDevice))
     }
 
+    @Test("A grown-up's review names the kid's store as set aside, not broken")
+    func grownUpMode() async throws {
+        let harness = try Harness(
+            extra: [StubProvider()],
+            device: .asked(shared: true),
+            audience: .grownUp
+        )
+        let reviewed = await harness.library.reviewed()
+        #expect(reviewed.providers[.cloudKit] == .notConfigured(.grownUpMode))
+        #expect(reviewed.providers[.appleMusic] == .live)
+    }
+
     @Test("Before onboarding asks, the Apple library is not read and says so")
     func notYetAsked() async throws {
         let harness = try Harness(extra: [StubProvider()], device: .unasked)

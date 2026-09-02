@@ -404,6 +404,8 @@ struct ReviewLibraryView: View {
             return "\(name) is not read — you said this device is shared."
         case .notConfigured(.notYetAsked):
             return "\(name) is not read — the setup question hasn't been answered."
+        case .notConfigured(.grownUpMode):
+            return "\(name) is set aside while a grown-up is listening."
         case .failed(let message):
             return "\(name) failed on this read: \(message)"
         }

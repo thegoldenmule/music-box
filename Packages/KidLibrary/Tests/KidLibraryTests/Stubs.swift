@@ -333,6 +333,7 @@ struct Harness {
     let device: InMemoryDeviceLibraryState
     let cloudKit: CloudKitLibraryProvider
     private let providers: [any LibraryProvider]
+    private let audience: LibraryAudience
     private(set) var library: MergedLibrary
 
     init(
@@ -341,8 +342,10 @@ struct Harness {
         entries: [PolicyEntry] = [],
         extra: [any LibraryProvider] = [],
         device state: DeviceLibraryState = .asked(shared: false),
+        audience: LibraryAudience = .kid,
         container: ModelContainer? = nil
     ) throws {
+        self.audience = audience
         self.container = try container ?? FamilyStore.inMemoryContainer()
         context = ModelContext(self.container)
 
@@ -369,7 +372,8 @@ struct Harness {
             providers: providers,
             catalog: catalog,
             engine: kid.makeEngine(),
-            device: device
+            device: device,
+            audience: audience
         )
     }
 
@@ -381,7 +385,8 @@ struct Harness {
             providers: providers,
             catalog: catalog,
             engine: kid.makeEngine(),
-            device: device
+            device: device,
+            audience: audience
         )
     }
 }

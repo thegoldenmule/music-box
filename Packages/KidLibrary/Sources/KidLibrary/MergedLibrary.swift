@@ -55,31 +55,37 @@ public final class MergedLibrary {
     private let catalog: any CatalogSource
     private let engine: PolicyEngine
     private let device: any DeviceLibraryStateStore
+    private let audience: LibraryAudience
 
     public init(
         providers: [any LibraryProvider],
         catalog: any CatalogSource,
         engine: PolicyEngine,
-        device: any DeviceLibraryStateStore
+        device: any DeviceLibraryStateStore,
+        audience: LibraryAudience = .kid
     ) {
         self.providers = providers
         self.catalog = catalog
         self.engine = engine
         self.device = device
+        self.audience = audience
     }
 
     // MARK: - Which providers are live
 
-    /// `isSharedDevice` alone: false is both providers, true is CloudKit only.
-    private var liveProviders: [any LibraryProvider] {
-        let isShared = device.state.isSharedDevice
-        return providers.filter { $0.id == .cloudKit || !isShared }
+    /// The device answers and who's looking — see ``LibraryLiveness``.
+    private func status(of provider: any LibraryProvider) -> LibraryLiveness {
+        LibraryLiveness.status(of: provider.id, device: device.state, audience: audience)
     }
 
-    /// Read-live providers, narrower still: a read waits on onboarding's ask.
+    /// Written to; a kid's own store, or a grown-up's Apple library.
+    private var liveProviders: [any LibraryProvider] {
+        providers.filter { status(of: $0).isLive }
+    }
+
+    /// Read from, narrower still: a read waits on onboarding's ask.
     private var readableProviders: [any LibraryProvider] {
-        let hasBeenAsked = device.state.hasBeenAsked
-        return liveProviders.filter { $0.id == .cloudKit || hasBeenAsked }
+        providers.filter { status(of: $0).isReadable }
     }
 
     /// Providers written for this favorite; a missing capability skips it.
@@ -97,9 +103,22 @@ public final class MergedLibrary {
         )
     }
 
-    /// Unfiltered favorite IDs; a blocked item never reaches a screen to ask.
+    /// What the heart draws from: rows the kid can act on, unfiltered.
+    ///
+    /// Only from providers that can favorite that kind — a row read from the
+    /// Apple library alone would fill a heart that a tap could never empty,
+    /// since the remove reaches only the providers that write. It shows on
+    /// the shelf with an empty heart, and the tap makes it a kept one.
+    /// Not policy filtered: a blocked item never reaches a screen to ask.
     public func favoriteIDs() async -> Set<CatalogID> {
-        Set(await mergedFavoriteRows().map(\.catalogID))
+        var ids: Set<CatalogID> = []
+        for provider in readableProviders {
+            guard let rows = try? await provider.favorites() else { continue }
+            for row in rows where provider.canFavorite(row.catalogID.kind) {
+                ids.insert(row.catalogID)
+            }
+        }
+        return ids
     }
 
     /// Every playlist, unfiltered — the engine has no opinion on a playlist.
@@ -294,16 +313,12 @@ public final class MergedLibrary {
     /// Unfiltered, verdicts attached — unresolved reads as unknown, not blocked.
     public func reviewed() async -> ReviewedLibrary {
         var health: [LibraryProviderID: ProviderHealth] = [:]
-        let live = Set(liveProviders.map(\.id))
-        let readable = Set(readableProviders.map(\.id))
         for provider in providers {
-            if !live.contains(provider.id) {
-                health[provider.id] = .notConfigured(.sharedDevice)
-            } else if !readable.contains(provider.id) {
-                health[provider.id] = .notConfigured(.notYetAsked)
-            } else {
-                health[provider.id] = .live
-            }
+            health[provider.id] =
+                switch status(of: provider) {
+                case .live: .live
+                case .notReadable(let reason), .notLive(let reason): .notConfigured(reason)
+                }
         }
 
         var favoriteRows: [CatalogID: FavoriteRow] = [:]
